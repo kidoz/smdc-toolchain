@@ -746,6 +746,17 @@ impl IrBuilder {
                     Ok(Value::Temp(dst))
                 } else {
                     // Global variable or function
+                    // Arrays decay to pointers (their address) in expressions
+                    if let Some(ty) = &expr.ty {
+                        if ty.is_array() {
+                            let dst = self.new_temp();
+                            self.emit(Inst::AddrOf {
+                                dst,
+                                name: name.clone(),
+                            });
+                            return Ok(Value::Temp(dst));
+                        }
+                    }
                     Ok(Value::Name(name.clone()))
                 }
             }

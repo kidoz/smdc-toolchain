@@ -867,8 +867,12 @@ impl InstructionEncoder {
             Operand::Label(label) => {
                 // Treat as absolute long
                 if let Some(addr) = self.symbols.get(label) {
+                    if std::env::var("DEBUG_ASM").is_ok() {
+                        eprintln!("  Label '{}' resolved to 0x{:08X}", label, addr);
+                    }
                     ext.extend_from_slice(&addr.to_be_bytes());
                 } else {
+                    eprintln!("WARNING: Label '{}' not found in symbol table, using 0!", label);
                     ext.extend_from_slice(&0u32.to_be_bytes()); // Placeholder for relocation
                 }
                 (0b111, 0b001)
@@ -930,10 +934,13 @@ fn cond_code(cond: &Cond) -> u8 {
 fn parse_number(s: &str) -> Result<i32, EncodeError> {
     let s = s.trim();
     if s.starts_with("0x") || s.starts_with("0X") {
-        i32::from_str_radix(&s[2..], 16)
+        // Parse as u32 first to handle full 32-bit range, then cast to i32
+        u32::from_str_radix(&s[2..], 16)
+            .map(|v| v as i32)
             .map_err(|_| EncodeError::InvalidOperands(format!("invalid hex number: {}", s)))
     } else if s.starts_with('$') {
-        i32::from_str_radix(&s[1..], 16)
+        u32::from_str_radix(&s[1..], 16)
+            .map(|v| v as i32)
             .map_err(|_| EncodeError::InvalidOperands(format!("invalid hex number: {}", s)))
     } else {
         s.parse::<i32>()

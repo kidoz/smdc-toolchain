@@ -662,7 +662,7 @@ impl CodeGenerator {
                 self.store_temp(*dst, DataReg::D0);
             }
 
-            Inst::LoadParam { dst, index, size: _ } => {
+            Inst::LoadParam { dst, index, size } => {
                 // In M68k cdecl with LINK A6:
                 // - 0(a6) = saved old A6
                 // - 4(a6) = return address
@@ -670,7 +670,20 @@ impl CodeGenerator {
                 // - 12(a6) = second parameter, etc.
                 // Store the ADDRESS of the parameter slot, not its value.
                 // This matches the Alloca model where temps hold addresses.
-                let offset = 8 + (*index as i16) * 4;
+                //
+                // On big-endian M68K, callers push all values as 32-bit longs.
+                // For smaller types, the value is in the LOW bytes of the slot.
+                // We need to adjust the offset to point to the actual value:
+                // - 4-byte: offset + 0
+                // - 2-byte: offset + 2
+                // - 1-byte: offset + 3
+                let base_offset = 8 + (*index as i16) * 4;
+                let size_adjust = match *size {
+                    1 => 3,  // byte at end of 4-byte slot
+                    2 => 2,  // word at end of 4-byte slot
+                    _ => 0,  // long uses full slot
+                };
+                let offset = base_offset + size_adjust;
                 self.emit(M68kInst::Lea(
                     Operand::Disp(offset, AddrReg::A6),
                     AddrReg::A0,
