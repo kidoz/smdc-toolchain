@@ -130,6 +130,24 @@ impl CodeGenerator {
         ));
         self.emit(M68kInst::Label(".no_tmss".to_string()));
 
+        // Request Z80 bus and reset Z80 for PSG access
+        // Write $0100 to $A11100 to request Z80 bus
+        self.emit(M68kInst::Move(
+            Size::Word,
+            Operand::Imm(0x0100),
+            Operand::AbsLong(0xA11100),
+        ));
+        // Write $0100 to $A11200 to release Z80 reset
+        self.emit(M68kInst::Move(
+            Size::Word,
+            Operand::Imm(0x0100),
+            Operand::AbsLong(0xA11200),
+        ));
+        // Wait for Z80 bus grant
+        self.emit(M68kInst::Label(".wait_z80".to_string()));
+        self.emit(M68kInst::Btst(Operand::Imm(0), Operand::AbsLong(0xA11100)));
+        self.emit(M68kInst::Bcc(Cond::Ne, ".wait_z80".to_string()));
+
         // Initialize RAM - clear first 64KB of work RAM
         // lea $FF0000, a0  ; Start of RAM
         // move.w #$3FFF, d0 ; 64KB / 4 - 1 = $3FFF longs
@@ -179,6 +197,17 @@ impl CodeGenerator {
         self.emit(M68kInst::Move(Size::Word, Operand::Imm(0x0EEE), Operand::AddrInd(AddrReg::A1))); // White
         self.emit(M68kInst::Move(Size::Word, Operand::Imm(0x00E0), Operand::AddrInd(AddrReg::A1))); // Green
         self.emit(M68kInst::Move(Size::Word, Operand::Imm(0x000E), Operand::AddrInd(AddrReg::A1))); // Red
+
+        // Test PSG beep - play a tone on channel 0 to verify sound works
+        // PSG is at $C00011, accessed via byte writes
+        self.emit(M68kInst::Lea(Operand::AbsLong(0xC00011), AddrReg::A2));
+        // Set tone channel 0: frequency divider ~254 (0xFE) for ~440Hz
+        // First byte: 1000 0nnn where n = low 4 bits of divider (0xE)
+        self.emit(M68kInst::Move(Size::Byte, Operand::Imm(0x8E), Operand::AddrInd(AddrReg::A2)));
+        // Second byte: 00nn nnnn where n = high 6 bits of divider (0x0F)
+        self.emit(M68kInst::Move(Size::Byte, Operand::Imm(0x0F), Operand::AddrInd(AddrReg::A2)));
+        // Set volume channel 0: 1001 0000 = volume 0 (loudest)
+        self.emit(M68kInst::Move(Size::Byte, Operand::Imm(0x90), Operand::AddrInd(AddrReg::A2)));
 
         // Enable interrupts
         // move.w #$2000, sr (user mode, enable interrupts)
@@ -429,15 +458,16 @@ impl CodeGenerator {
                         ));
                     }
                     BinOp::Div => {
-                        // 32/16->16r16 divide
+                        // 32/16->16r16 signed divide
                         self.emit(M68kInst::Divs(
                             Operand::DataReg(DataReg::D1),
                             DataReg::D0,
                         ));
-                        // Quotient is in low word, clear high word
+                        // Quotient is in low word, sign-extend
                         self.emit(M68kInst::Ext(Size::Long, DataReg::D0));
                     }
                     BinOp::Mod => {
+                        // 32/16->16r16 signed divide for remainder
                         self.emit(M68kInst::Divs(
                             Operand::DataReg(DataReg::D1),
                             DataReg::D0,
@@ -445,6 +475,25 @@ impl CodeGenerator {
                         // Remainder is in high word
                         self.emit(M68kInst::Swap(DataReg::D0));
                         self.emit(M68kInst::Ext(Size::Long, DataReg::D0));
+                    }
+                    BinOp::UDiv => {
+                        // 32/16->16r16 unsigned divide
+                        self.emit(M68kInst::Divu(
+                            Operand::DataReg(DataReg::D1),
+                            DataReg::D0,
+                        ));
+                        // Quotient is in low word, zero-extend
+                        self.emit(M68kInst::Andi(Size::Long, 0xFFFF, Operand::DataReg(DataReg::D0)));
+                    }
+                    BinOp::UMod => {
+                        // 32/16->16r16 unsigned divide for remainder
+                        self.emit(M68kInst::Divu(
+                            Operand::DataReg(DataReg::D1),
+                            DataReg::D0,
+                        ));
+                        // Remainder is in high word
+                        self.emit(M68kInst::Swap(DataReg::D0));
+                        self.emit(M68kInst::Andi(Size::Long, 0xFFFF, Operand::DataReg(DataReg::D0)));
                     }
                     BinOp::And => {
                         self.emit(M68kInst::And(
@@ -507,7 +556,7 @@ impl CodeGenerator {
                 self.store_temp(*dst, DataReg::D0);
             }
 
-            Inst::Load { dst, addr, size, volatile: _ } => {
+            Inst::Load { dst, addr, size, volatile: _, signed } => {
                 // Note: volatile flag indicates this memory access should not be optimized.
                 // For now, we emit the same code (no optimization pass yet).
                 self.load_value(addr, DataReg::D0)?;
@@ -522,9 +571,24 @@ impl CodeGenerator {
                     Operand::AddrInd(AddrReg::A0),
                     Operand::DataReg(DataReg::D0),
                 ));
-                // Sign extend if needed
-                if *size < 4 {
-                    self.emit(M68kInst::Ext(Size::Long, DataReg::D0));
+                // Extend to 32-bit: sign-extend for signed types, zero-extend for unsigned
+                // On 68000: ext.w extends byte->word, ext.l extends word->long (sign extension)
+                // For unsigned, use AND to zero-extend
+                if *signed {
+                    // Sign extend
+                    if *size == 1 {
+                        self.emit(M68kInst::Ext(Size::Word, DataReg::D0)); // byte -> word
+                        self.emit(M68kInst::Ext(Size::Long, DataReg::D0)); // word -> long
+                    } else if *size == 2 {
+                        self.emit(M68kInst::Ext(Size::Long, DataReg::D0)); // word -> long
+                    }
+                } else {
+                    // Zero extend using AND
+                    if *size == 1 {
+                        self.emit(M68kInst::Andi(Size::Long, 0xFF, Operand::DataReg(DataReg::D0)));
+                    } else if *size == 2 {
+                        self.emit(M68kInst::Andi(Size::Long, 0xFFFF, Operand::DataReg(DataReg::D0)));
+                    }
                 }
                 self.store_temp(*dst, DataReg::D0);
             }

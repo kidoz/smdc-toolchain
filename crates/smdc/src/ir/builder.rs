@@ -737,11 +737,13 @@ impl IrBuilder {
                     // Load from local variable
                     let dst = self.new_temp();
                     let size = expr.ty.as_ref().map(|t| t.size()).unwrap_or(4);
+                    let signed = expr.ty.as_ref().map(|t| t.is_signed()).unwrap_or(false);
                     self.emit(Inst::Load {
                         dst,
                         addr: Value::Temp(temp),
                         size,
                         volatile: false,
+                        signed,
                     });
                     Ok(Value::Temp(dst))
                 } else {
@@ -756,6 +758,24 @@ impl IrBuilder {
                             });
                             return Ok(Value::Temp(dst));
                         }
+                        // For non-array globals, get address then load with correct size
+                        // (function references stay as Value::Name for call targets)
+                        if !matches!(ty.kind, TypeKind::Function { .. }) {
+                            let addr_temp = self.new_temp();
+                            self.emit(Inst::AddrOf {
+                                dst: addr_temp,
+                                name: name.clone(),
+                            });
+                            let dst = self.new_temp();
+                            self.emit(Inst::Load {
+                                dst,
+                                addr: Value::Temp(addr_temp),
+                                size: ty.size(),
+                                volatile: false,
+                                signed: ty.is_signed(),
+                            });
+                            return Ok(Value::Temp(dst));
+                        }
                     }
                     Ok(Value::Name(name.clone()))
                 }
@@ -766,12 +786,16 @@ impl IrBuilder {
                 let r = self.build_expr(right)?;
                 let dst = self.new_temp();
 
+                // Check if either operand is unsigned (for div/mod)
+                let is_unsigned = left.ty.as_ref().map(|t| !t.is_signed()).unwrap_or(false)
+                    || right.ty.as_ref().map(|t| !t.is_signed()).unwrap_or(false);
+
                 let ir_op = match op {
                     BinaryOp::Add => BinOp::Add,
                     BinaryOp::Sub => BinOp::Sub,
                     BinaryOp::Mul => BinOp::Mul,
-                    BinaryOp::Div => BinOp::Div,
-                    BinaryOp::Mod => BinOp::Mod,
+                    BinaryOp::Div => if is_unsigned { BinOp::UDiv } else { BinOp::Div },
+                    BinaryOp::Mod => if is_unsigned { BinOp::UMod } else { BinOp::Mod },
                     BinaryOp::BitAnd => BinOp::And,
                     BinaryOp::BitOr => BinOp::Or,
                     BinaryOp::BitXor => BinOp::Xor,
@@ -823,19 +847,24 @@ impl IrBuilder {
                 let final_val = if let Some(bin_op) = op.to_binary_op() {
                     let old_val = self.new_temp();
                     let size = target.ty.as_ref().map(|t| t.size()).unwrap_or(4);
+                    let signed = target.ty.as_ref().map(|t| t.is_signed()).unwrap_or(false);
                     self.emit(Inst::Load {
                         dst: old_val,
                         addr: addr.clone(),
                         size,
                         volatile: false,
+                        signed,
                     });
+
+                    // Check if unsigned for div/mod operations
+                    let is_unsigned = !signed;
 
                     let ir_op = match bin_op {
                         BinaryOp::Add => BinOp::Add,
                         BinaryOp::Sub => BinOp::Sub,
                         BinaryOp::Mul => BinOp::Mul,
-                        BinaryOp::Div => BinOp::Div,
-                        BinaryOp::Mod => BinOp::Mod,
+                        BinaryOp::Div => if is_unsigned { BinOp::UDiv } else { BinOp::Div },
+                        BinaryOp::Mod => if is_unsigned { BinOp::UMod } else { BinOp::Mod },
                         BinaryOp::BitAnd => BinOp::And,
                         BinaryOp::BitOr => BinOp::Or,
                         BinaryOp::BitXor => BinOp::Xor,
@@ -894,15 +923,15 @@ impl IrBuilder {
                 let idx = self.build_expr(index)?;
 
                 // Calculate offset: base + index * element_size
-                let elem_size = array
+                let (elem_size, elem_signed) = array
                     .ty
                     .as_ref()
                     .and_then(|t| match &t.kind {
-                        TypeKind::Array { element, .. } => Some(element.size()),
-                        TypeKind::Pointer(inner) => Some(inner.size()),
+                        TypeKind::Array { element, .. } => Some((element.size(), element.is_signed())),
+                        TypeKind::Pointer(inner) => Some((inner.size(), inner.is_signed())),
                         _ => None,
                     })
-                    .unwrap_or(4);
+                    .unwrap_or((4, false));
 
                 let offset = self.new_temp();
                 self.emit(Inst::Binary {
@@ -926,6 +955,7 @@ impl IrBuilder {
                     addr: Value::Temp(addr),
                     size: elem_size,
                     volatile: false,
+                    signed: elem_signed,
                 });
 
                 Ok(Value::Temp(dst))
@@ -939,17 +969,19 @@ impl IrBuilder {
                 let addr = self.build_expr(operand)?;
                 let dst = self.new_temp();
                 let size = expr.ty.as_ref().map(|t| t.size()).unwrap_or(4);
+                let signed = expr.ty.as_ref().map(|t| t.is_signed()).unwrap_or(false);
                 // Check if pointer type is volatile
                 let is_volatile = operand.ty.as_ref()
                     .map(|t| t.qualifiers.is_volatile)
                     .unwrap_or(false);
-                self.emit(Inst::Load { dst, addr, size, volatile: is_volatile });
+                self.emit(Inst::Load { dst, addr, size, volatile: is_volatile, signed });
                 Ok(Value::Temp(dst))
             }
 
             ExprKind::PreIncrement(operand) | ExprKind::PreDecrement(operand) => {
                 let addr = self.build_lvalue(operand)?;
                 let size = operand.ty.as_ref().map(|t| t.size()).unwrap_or(4);
+                let signed = operand.ty.as_ref().map(|t| t.is_signed()).unwrap_or(false);
                 let is_volatile = operand.ty.as_ref()
                     .map(|t| t.qualifiers.is_volatile)
                     .unwrap_or(false);
@@ -960,6 +992,7 @@ impl IrBuilder {
                     addr: addr.clone(),
                     size,
                     volatile: is_volatile,
+                    signed,
                 });
 
                 let op = if matches!(expr.kind, ExprKind::PreIncrement(_)) {
@@ -989,6 +1022,7 @@ impl IrBuilder {
             ExprKind::PostIncrement(operand) | ExprKind::PostDecrement(operand) => {
                 let addr = self.build_lvalue(operand)?;
                 let size = operand.ty.as_ref().map(|t| t.size()).unwrap_or(4);
+                let signed = operand.ty.as_ref().map(|t| t.is_signed()).unwrap_or(false);
                 let is_volatile = operand.ty.as_ref()
                     .map(|t| t.qualifiers.is_volatile)
                     .unwrap_or(false);
@@ -999,6 +1033,7 @@ impl IrBuilder {
                     addr: addr.clone(),
                     size,
                     volatile: is_volatile,
+                    signed,
                 });
 
                 let op = if matches!(expr.kind, ExprKind::PostIncrement(_)) {
@@ -1090,6 +1125,7 @@ impl IrBuilder {
                     addr: Value::Temp(field_addr),
                     size: field_ty.size(),
                     volatile: false,
+                    signed: field_ty.is_signed(),
                 });
                 Ok(Value::Temp(dst))
             }
@@ -1117,6 +1153,7 @@ impl IrBuilder {
                     addr: Value::Temp(field_addr),
                     size: field_ty.size(),
                     volatile: false,
+                    signed: field_ty.is_signed(),
                 });
                 Ok(Value::Temp(dst))
             }

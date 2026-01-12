@@ -55,8 +55,10 @@ pub enum BinOp {
     Add,
     Sub,
     Mul,
-    Div,
-    Mod,
+    Div,   // Signed division
+    Mod,   // Signed modulo
+    UDiv,  // Unsigned division
+    UMod,  // Unsigned modulo
     And,
     Or,
     Xor,
@@ -76,8 +78,10 @@ impl std::fmt::Display for BinOp {
             BinOp::Add => write!(f, "+"),
             BinOp::Sub => write!(f, "-"),
             BinOp::Mul => write!(f, "*"),
-            BinOp::Div => write!(f, "/"),
-            BinOp::Mod => write!(f, "%"),
+            BinOp::Div => write!(f, "/s"),
+            BinOp::Mod => write!(f, "%s"),
+            BinOp::UDiv => write!(f, "/u"),
+            BinOp::UMod => write!(f, "%u"),
             BinOp::And => write!(f, "&"),
             BinOp::Or => write!(f, "|"),
             BinOp::Xor => write!(f, "^"),
@@ -145,6 +149,8 @@ pub enum Inst {
         size: usize,
         /// If true, this is a volatile access (no optimization)
         volatile: bool,
+        /// If true, sign-extend the value; otherwise zero-extend
+        signed: bool,
     },
 
     /// *dst = src (store to memory)
@@ -214,11 +220,12 @@ impl std::fmt::Display for Inst {
             Inst::Binary { dst, op, left, right } => {
                 write!(f, "  {} = {} {} {}", dst, left, op, right)
             }
-            Inst::Load { dst, addr, size, volatile } => {
+            Inst::Load { dst, addr, size, volatile, signed } => {
+                let sign_str = if *signed { "s" } else { "u" };
                 if *volatile {
-                    write!(f, "  {} = load.{}.volatile {}", dst, size, addr)
+                    write!(f, "  {} = load.{}{}.volatile {}", dst, sign_str, size, addr)
                 } else {
-                    write!(f, "  {} = load.{} {}", dst, size, addr)
+                    write!(f, "  {} = load.{}{} {}", dst, sign_str, size, addr)
                 }
             }
             Inst::Store { addr, src, size, volatile } => {

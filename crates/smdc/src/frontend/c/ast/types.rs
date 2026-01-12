@@ -122,6 +122,18 @@ impl CType {
     pub fn is_scalar(&self) -> bool {
         self.is_integer() || self.is_pointer()
     }
+
+    /// Check if this type is signed (returns false for unsigned and non-integer types)
+    pub fn is_signed(&self) -> bool {
+        match &self.kind {
+            TypeKind::Char { signed } => *signed,
+            TypeKind::Short { signed } => *signed,
+            TypeKind::Int { signed } => *signed,
+            TypeKind::Long { signed } => *signed,
+            TypeKind::LongLong { signed } => *signed,
+            _ => false, // Pointers, enums, etc. are treated as unsigned
+        }
+    }
 }
 
 /// The kind of a C type
