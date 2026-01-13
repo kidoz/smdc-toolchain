@@ -261,3 +261,47 @@ pub fn released(port: u8) -> Buttons {
         Buttons(!curr & prev)
     }
 }
+
+/// Check if controller is 6-button type
+///
+/// Detects 6-button controller by performing multiple TH toggles
+/// and checking if extra buttons (X, Y, Z, Mode) are readable.
+///
+/// # Arguments
+/// * `port` - Controller port (0 or 1)
+///
+/// # Returns
+/// `true` if 6-button controller detected
+pub fn is_6button(port: u8) -> bool {
+    unsafe {
+        let (data, ctrl) = if port == 0 {
+            (JOY1_DATA, JOY1_CTRL)
+        } else {
+            (JOY2_DATA, JOY2_CTRL)
+        };
+
+        // 6-button detection requires cycling TH 3 times
+        // On the 4th cycle, if it's a 6-button controller,
+        // reading with TH=0 returns 0x0F in low nibble
+
+        // First 3 cycles
+        for _ in 0..3 {
+            ctrl.write_volatile(0x40); // TH high
+            let _ = data.read_volatile();
+            ctrl.write_volatile(0x00); // TH low
+            let _ = data.read_volatile();
+        }
+
+        // 4th cycle - check for 6-button signature
+        ctrl.write_volatile(0x40); // TH high
+        let _ = data.read_volatile();
+        ctrl.write_volatile(0x00); // TH low
+        let check = data.read_volatile();
+
+        // Reset to normal state
+        ctrl.write_volatile(0x40);
+
+        // 6-button controllers return 0x0F in low nibble on 4th read
+        (check & 0x0F) == 0x0F
+    }
+}

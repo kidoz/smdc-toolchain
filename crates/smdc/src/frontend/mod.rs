@@ -9,6 +9,8 @@
 pub mod c;
 pub mod rust;
 
+use std::path::PathBuf;
+
 use crate::common::{CompileResult, DiagnosticReporter};
 use crate::ir::IrModule;
 
@@ -22,6 +24,8 @@ pub struct FrontendConfig {
     pub dump_ast: bool,
     pub dump_mir: bool,  // For frontends with intermediate representations
     pub verbose: bool,
+    /// Include paths for preprocessor (C only)
+    pub include_paths: Vec<PathBuf>,
 }
 
 /// Compilation context providing access to diagnostics and file info

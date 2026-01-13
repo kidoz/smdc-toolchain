@@ -82,6 +82,10 @@ struct Args {
     #[arg(long)]
     dump_mir: bool,
 
+    /// Include paths for #include directives
+    #[arg(short = 'I', long = "include", action = clap::ArgAction::Append)]
+    include_paths: Vec<PathBuf>,
+
     // ROM-specific options
     /// Domestic (Japanese) game name for ROM
     #[arg(long, default_value = "SMD GAME")]
@@ -163,12 +167,37 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         Language::Auto => unreachable!(),
     };
 
+    // Build include paths
+    let mut include_paths = args.include_paths.clone();
+
+    // Auto-detect SDK include path relative to current directory
+    let sdk_path = PathBuf::from("sdk/c/include");
+    if sdk_path.exists() && !include_paths.contains(&sdk_path) {
+        include_paths.push(sdk_path);
+    }
+
+    // Also check relative to input file
+    if let Some(parent) = args.input.parent() {
+        let relative_sdk = parent.join("../include");
+        if relative_sdk.exists() && !include_paths.contains(&relative_sdk) {
+            include_paths.push(relative_sdk);
+        }
+    }
+
+    if args.verbose && !include_paths.is_empty() {
+        eprintln!("Include paths:");
+        for path in &include_paths {
+            eprintln!("  {}", path.display());
+        }
+    }
+
     // Configure frontend
     let frontend_config = FrontendConfig {
         dump_tokens: args.dump_tokens,
         dump_ast: args.dump_ast,
         dump_mir: args.dump_mir,
         verbose: args.verbose,
+        include_paths,
     };
 
     // Create compile context

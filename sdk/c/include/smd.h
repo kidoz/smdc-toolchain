@@ -20,6 +20,9 @@
  * - PSG (Programmable Sound Generator)
  *   - 3 square wave channels
  *   - 1 noise channel
+ * - YM2612 FM synth
+ *   - 6 FM channels with instrument patches
+ * - Z80 sound driver interface
  * - Controller input (3-button and 6-button)
  * - Fixed-point math utilities
  *
@@ -86,6 +89,8 @@
  * - smd/sprite.h - Sprite management
  * - smd/input.h - Controller input handling
  * - smd/psg.h - PSG sound generation
+ * - smd/ym2612.h - YM2612 FM synth
+ * - smd/z80.h - Z80 sound driver interface
  */
 
 #ifndef SMD_H
@@ -97,6 +102,8 @@
 #include "smd/sprite.h"
 #include "smd/input.h"
 #include "smd/psg.h"
+#include "smd/ym2612.h"
+#include "smd/z80.h"
 
 /* ============================================================================
  * SDK Version

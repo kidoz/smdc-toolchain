@@ -179,8 +179,8 @@ u16 input_released(u8 port);
 /**
  * @brief Check if controller is 6-button type
  * @param port Controller port (0 or 1)
- * @return TRUE if 6-button controller detected
+ * @return 1 if 6-button controller detected, 0 otherwise
  */
-bool input_is_6button(u8 port);
+int input_is_6button(int port);
 
 #endif /* SMD_INPUT_H */

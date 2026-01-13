@@ -1,6 +1,7 @@
 //! C language frontend
 //!
 //! This frontend handles:
+//! - Preprocessing (#include directives)
 //! - Lexing C source into tokens
 //! - Parsing tokens into a C AST
 //! - Semantic analysis (type checking, symbol resolution)
@@ -9,7 +10,10 @@
 pub mod ast;
 pub mod lexer;
 pub mod parser;
+pub mod preprocessor;
 pub mod sema;
+
+use std::path::Path;
 
 use crate::common::{CompileError, CompileResult};
 use crate::frontend::{CompileContext, Frontend, FrontendConfig};
@@ -50,6 +54,26 @@ impl Frontend for CFrontend {
         ctx: &CompileContext,
         config: &FrontendConfig,
     ) -> CompileResult<IrModule> {
+        // Phase 0: Preprocessing (#include expansion)
+        let source_path = Path::new(&ctx.filename);
+        let processed_source = if config.include_paths.is_empty() {
+            // No include paths - skip preprocessing
+            source.to_string()
+        } else {
+            if config.verbose {
+                eprintln!("Preprocessing...");
+            }
+            match preprocessor::preprocess(source, source_path, config.include_paths.clone()) {
+                Ok(s) => s,
+                Err(e) => {
+                    ctx.reporter.report_error(ctx.file_id, &e);
+                    return Err(e);
+                }
+            }
+        };
+
+        let source = &processed_source;
+
         // Phase 1: Lexing (optional token dump)
         if config.dump_tokens {
             let lexer = Lexer::new(source);

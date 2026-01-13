@@ -276,3 +276,12 @@ pub fn set_link(index: u8, next: u8) {
     // In real usage, you'd want to preserve the size
     vdp::write_data(next as u16);
 }
+
+/// Clear all sprites
+///
+/// Hides all 80 sprites by clearing the sprite attribute table.
+pub fn clear_all() {
+    for i in 0..MAX_SPRITES {
+        clear(i);
+    }
+}

@@ -8,6 +8,7 @@
 //! - **Sprites**: Up to 80 hardware sprites with various sizes
 //! - **Input**: Controller reading with button state tracking
 //! - **PSG**: Programmable Sound Generator for simple sound effects
+//! - **YM2612**: FM synth register access
 //! - **Types**: Fixed-point math, common type aliases
 //!
 //! ## Quick Start
@@ -52,6 +53,8 @@
 //! - [`sprite`] - Sprite management
 //! - [`input`] - Controller input handling
 //! - [`psg`] - Programmable Sound Generator
+//! - [`ym2612`] - YM2612 FM synth registers
+//! - [`z80`] - Z80 CPU control and sound driver
 //! - [`types`] - Common types and constants
 
 #![no_std]
@@ -62,6 +65,8 @@ pub mod sprite;
 pub mod input;
 pub mod psg;
 pub mod types;
+pub mod ym2612;
+pub mod z80;
 
 /// Convenient re-exports for common usage
 ///
@@ -75,6 +80,8 @@ pub mod prelude {
     pub use crate::input::{self, Button, Buttons};
     pub use crate::psg;
     pub use crate::types::*;
+    pub use crate::ym2612;
+    pub use crate::z80;
 }
 
 /// SDK version information

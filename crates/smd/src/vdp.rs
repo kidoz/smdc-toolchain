@@ -252,3 +252,63 @@ pub fn set_tile_b(x: u8, y: u8, attr: u16) {
 pub fn set_background(palette: u8, color: u8) {
     set_reg(7, (palette << 4) | color);
 }
+
+/// Set horizontal scroll for Plane A
+///
+/// # Arguments
+/// * `scroll` - Scroll value in pixels (negative = scroll right)
+pub fn set_hscroll_a(scroll: i16) {
+    set_write_addr(vram::HSCROLL);
+    write_data(scroll as u16);
+}
+
+/// Set horizontal scroll for Plane B
+///
+/// # Arguments
+/// * `scroll` - Scroll value in pixels
+pub fn set_hscroll_b(scroll: i16) {
+    set_write_addr(vram::HSCROLL + 2);
+    write_data(scroll as u16);
+}
+
+/// Set vertical scroll for Plane A
+///
+/// # Arguments
+/// * `scroll` - Scroll value in pixels (negative = scroll down)
+pub fn set_vscroll_a(scroll: i16) {
+    // VSRAM write
+    unsafe {
+        VDP_CTRL.write_volatile(0x4000);
+        VDP_CTRL.write_volatile(0x0010);
+        VDP_DATA.write_volatile(scroll as u16);
+    }
+}
+
+/// Set vertical scroll for Plane B
+///
+/// # Arguments
+/// * `scroll` - Scroll value in pixels
+pub fn set_vscroll_b(scroll: i16) {
+    // VSRAM write at offset 2
+    unsafe {
+        VDP_CTRL.write_volatile(0x4002);
+        VDP_CTRL.write_volatile(0x0010);
+        VDP_DATA.write_volatile(scroll as u16);
+    }
+}
+
+/// Clear Plane A (fill with tile 0)
+pub fn clear_plane_a() {
+    set_write_addr(vram::PLANE_A);
+    for _ in 0..(64 * 32) {
+        write_data(0);
+    }
+}
+
+/// Clear Plane B (fill with tile 0)
+pub fn clear_plane_b() {
+    set_write_addr(vram::PLANE_B);
+    for _ in 0..(64 * 32) {
+        write_data(0);
+    }
+}
