@@ -1,32 +1,28 @@
-/**
- * @file smd/types.h
- * @brief Common type definitions for Sega Mega Drive development
- * @version 1.1
+/*
+ * smd/types.h - Common type definitions for Sega Mega Drive
  *
  * Note: smdc compiler has limited typedef support.
- * Use int for most values, unsigned char* for byte pointers.
+ * Use int for function parameters, unsigned char* for byte pointers.
  */
 
-/*
- * Type aliases (for documentation - smdc doesn't fully support typedef)
- *
- * u8  = unsigned char  (8-bit unsigned)
- * u16 = unsigned short (16-bit unsigned)
- * u32 = unsigned int   (32-bit unsigned)
- * s8  = signed char    (8-bit signed)
- * s16 = short          (16-bit signed)
- * s32 = int            (32-bit signed)
- *
- * For smdc, use:
- * - int for most values (32-bit on M68k)
- * - unsigned char* for byte pointers
- * - unsigned short* for word pointers
- */
+#ifndef SMD_TYPES_H
+#define SMD_TYPES_H
 
-/* Basic integer typedefs that smdc can handle */
+/* Basic integer typedefs */
 typedef unsigned char u8;
 typedef unsigned short u16;
 typedef unsigned int u32;
 typedef signed char s8;
 typedef short s16;
 typedef int s32;
+
+/* Boolean */
+#define TRUE  1
+#define FALSE 0
+
+/* NULL pointer */
+#ifndef NULL
+#define NULL ((void*)0)
+#endif
+
+#endif

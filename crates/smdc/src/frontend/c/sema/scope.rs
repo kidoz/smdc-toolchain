@@ -28,11 +28,20 @@ pub struct StructDef {
     pub members: Vec<(String, CType)>,
 }
 
+/// Union type definition
+#[derive(Debug, Clone)]
+pub struct UnionDef {
+    pub name: String,
+    pub members: Vec<(String, CType)>,
+}
+
 /// A scope containing symbols
 #[derive(Debug)]
 pub struct Scope {
     symbols: HashMap<String, Symbol>,
     structs: HashMap<String, StructDef>,
+    unions: HashMap<String, UnionDef>,
+    labels: HashMap<String, bool>, // label name -> defined
     parent: Option<Box<Scope>>,
 }
 
@@ -41,6 +50,8 @@ impl Scope {
         Self {
             symbols: HashMap::new(),
             structs: HashMap::new(),
+            unions: HashMap::new(),
+            labels: HashMap::new(),
             parent: None,
         }
     }
@@ -49,6 +60,8 @@ impl Scope {
         Self {
             symbols: HashMap::new(),
             structs: HashMap::new(),
+            unions: HashMap::new(),
+            labels: HashMap::new(),
             parent: Some(Box::new(parent)),
         }
     }
@@ -93,6 +106,63 @@ impl Scope {
         } else {
             None
         }
+    }
+
+    /// Define a union type in the current scope
+    pub fn define_union(&mut self, def: UnionDef) -> Result<(), String> {
+        if self.unions.contains_key(&def.name) {
+            return Err(format!("union '{}' already defined in this scope", def.name));
+        }
+        self.unions.insert(def.name.clone(), def);
+        Ok(())
+    }
+
+    /// Look up a union type by name
+    pub fn lookup_union(&self, name: &str) -> Option<&UnionDef> {
+        if let Some(def) = self.unions.get(name) {
+            Some(def)
+        } else if let Some(parent) = &self.parent {
+            parent.lookup_union(name)
+        } else {
+            None
+        }
+    }
+
+    /// Define a label in the current function scope
+    pub fn define_label(&mut self, name: &str) -> Result<(), String> {
+        if let Some(defined) = self.labels.get(name) {
+            if *defined {
+                return Err(format!("label '{}' already defined", name));
+            }
+        }
+        self.labels.insert(name.to_string(), true);
+        Ok(())
+    }
+
+    /// Reference a label (for goto)
+    pub fn reference_label(&mut self, name: &str) {
+        if !self.labels.contains_key(name) {
+            self.labels.insert(name.to_string(), false);
+        }
+    }
+
+    /// Check if all referenced labels are defined
+    pub fn check_labels(&self) -> Result<(), Vec<String>> {
+        let undefined: Vec<String> = self.labels
+            .iter()
+            .filter(|(_, defined)| !**defined)
+            .map(|(name, _)| name.clone())
+            .collect();
+        if undefined.is_empty() {
+            Ok(())
+        } else {
+            Err(undefined)
+        }
+    }
+
+    /// Clear labels (for new function scope)
+    pub fn clear_labels(&mut self) {
+        self.labels.clear();
     }
 
     /// Take the parent scope, replacing self with the parent

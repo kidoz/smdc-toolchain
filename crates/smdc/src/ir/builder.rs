@@ -61,6 +61,12 @@ impl IrBuilder {
         match &decl.kind {
             DeclKind::Function(func) => self.build_function(func),
             DeclKind::Variable(var) => self.build_global_var(var),
+            DeclKind::MultipleVariables(vars) => {
+                for var in vars {
+                    self.build_global_var(var)?;
+                }
+                Ok(())
+            }
             _ => Ok(()), // Skip struct/union/enum/typedef for now
         }
     }
@@ -358,8 +364,14 @@ impl IrBuilder {
             match item {
                 BlockItem::Statement(stmt) => self.build_stmt(stmt)?,
                 BlockItem::Declaration(decl) => {
-                    if let DeclKind::Variable(var) = &decl.kind {
-                        self.build_local_var(var)?;
+                    match &decl.kind {
+                        DeclKind::Variable(var) => self.build_local_var(var)?,
+                        DeclKind::MultipleVariables(vars) => {
+                            for var in vars {
+                                self.build_local_var(var)?;
+                            }
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -445,8 +457,14 @@ impl IrBuilder {
                 self.build_stmt(stmt)?;
             }
             StmtKind::Declaration(decl) => {
-                if let DeclKind::Variable(var) = &decl.kind {
-                    self.build_local_var(var)?;
+                match &decl.kind {
+                    DeclKind::Variable(var) => self.build_local_var(var)?,
+                    DeclKind::MultipleVariables(vars) => {
+                        for var in vars {
+                            self.build_local_var(var)?;
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
@@ -549,8 +567,14 @@ impl IrBuilder {
                     self.build_expr(expr)?;
                 }
                 ForInit::Declaration(decl) => {
-                    if let DeclKind::Variable(var) = &decl.kind {
-                        self.build_local_var(var)?;
+                    match &decl.kind {
+                        DeclKind::Variable(var) => self.build_local_var(var)?,
+                        DeclKind::MultipleVariables(vars) => {
+                            for var in vars {
+                                self.build_local_var(var)?;
+                            }
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -700,8 +724,14 @@ impl IrBuilder {
                             self.emit_switch_body(s, cases, default_label)?;
                         }
                         BlockItem::Declaration(decl) => {
-                            if let DeclKind::Variable(var) = &decl.kind {
-                                self.build_local_var(var)?;
+                            match &decl.kind {
+                                DeclKind::Variable(var) => self.build_local_var(var)?,
+                                DeclKind::MultipleVariables(vars) => {
+                                    for var in vars {
+                                        self.build_local_var(var)?;
+                                    }
+                                }
+                                _ => {}
                             }
                         }
                     }

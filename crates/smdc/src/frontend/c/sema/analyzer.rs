@@ -2,7 +2,7 @@
 
 use crate::frontend::c::ast::*;
 use crate::common::{CompileError, CompileResult};
-use super::scope::{Scope, Symbol, SymbolKind, StructDef};
+use super::scope::{Scope, Symbol, SymbolKind, StructDef, UnionDef};
 
 /// Semantic analyzer for type checking
 pub struct SemanticAnalyzer {
@@ -33,6 +33,12 @@ impl SemanticAnalyzer {
     fn analyze_declaration(&mut self, decl: &mut Declaration) -> CompileResult<()> {
         match &mut decl.kind {
             DeclKind::Variable(var) => self.analyze_var_decl(var),
+            DeclKind::MultipleVariables(vars) => {
+                for var in vars {
+                    self.analyze_var_decl(var)?;
+                }
+                Ok(())
+            }
             DeclKind::Function(func) => self.analyze_func_decl(func),
             DeclKind::Struct(s) => self.analyze_struct_decl(s),
             DeclKind::Union(u) => self.analyze_union_decl(u),
@@ -63,12 +69,18 @@ impl SemanticAnalyzer {
         Ok(())
     }
 
-    /// Resolve struct types by looking up struct definitions and filling in members
+    /// Resolve struct/union types by looking up definitions and filling in members
     fn resolve_struct_type(&self, ty: &mut CType) -> CompileResult<()> {
         match &mut ty.kind {
             TypeKind::Struct { name: Some(struct_name), members } if members.is_empty() => {
                 // Look up the struct definition
                 if let Some(def) = self.scope.lookup_struct(struct_name) {
+                    *members = def.members.clone();
+                }
+            }
+            TypeKind::Union { name: Some(union_name), members } if members.is_empty() => {
+                // Look up the union definition
+                if let Some(def) = self.scope.lookup_union(union_name) {
                     *members = def.members.clone();
                 }
             }
@@ -108,6 +120,9 @@ impl SemanticAnalyzer {
             // Enter new scope for function body
             self.scope.push_child();
 
+            // Clear labels for new function scope
+            self.scope.clear_labels();
+
             // Add parameters to scope
             for param in &func.params {
                 if let Some(name) = &param.name {
@@ -127,6 +142,14 @@ impl SemanticAnalyzer {
 
             // Analyze body
             self.analyze_block(body)?;
+
+            // Check that all referenced labels are defined
+            if let Err(undefined) = self.scope.check_labels() {
+                return Err(CompileError::semantic(
+                    format!("undefined labels: {}", undefined.join(", ")),
+                    func.span,
+                ));
+            }
 
             // Restore scope
             self.current_function_return_type = None;
@@ -156,8 +179,23 @@ impl SemanticAnalyzer {
         Ok(())
     }
 
-    fn analyze_union_decl(&mut self, _u: &mut UnionDecl) -> CompileResult<()> {
-        // TODO: Register union type
+    fn analyze_union_decl(&mut self, u: &mut UnionDecl) -> CompileResult<()> {
+        // Register union type if it has a name and members
+        if let (Some(name), Some(members)) = (&u.name, &u.members) {
+            let union_members: Vec<(String, CType)> = members
+                .iter()
+                .map(|m| (m.name.clone(), m.ty.clone()))
+                .collect();
+
+            let def = UnionDef {
+                name: name.clone(),
+                members: union_members,
+            };
+
+            self.scope.define_union(def).map_err(|e| {
+                CompileError::semantic(e, u.span)
+            })?;
+        }
         Ok(())
     }
 
@@ -299,10 +337,15 @@ impl SemanticAnalyzer {
                 }
                 // TODO: Check return type matches function return type
             }
-            StmtKind::Goto(_label) => {
-                // TODO: Check that label exists
+            StmtKind::Goto(label) => {
+                // Reference the label (will be checked at end of function)
+                self.scope.reference_label(label);
             }
-            StmtKind::Label { stmt, .. } => {
+            StmtKind::Label { name, stmt } => {
+                // Define the label
+                self.scope.define_label(name).map_err(|e| {
+                    CompileError::semantic(e, stmt.span)
+                })?;
                 self.analyze_stmt(stmt)?;
             }
             StmtKind::Declaration(decl) => {

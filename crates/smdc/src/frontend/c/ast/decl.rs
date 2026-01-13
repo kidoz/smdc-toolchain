@@ -22,6 +22,9 @@ pub enum DeclKind {
     /// Variable declaration: int x = 5;
     Variable(VarDecl),
 
+    /// Multiple variable declarations: int a, b, c;
+    MultipleVariables(Vec<VarDecl>),
+
     /// Function declaration or definition
     Function(FuncDecl),
 

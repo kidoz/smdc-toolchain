@@ -122,7 +122,7 @@ impl<'a> Parser<'a> {
 
         // Check if this is a function definition or declaration
         if self.check(&TokenKind::LBrace) {
-            // Function definition
+            // Function definition (ANSI style)
             let body = self.parse_block()?;
             let span = start_span.merge(body.span);
 
@@ -150,6 +150,53 @@ impl<'a> Parser<'a> {
         } else if self.check(&TokenKind::Semi) || self.check(&TokenKind::Comma) || self.check(&TokenKind::Eq) {
             // Variable declaration or function declaration
             self.parse_declaration_rest(name, ty, storage_class, start_span)
+        } else if let TypeKind::Function { return_type, params, variadic } = &ty.kind {
+            // K&R-style function definition - parameter declarations between ) and {
+            // Parse K&R parameter declarations
+            let mut kr_params = params.clone();
+
+            while self.current.kind.can_start_declaration() && !self.check(&TokenKind::LBrace) {
+                // Parse a parameter type declaration (e.g., "int a;")
+                let (_, param_base_type) = self.parse_declaration_specifiers()?;
+
+                // Parse declarator(s) - may be multiple like "int a, b;"
+                loop {
+                    let (param_name, param_type) = self.parse_declarator(param_base_type.clone())?;
+
+                    // Find and update the corresponding parameter
+                    for (name, param_ty) in &mut kr_params {
+                        if name.as_ref() == Some(&param_name) {
+                            *param_ty = param_type.clone();
+                            break;
+                        }
+                    }
+
+                    if !self.match_token(&TokenKind::Comma)? {
+                        break;
+                    }
+                }
+
+                self.expect(TokenKind::Semi)?;
+            }
+
+            // Now parse the function body
+            let body = self.parse_block()?;
+            let span = start_span.merge(body.span);
+
+            let params: Vec<ParamDecl> = kr_params
+                .into_iter()
+                .map(|(name, ty)| ParamDecl::new(name, ty, span))
+                .collect();
+
+            let mut func = FuncDecl::new(name, *return_type.clone(), params, span)
+                .with_body(body)
+                .with_variadic(*variadic);
+
+            if let Some(sc) = storage_class {
+                func = func.with_storage_class(sc);
+            }
+
+            Ok(Declaration::new(DeclKind::Function(func), span))
         } else {
             Err(CompileError::parser(
                 format!("unexpected token {} in declaration", self.current.kind),
@@ -185,28 +232,72 @@ impl<'a> Parser<'a> {
             return Ok(Declaration::new(DeclKind::Function(func), span));
         }
 
-        // Variable declaration
+        // Variable declaration - may have multiple declarators
         let init = if self.match_token(&TokenKind::Eq)? {
             Some(self.parse_initializer()?)
         } else {
             None
         };
 
-        let mut var = VarDecl::new(first_name, first_type, start_span);
-        if let Some(sc) = storage_class {
+        let mut var = VarDecl::new(first_name, first_type.clone(), start_span);
+        if let Some(sc) = storage_class.clone() {
             var = var.with_storage_class(sc);
         }
         if let Some(init) = init {
             var = var.with_init(init);
         }
 
-        // TODO: Handle multiple declarators (e.g., int a, b, c;)
+        let mut declarations = vec![var];
+
+        // Handle multiple declarators (e.g., int a, b, c;)
+        while self.match_token(&TokenKind::Comma)? {
+            // Get base type without pointers/arrays (need to extract from first_type)
+            let base_type = self.get_base_type(&first_type);
+            let (name, ty) = self.parse_declarator(base_type)?;
+
+            let init = if self.match_token(&TokenKind::Eq)? {
+                Some(self.parse_initializer()?)
+            } else {
+                None
+            };
+
+            let mut var = VarDecl::new(name, ty, start_span);
+            if let Some(sc) = storage_class.clone() {
+                var = var.with_storage_class(sc);
+            }
+            if let Some(init) = init {
+                var = var.with_init(init);
+            }
+            declarations.push(var);
+        }
 
         self.expect(TokenKind::Semi)?;
         let span = start_span.merge(self.current.span);
-        var.span = span;
 
-        Ok(Declaration::new(DeclKind::Variable(var), span))
+        // If single declaration, return as before
+        if declarations.len() == 1 {
+            let mut var = declarations.remove(0);
+            var.span = span;
+            return Ok(Declaration::new(DeclKind::Variable(var), span));
+        }
+
+        // Multiple declarations - return as MultipleVariables
+        for var in &mut declarations {
+            var.span = span;
+        }
+        Ok(Declaration::new(DeclKind::MultipleVariables(declarations), span))
+    }
+
+    /// Extract base type (strip pointers and arrays from first declarator for subsequent declarators)
+    fn get_base_type(&self, ty: &CType) -> CType {
+        // For multiple declarators, we need the original base type
+        // The base type is stored in the type before any pointer/array modifications
+        // We reconstruct by looking at the innermost type
+        match &ty.kind {
+            TypeKind::Pointer(inner) => self.get_base_type(inner),
+            TypeKind::Array { element, .. } => self.get_base_type(element),
+            _ => ty.clone(),
+        }
     }
 
     // =========================================================================
@@ -1526,17 +1617,10 @@ impl<'a> Parser<'a> {
     fn parse_char_literal(&self, s: &str) -> CompileResult<char> {
         let inner = &s[1..s.len() - 1]; // Remove quotes
         if inner.starts_with('\\') {
-            match inner.chars().nth(1) {
-                Some('n') => Ok('\n'),
-                Some('r') => Ok('\r'),
-                Some('t') => Ok('\t'),
-                Some('0') => Ok('\0'),
-                Some('\\') => Ok('\\'),
-                Some('\'') => Ok('\''),
-                Some('"') => Ok('"'),
-                Some(c) => Ok(c),
-                None => Ok('\0'),
-            }
+            let mut chars = inner.chars().peekable();
+            chars.next(); // consume backslash
+            self.parse_escape_sequence(&mut chars)
+                .map(|c| c as char)
         } else {
             Ok(inner.chars().next().unwrap_or('\0'))
         }
@@ -1549,22 +1633,96 @@ impl<'a> Parser<'a> {
 
         while let Some(c) = chars.next() {
             if c == '\\' {
-                match chars.next() {
-                    Some('n') => result.push('\n'),
-                    Some('r') => result.push('\r'),
-                    Some('t') => result.push('\t'),
-                    Some('0') => result.push('\0'),
-                    Some('\\') => result.push('\\'),
-                    Some('"') => result.push('"'),
-                    Some(c) => result.push(c),
-                    None => {}
-                }
+                let escaped = self.parse_escape_sequence(&mut chars)?;
+                result.push(escaped as char);
             } else {
                 result.push(c);
             }
         }
 
         Ok(result)
+    }
+
+    /// Parse an escape sequence after the backslash
+    fn parse_escape_sequence(&self, chars: &mut std::iter::Peekable<std::str::Chars>) -> CompileResult<u8> {
+        match chars.next() {
+            Some('n') => Ok(b'\n'),
+            Some('r') => Ok(b'\r'),
+            Some('t') => Ok(b'\t'),
+            Some('0') => {
+                // Could be null or octal escape
+                // Check if next char is a digit (octal)
+                if chars.peek().map(|c| c.is_ascii_digit() && *c < '8').unwrap_or(false) {
+                    // Octal escape: \0nn (up to 3 total octal digits including the leading 0)
+                    let mut value: u32 = 0;
+                    let mut count = 0;
+                    while count < 2 { // Already consumed '0', so 2 more digits max
+                        if let Some(&c) = chars.peek() {
+                            if c >= '0' && c <= '7' {
+                                chars.next();
+                                value = value * 8 + (c as u32 - '0' as u32);
+                                count += 1;
+                            } else {
+                                break;
+                            }
+                        } else {
+                            break;
+                        }
+                    }
+                    Ok(value as u8)
+                } else {
+                    Ok(0) // Just \0 = null
+                }
+            }
+            Some(c) if c >= '1' && c <= '7' => {
+                // Octal escape: \nnn (1-3 octal digits)
+                let mut value: u32 = c as u32 - '0' as u32;
+                let mut count = 1;
+                while count < 3 {
+                    if let Some(&next) = chars.peek() {
+                        if next >= '0' && next <= '7' {
+                            chars.next();
+                            value = value * 8 + (next as u32 - '0' as u32);
+                            count += 1;
+                        } else {
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
+                }
+                Ok(value as u8)
+            }
+            Some('x') => {
+                // Hex escape: \xnn (any number of hex digits, but typically 1-2)
+                let mut value: u32 = 0;
+                let mut found_digit = false;
+                while let Some(&c) = chars.peek() {
+                    if let Some(digit) = c.to_digit(16) {
+                        chars.next();
+                        value = value * 16 + digit;
+                        found_digit = true;
+                    } else {
+                        break;
+                    }
+                }
+                if !found_digit {
+                    // \x with no digits - just return 'x'
+                    return Ok(b'x');
+                }
+                Ok(value as u8)
+            }
+            Some('a') => Ok(0x07), // Bell
+            Some('b') => Ok(0x08), // Backspace
+            Some('f') => Ok(0x0C), // Form feed
+            Some('v') => Ok(0x0B), // Vertical tab
+            Some('\\') => Ok(b'\\'),
+            Some('\'') => Ok(b'\''),
+            Some('"') => Ok(b'"'),
+            Some('?') => Ok(b'?'),
+            Some(c) => Ok(c as u8),
+            None => Ok(0),
+        }
     }
 
     // =========================================================================
