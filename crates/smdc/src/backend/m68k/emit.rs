@@ -14,6 +14,8 @@ pub struct CodeGenerator {
     frame_size: i16,
     /// Next stack offset
     next_offset: i16,
+    /// Total size of global data (for RAM allocation)
+    data_size: usize,
 }
 
 impl CodeGenerator {
@@ -23,6 +25,7 @@ impl CodeGenerator {
             temp_offsets: HashMap::new(),
             frame_size: 0,
             next_offset: -4,
+            data_size: 0,
         }
     }
 
@@ -44,6 +47,20 @@ impl CodeGenerator {
     pub fn generate_instructions(&mut self, module: &IrModule) -> CompileResult<Vec<M68kInst>> {
         self.output.clear();
 
+        // Calculate total data size first (for RAM allocation)
+        self.data_size = 0;
+        for global in &module.globals {
+            let size = global.ty.size();
+            // Align to 4 bytes for efficiency
+            self.data_size = (self.data_size + 3) & !3;
+            self.data_size += size;
+        }
+        for (_, string) in &module.strings {
+            self.data_size += string.len() + 1; // +1 for null terminator
+        }
+        // Align final size
+        self.data_size = (self.data_size + 3) & !3;
+
         // Emit header
         self.emit(M68kInst::Directive(".section .text".to_string()));
         self.emit(M68kInst::Directive(".align 2".to_string()));
@@ -57,10 +74,19 @@ impl CodeGenerator {
             self.generate_function(func)?;
         }
 
-        // Emit data section
+        // Emit data section with ROM initial values and RAM references
         if !module.globals.is_empty() || !module.strings.is_empty() {
+            // Emit label for ROM location BEFORE switching to data section
+            // This label gets a ROM address (where initial values are stored)
+            self.emit(M68kInst::Directive(".align 2".to_string()));
+            self.emit(M68kInst::Label("__data_rom_start".to_string()));
+
+            // Now switch to data section - labels get RAM addresses
             self.emit(M68kInst::Directive(".section .data".to_string()));
             self.emit(M68kInst::Directive(".align 2".to_string()));
+
+            // Mark start of data in RAM
+            self.emit(M68kInst::Label("__data_ram_start".to_string()));
 
             for global in &module.globals {
                 self.emit(M68kInst::Label(global.name.clone()));
@@ -90,6 +116,10 @@ impl CodeGenerator {
                     .replace('\0', "\\0");
                 self.emit(M68kInst::Directive(format!(".asciz \"{}\"", escaped)));
             }
+
+            // Mark end of data in RAM
+            self.emit(M68kInst::Directive(".align 2".to_string()));
+            self.emit(M68kInst::Label("__data_ram_end".to_string()));
         }
 
         Ok(std::mem::take(&mut self.output))
@@ -163,6 +193,20 @@ impl CodeGenerator {
         self.emit(M68kInst::Label(".clear_ram".to_string()));
         self.emit(M68kInst::Clr(Size::Long, Operand::PostInc(AddrReg::A0)));
         self.emit(M68kInst::Dbf(DataReg::D0, ".clear_ram".to_string()));
+
+        // Copy initialized data from ROM to RAM
+        // Source: __data_rom_start (ROM address)
+        // Dest: __data_ram_start (RAM address = 0xFF8000)
+        // Count: __data_ram_end - __data_ram_start
+        self.emit(M68kInst::Lea(Operand::Label("__data_rom_start".to_string()), AddrReg::A0));  // Source in ROM
+        self.emit(M68kInst::Lea(Operand::Label("__data_ram_start".to_string()), AddrReg::A1)); // Dest in RAM
+        self.emit(M68kInst::Lea(Operand::Label("__data_ram_end".to_string()), AddrReg::A2));   // End marker
+        self.emit(M68kInst::Label(".copy_data".to_string()));
+        self.emit(M68kInst::Cmpa(Size::Long, Operand::AddrReg(AddrReg::A1), AddrReg::A2));     // Compare A1 with A2
+        self.emit(M68kInst::Bcc(Cond::Le, ".copy_done".to_string()));  // If A2 <= A1, we're done (end reached)
+        self.emit(M68kInst::Move(Size::Long, Operand::PostInc(AddrReg::A0), Operand::PostInc(AddrReg::A1)));
+        self.emit(M68kInst::Bra(".copy_data".to_string()));
+        self.emit(M68kInst::Label(".copy_done".to_string()));
 
         // Set up stack pointer (already set by vector table, but ensure it's correct)
         self.emit(M68kInst::Move(

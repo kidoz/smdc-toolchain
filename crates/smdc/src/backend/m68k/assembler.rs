@@ -33,12 +33,19 @@ impl From<EncodeError> for AssemblyError {
     }
 }
 
+/// RAM base address for data section
+const DATA_RAM_BASE: u32 = 0x00FF8000;
+
 /// Two-pass assembler for M68k instructions
 pub struct Assembler {
     /// Symbol table (label -> address)
     symbols: HashMap<String, u32>,
     /// Base address for code
     base_address: u32,
+    /// ROM offset where data section starts (for copying to RAM)
+    data_rom_offset: u32,
+    /// Size of data section
+    data_size: u32,
 }
 
 impl Assembler {
@@ -47,7 +54,24 @@ impl Assembler {
         Self {
             symbols: HashMap::new(),
             base_address,
+            data_rom_offset: 0,
+            data_size: 0,
         }
+    }
+
+    /// Get the ROM offset where data section starts
+    pub fn data_rom_offset(&self) -> u32 {
+        self.data_rom_offset
+    }
+
+    /// Get the size of the data section
+    pub fn data_size(&self) -> u32 {
+        self.data_size
+    }
+
+    /// Get the RAM base address for data
+    pub fn data_ram_base(&self) -> u32 {
+        DATA_RAM_BASE
     }
 
     /// Assemble a list of instructions to binary
@@ -78,14 +102,35 @@ impl Assembler {
         encoder.set_base_address(self.base_address);
 
         let mut position = self.base_address;
+        let mut in_data_section = false;
+        let mut data_position = DATA_RAM_BASE;
 
         for inst in instructions {
-            // Handle labels
+            // Handle section directives
+            if let M68kInst::Directive(d) = inst {
+                if d.contains(".section .data") || d == ".data" {
+                    // Switch to data section - labels now get RAM addresses
+                    in_data_section = true;
+                    // Record where data starts in ROM (for copying)
+                    self.data_rom_offset = position;
+                    continue;
+                }
+                if d.contains(".section .text") || d == ".text" {
+                    in_data_section = false;
+                    continue;
+                }
+            }
+
+            // Handle labels - use RAM address if in data section
             if let M68kInst::Label(name) = inst {
                 if self.symbols.contains_key(name) {
                     return Err(AssemblyError::DuplicateSymbol(name.clone()));
                 }
-                self.symbols.insert(name.clone(), position);
+                if in_data_section {
+                    self.symbols.insert(name.clone(), data_position);
+                } else {
+                    self.symbols.insert(name.clone(), position);
+                }
             }
 
             // Handle alignment directives
@@ -93,6 +138,9 @@ impl Assembler {
                 if d.starts_with(".align ") {
                     let align = d[7..].trim().parse::<u32>().unwrap_or(2);
                     let mask = align - 1;
+                    if in_data_section {
+                        data_position = (data_position + mask) & !mask;
+                    }
                     position = (position + mask) & !mask;
                     continue;
                 }
@@ -101,7 +149,13 @@ impl Assembler {
             // Calculate instruction size
             let size = encoder.instruction_size(inst) as u32;
             position += size;
+            if in_data_section {
+                data_position += size;
+            }
         }
+
+        // Calculate data section size
+        self.data_size = data_position - DATA_RAM_BASE;
 
         Ok(())
     }
