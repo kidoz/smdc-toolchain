@@ -13,7 +13,7 @@
 //! - `#` (stringification) and `##` (token pasting) in macro bodies
 //! - Predefined macros: __FILE__, __LINE__, __DATE__, __TIME__, __STDC__
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -45,8 +45,8 @@ struct ConditionalState {
 pub struct Preprocessor {
     /// System include paths (e.g., sdk/c/include)
     include_paths: Vec<PathBuf>,
-    /// Track included files to prevent circular includes
-    included_files: HashSet<PathBuf>,
+    /// Track the active include stack to detect cycles
+    include_stack: Vec<PathBuf>,
     /// Current file being processed (for relative includes and __FILE__)
     current_file: PathBuf,
     /// Current directory for relative includes
@@ -87,7 +87,7 @@ impl Preprocessor {
 
         let mut pp = Self {
             include_paths,
-            included_files: HashSet::new(),
+            include_stack: Vec::new(),
             current_file: PathBuf::from(""),
             current_dir: PathBuf::from("."),
             current_line: 1,
@@ -141,21 +141,119 @@ impl Preprocessor {
             .map(|p| p.to_path_buf())
             .unwrap_or_else(|| PathBuf::from("."));
 
-        // Add source file to included set to prevent self-inclusion
+        // Add source file to include stack to detect circular includes
+        let mut pushed_root = false;
         if let Ok(canonical) = fs::canonicalize(source_path) {
-            self.included_files.insert(canonical);
+            self.include_stack.push(canonical);
+            pushed_root = true;
         }
 
         // Phase 1: Replace trigraphs (C89 feature)
         let trigraph_replaced = Self::replace_trigraphs(source);
 
-        // Phase 2: expand includes and handle conditionals
-        let included = self.expand_includes(&trigraph_replaced)?;
+        // Phase 2: Strip comments (replace with spaces, preserve newlines)
+        let no_comments = Self::strip_comments(&trigraph_replaced);
 
-        // Phase 3: expand macros in the result
+        // Phase 3: expand includes and handle conditionals
+        let included = match self.expand_includes(&no_comments) {
+            Ok(value) => value,
+            Err(err) => {
+                if pushed_root {
+                    self.include_stack.pop();
+                }
+                return Err(err);
+            }
+        };
+
+        // Phase 4: expand macros in the result
         let expanded = self.expand_macros(&included);
 
+        if pushed_root {
+            self.include_stack.pop();
+        }
+
         Ok(expanded)
+    }
+
+    /// Replace comments with spaces (preserving newlines for line counting)
+    /// Both C89 block comments /* */ and C99 line comments // are handled
+    fn strip_comments(source: &str) -> String {
+        let mut result = String::with_capacity(source.len());
+        let chars: Vec<char> = source.chars().collect();
+        let mut i = 0;
+
+        while i < chars.len() {
+            // Check for string literals - don't strip "comments" inside strings
+            if chars[i] == '"' {
+                result.push(chars[i]);
+                i += 1;
+                // Copy until end of string, handling escapes
+                while i < chars.len() {
+                    result.push(chars[i]);
+                    if chars[i] == '\\' && i + 1 < chars.len() {
+                        i += 1;
+                        result.push(chars[i]);
+                    } else if chars[i] == '"' {
+                        i += 1;
+                        break;
+                    }
+                    i += 1;
+                }
+                continue;
+            }
+
+            // Check for character literals
+            if chars[i] == '\'' {
+                result.push(chars[i]);
+                i += 1;
+                while i < chars.len() {
+                    result.push(chars[i]);
+                    if chars[i] == '\\' && i + 1 < chars.len() {
+                        i += 1;
+                        result.push(chars[i]);
+                    } else if chars[i] == '\'' {
+                        i += 1;
+                        break;
+                    }
+                    i += 1;
+                }
+                continue;
+            }
+
+            // Check for line comment //
+            if i + 1 < chars.len() && chars[i] == '/' && chars[i + 1] == '/' {
+                // Skip until end of line, replace with space
+                result.push(' ');
+                i += 2;
+                while i < chars.len() && chars[i] != '\n' {
+                    i += 1;
+                }
+                continue;
+            }
+
+            // Check for block comment /* */
+            if i + 1 < chars.len() && chars[i] == '/' && chars[i + 1] == '*' {
+                result.push(' ');
+                i += 2;
+                while i + 1 < chars.len() {
+                    if chars[i] == '\n' {
+                        // Preserve newlines for line counting
+                        result.push('\n');
+                    }
+                    if chars[i] == '*' && chars[i + 1] == '/' {
+                        i += 2;
+                        break;
+                    }
+                    i += 1;
+                }
+                continue;
+            }
+
+            result.push(chars[i]);
+            i += 1;
+        }
+
+        result
     }
 
     /// Replace C89 trigraph sequences with their single-character equivalents
@@ -231,10 +329,20 @@ impl Preprocessor {
                 result.push('\n');
             } else if trimmed.starts_with("#include") {
                 if active {
-                    let include_content = self.parse_include_directive(trimmed, 0)?;
+                    let (include_content, include_path) = self.parse_include_directive(trimmed, 0)?;
+                    result.push_str(&format!("#line 1 \"{}\"\n", include_path.display()));
                     result.push_str(&include_content);
+                    if !include_content.ends_with('\n') {
+                        result.push('\n');
+                    }
+                    result.push_str(&format!(
+                        "#line {} \"{}\"\n",
+                        line_num + 1,
+                        self.current_file.display()
+                    ));
+                } else {
+                    result.push('\n');
                 }
-                result.push('\n');
             } else if trimmed.starts_with("#ifdef") {
                 let name = trimmed.trim_start_matches("#ifdef").trim();
                 let defined = self.macros.contains_key(name);
@@ -317,7 +425,12 @@ impl Preprocessor {
                 }
                 result.push('\n');
             } else if trimmed.starts_with("#endif") {
-                cond_stack.pop();
+                if cond_stack.pop().is_none() {
+                    return Err(CompileError::parser(
+                        "unexpected #endif",
+                        Span::new(0, trimmed.len()),
+                    ));
+                }
                 result.push('\n');
             } else if trimmed.starts_with("#define") {
                 if active {
@@ -347,18 +460,7 @@ impl Preprocessor {
                 result.push('\n');
             } else if trimmed.starts_with("#line") {
                 if active {
-                    let rest = trimmed.trim_start_matches("#line").trim();
-                    let mut parts = rest.split_whitespace();
-                    if let Some(num_str) = parts.next() {
-                        if let Ok(num) = num_str.parse::<usize>() {
-                            self.current_line = num;
-                        }
-                    }
-                    if let Some(file_str) = parts.next() {
-                        // Remove quotes if present
-                        let file = file_str.trim_matches('"');
-                        self.current_file = PathBuf::from(file);
-                    }
+                    result.push_str(line);
                 }
                 result.push('\n');
             } else if trimmed.starts_with("#pragma") {
@@ -805,12 +907,49 @@ impl Preprocessor {
 
             let mut new_result = String::with_capacity(result.len());
             let mut chars = result.chars().peekable();
-            let mut line_num = 1;
+            let mut logical_line = 1usize;
+            let mut current_file = self.current_file.clone();
+            let mut at_line_start = true;
 
             while let Some(c) = chars.next() {
+                if at_line_start && c == '#' {
+                    let mut directive = String::new();
+                    directive.push(c);
+                    while let Some(next) = chars.peek().copied() {
+                        directive.push(chars.next().unwrap());
+                        if next == '\n' {
+                            break;
+                        }
+                    }
+
+                    if let Some((new_line, new_file)) = parse_line_directive(&directive) {
+                        logical_line = new_line;
+                        if let Some(file) = new_file {
+                            current_file = file;
+                        }
+                        if directive.ends_with('\n') {
+                            new_result.push('\n');
+                            at_line_start = true;
+                        } else {
+                            at_line_start = false;
+                        }
+                        continue;
+                    }
+
+                    new_result.push_str(&directive);
+                    if directive.ends_with('\n') {
+                        logical_line += 1;
+                        at_line_start = true;
+                    } else {
+                        at_line_start = false;
+                    }
+                    continue;
+                }
+
                 if c == '\n' {
-                    line_num += 1;
+                    logical_line += 1;
                     new_result.push(c);
+                    at_line_start = true;
                     continue;
                 }
 
@@ -833,14 +972,15 @@ impl Preprocessor {
                         // Handle predefined macros
                         if mac.is_predefined {
                             let expansion = match ident.as_str() {
-                                "__FILE__" => format!("\"{}\"", self.current_file.display()),
-                                "__LINE__" => format!("{}", line_num),
+                                "__FILE__" => format!("\"{}\"", current_file.display()),
+                                "__LINE__" => format!("{}", logical_line),
                                 "__DATE__" => self.date_str.clone(),
                                 "__TIME__" => self.time_str.clone(),
                                 _ => ident.clone(),
                             };
                             new_result.push_str(&expansion);
                             changed = true;
+                            at_line_start = false;
                             continue;
                         }
 
@@ -928,9 +1068,11 @@ impl Preprocessor {
 
                                 new_result.push_str(&expanded);
                                 changed = true;
+                                at_line_start = false;
                             } else {
                                 // No arguments - not a macro invocation
                                 new_result.push_str(&ident);
+                                at_line_start = false;
                             }
                         } else {
                             // Object-like macro
@@ -941,18 +1083,22 @@ impl Preprocessor {
                                 // Empty body - just remove the identifier
                                 changed = true;
                             }
+                            at_line_start = false;
                         }
                     } else {
                         // Not a macro
                         new_result.push_str(&ident);
+                        at_line_start = false;
                     }
                 } else if c == '/' && chars.peek() == Some(&'*') {
                     // Skip block comments
                     new_result.push(c);
                     new_result.push(chars.next().unwrap());
+                    let mut saw_newline = false;
                     while let Some(c) = chars.next() {
                         if c == '\n' {
-                            line_num += 1;
+                            logical_line += 1;
+                            saw_newline = true;
                         }
                         new_result.push(c);
                         if c == '*' && chars.peek() == Some(&'/') {
@@ -960,16 +1106,20 @@ impl Preprocessor {
                             break;
                         }
                     }
+                    at_line_start = saw_newline;
                 } else if c == '/' && chars.peek() == Some(&'/') {
                     // Skip line comments
                     new_result.push(c);
+                    let mut ended_with_newline = false;
                     while let Some(c) = chars.next() {
                         new_result.push(c);
                         if c == '\n' {
-                            line_num += 1;
+                            logical_line += 1;
+                            ended_with_newline = true;
                             break;
                         }
                     }
+                    at_line_start = ended_with_newline;
                 } else if c == '"' || c == '\'' {
                     // Skip string/char literals
                     let quote = c;
@@ -984,8 +1134,10 @@ impl Preprocessor {
                             break;
                         }
                     }
+                    at_line_start = false;
                 } else {
                     new_result.push(c);
+                    at_line_start = false;
                 }
             }
 
@@ -996,7 +1148,7 @@ impl Preprocessor {
     }
 
     /// Parse an #include directive and return the included file contents
-    fn parse_include_directive(&mut self, line: &str, offset: usize) -> CompileResult<String> {
+    fn parse_include_directive(&mut self, line: &str, offset: usize) -> CompileResult<(String, PathBuf)> {
         // Extract the part after #include
         let rest = line.trim_start_matches("#include").trim();
 
@@ -1021,12 +1173,13 @@ impl Preprocessor {
     }
 
     /// Include a system file (search in include paths)
-    fn include_system_file(&mut self, filename: &str, offset: usize) -> CompileResult<String> {
+    fn include_system_file(&mut self, filename: &str, offset: usize) -> CompileResult<(String, PathBuf)> {
         // Search in include paths
         for path in &self.include_paths {
             let full_path = path.join(filename);
             if full_path.exists() {
-                return self.read_and_expand(&full_path, offset);
+                let content = self.read_and_expand(&full_path, offset)?;
+                return Ok((content, full_path));
             }
         }
 
@@ -1037,11 +1190,12 @@ impl Preprocessor {
     }
 
     /// Include a local file (search relative to current file, then system paths)
-    fn include_local_file(&mut self, filename: &str, offset: usize) -> CompileResult<String> {
+    fn include_local_file(&mut self, filename: &str, offset: usize) -> CompileResult<(String, PathBuf)> {
         // First, try relative to current file
         let relative_path = self.current_dir.join(filename);
         if relative_path.exists() {
-            return self.read_and_expand(&relative_path, offset);
+            let content = self.read_and_expand(&relative_path, offset)?;
+            return Ok((content, relative_path));
         }
 
         // Fall back to system include paths
@@ -1059,13 +1213,15 @@ impl Preprocessor {
         })?;
 
         // Check for circular include
-        if self.included_files.contains(&canonical) {
-            // Already included - return empty (like include guards)
-            return Ok(String::new());
+        if self.include_stack.contains(&canonical) {
+            return Err(CompileError::parser(
+                format!("circular include detected: {}", path.display()),
+                Span::new(offset, offset + 1),
+            ));
         }
 
         // Mark as included
-        self.included_files.insert(canonical.clone());
+        self.include_stack.push(canonical.clone());
 
         // Read the file
         let content = fs::read_to_string(path).map_err(|e| {
@@ -1087,14 +1243,27 @@ impl Preprocessor {
             .unwrap_or_else(|| PathBuf::from("."));
 
         // Recursively expand includes in the included file
-        let expanded = self.expand_includes(&content)?;
+        let expanded = self.expand_includes(&content);
 
         // Restore state
         self.current_dir = saved_dir;
         self.current_file = saved_file;
+        self.include_stack.pop();
 
-        Ok(expanded)
+        expanded
     }
+}
+
+fn parse_line_directive(line: &str) -> Option<(usize, Option<PathBuf>)> {
+    let trimmed = line.trim();
+    if !trimmed.starts_with("#line") {
+        return None;
+    }
+    let rest = trimmed.trim_start_matches("#line").trim();
+    let mut parts = rest.split_whitespace();
+    let line_num = parts.next()?.parse::<usize>().ok()?;
+    let file = parts.next().map(|part| PathBuf::from(part.trim_matches('"')));
+    Some((line_num, file))
 }
 
 /// Replace identifier occurrences (not inside other identifiers)
@@ -1141,6 +1310,8 @@ pub fn preprocess(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn test_no_includes() {
@@ -1237,5 +1408,83 @@ mod tests {
         // FOO should be defined (??= became #)
         // Array brackets and braces should be replaced
         assert!(result.contains("int arr[3] = { 1, 2, 3 }"));
+    }
+
+    #[test]
+    fn test_unexpected_endif() {
+        let source = "#endif";
+        let mut pp = Preprocessor::new(vec![]);
+        assert!(pp.process(source, Path::new("test.c")).is_err());
+    }
+
+    #[test]
+    fn test_reinclude_header() {
+        let temp_dir = std::env::temp_dir()
+            .join(format!(
+                "smdc_pp_{}",
+                SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+            ));
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let header_path = temp_dir.join("a.h");
+        fs::write(&header_path, "int A;\n").unwrap();
+
+        let main_path = temp_dir.join("main.c");
+        fs::write(&main_path, "").unwrap();
+
+        let source = "#include \"a.h\"\n#include \"a.h\"\n";
+        let mut pp = Preprocessor::new(vec![]);
+        let result = pp.process(source, &main_path).unwrap();
+
+        assert_eq!(result.matches("int A;").count(), 2);
+    }
+
+    #[test]
+    fn test_circular_include_error() {
+        let temp_dir = std::env::temp_dir()
+            .join(format!(
+                "smdc_pp_{}",
+                SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+            ));
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let a_path = temp_dir.join("a.h");
+        let b_path = temp_dir.join("b.h");
+        fs::write(&a_path, "#include \"b.h\"\n").unwrap();
+        fs::write(&b_path, "#include \"a.h\"\n").unwrap();
+
+        let main_path = temp_dir.join("main.c");
+        fs::write(&main_path, "").unwrap();
+
+        let source = "#include \"a.h\"\n";
+        let mut pp = Preprocessor::new(vec![]);
+        assert!(pp.process(source, &main_path).is_err());
+    }
+
+    #[test]
+    fn test_file_and_line_in_include() {
+        let temp_dir = std::env::temp_dir()
+            .join(format!(
+                "smdc_pp_{}",
+                SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+            ));
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let header_path = temp_dir.join("a.h");
+        fs::write(
+            &header_path,
+            "int x = __LINE__;\nconst char* f = __FILE__;\n",
+        )
+        .unwrap();
+
+        let main_path = temp_dir.join("main.c");
+        fs::write(&main_path, "").unwrap();
+
+        let source = "#include \"a.h\"\n";
+        let mut pp = Preprocessor::new(vec![]);
+        let result = pp.process(source, &main_path).unwrap();
+
+        assert!(result.contains("int x = 1;"));
+        assert!(result.contains(&format!("\"{}\"", header_path.display())));
     }
 }

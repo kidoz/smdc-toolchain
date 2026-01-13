@@ -1410,8 +1410,75 @@ impl<'a> Parser<'a> {
                     Ok(Expr::new(ExprKind::Sizeof(SizeofArg::Expr(Box::new(operand))), span))
                 }
             }
+            // Cast expression: (type)expr
+            TokenKind::LParen => {
+                // Try to parse as cast - need to look ahead to see if it's a type
+                if self.is_type_name_after_lparen()? {
+                    self.advance()?; // consume '('
+                    let (_, ty) = self.parse_declaration_specifiers()?;
+                    // Handle abstract declarator (for pointers like short *)
+                    let ty = self.parse_abstract_declarator(ty)?;
+                    self.expect(TokenKind::RParen)?;
+                    let operand = self.parse_unary_expression()?;
+                    let span = start_span.merge(operand.span);
+                    Ok(Expr::new(
+                        ExprKind::Cast {
+                            ty,
+                            expr: Box::new(operand),
+                        },
+                        span,
+                    ))
+                } else {
+                    self.parse_postfix_expression()
+                }
+            }
             _ => self.parse_postfix_expression(),
         }
+    }
+
+    /// Check if the next tokens after '(' form a type name (for cast detection)
+    fn is_type_name_after_lparen(&mut self) -> CompileResult<bool> {
+        // Look at what comes after the '('
+        // If it's a type specifier keyword, it's likely a cast
+        if let TokenKind::LParen = &self.current.kind {
+            let next = self.lexer.peek()?;
+            return Ok(next.kind.can_start_declaration());
+        }
+        Ok(false)
+    }
+
+    /// Parse an abstract declarator (type without a name, e.g., for casts)
+    fn parse_abstract_declarator(&mut self, base_type: CType) -> CompileResult<CType> {
+        let span = self.current.span;
+        let mut ty = base_type;
+
+        // Handle pointers
+        while self.check(&TokenKind::Star) {
+            self.advance()?;
+            ty = CType::pointer_to(ty, span);
+        }
+
+        // Handle arrays (like int[10])
+        while self.check(&TokenKind::LBracket) {
+            self.advance()?;
+            let size = if self.check(&TokenKind::RBracket) {
+                None
+            } else {
+                let expr = self.parse_conditional_expression()?;
+                if let ExprKind::IntLiteral(n) = expr.kind {
+                    Some(n as usize)
+                } else {
+                    return Err(CompileError::parser(
+                        "array size must be a constant",
+                        expr.span,
+                    ));
+                }
+            };
+            self.expect(TokenKind::RBracket)?;
+            ty = CType::new(TypeKind::Array { element: Box::new(ty), size }, span);
+        }
+
+        Ok(ty)
     }
 
     fn parse_postfix_expression(&mut self) -> CompileResult<Expr> {

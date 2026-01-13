@@ -56,19 +56,18 @@ impl Frontend for CFrontend {
     ) -> CompileResult<IrModule> {
         // Phase 0: Preprocessing (#include expansion)
         let source_path = Path::new(&ctx.filename);
-        let processed_source = if config.include_paths.is_empty() {
-            // No include paths - skip preprocessing
-            source.to_string()
-        } else {
-            if config.verbose {
-                eprintln!("Preprocessing...");
-            }
-            match preprocessor::preprocess(source, source_path, config.include_paths.clone()) {
-                Ok(s) => s,
-                Err(e) => {
-                    ctx.reporter.report_error(ctx.file_id, &e);
-                    return Err(e);
-                }
+        if config.verbose {
+            eprintln!("Preprocessing...");
+        }
+        let processed_source = match preprocessor::preprocess(
+            source,
+            source_path,
+            config.include_paths.clone(),
+        ) {
+            Ok(s) => s,
+            Err(e) => {
+                ctx.reporter.report_error(ctx.file_id, &e);
+                return Err(e);
             }
         };
 
