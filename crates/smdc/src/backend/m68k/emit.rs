@@ -3,7 +3,11 @@
 use crate::ir::*;
 use crate::common::CompileResult;
 use super::m68k::*;
-use std::collections::HashMap;
+use super::sdk::{
+    SdkRegistry, SdkFunctionKind, SdkInlineGenerator, SdkLibraryGenerator,
+    resolve_dependencies, generate_static_data,
+};
+use std::collections::{HashMap, HashSet};
 
 /// Code generator that converts IR to M68k assembly
 pub struct CodeGenerator {
@@ -16,6 +20,12 @@ pub struct CodeGenerator {
     next_offset: i16,
     /// Total size of global data (for RAM allocation)
     data_size: usize,
+    /// SDK function registry
+    sdk_registry: SdkRegistry,
+    /// Set of SDK library functions that need to be generated
+    pending_sdk_functions: HashSet<String>,
+    /// Set of user-defined functions (to avoid SDK conflicts)
+    defined_functions: HashSet<String>,
 }
 
 impl CodeGenerator {
@@ -26,6 +36,9 @@ impl CodeGenerator {
             frame_size: 0,
             next_offset: -4,
             data_size: 0,
+            sdk_registry: SdkRegistry::new(),
+            pending_sdk_functions: HashSet::new(),
+            defined_functions: HashSet::new(),
         }
     }
 
@@ -46,6 +59,13 @@ impl CodeGenerator {
     /// Generate M68k instructions from IR module (for binary output)
     pub fn generate_instructions(&mut self, module: &IrModule) -> CompileResult<Vec<M68kInst>> {
         self.output.clear();
+        self.pending_sdk_functions.clear();
+        self.defined_functions.clear();
+
+        // Track all user-defined functions to avoid SDK conflicts
+        for func in &module.functions {
+            self.defined_functions.insert(func.name.clone());
+        }
 
         // Calculate total data size first (for RAM allocation)
         self.data_size = 0;
@@ -69,10 +89,13 @@ impl CodeGenerator {
         // This ensures the ROM starts properly regardless of function order
         self.emit_startup_stub();
 
-        // Emit functions
+        // Emit user functions
         for func in &module.functions {
             self.generate_function(func)?;
         }
+
+        // Emit SDK library functions that were used
+        self.emit_sdk_library_functions();
 
         // Emit data section with ROM initial values and RAM references
         if !module.globals.is_empty() || !module.strings.is_empty() {
@@ -121,6 +144,9 @@ impl CodeGenerator {
             self.emit(M68kInst::Directive(".align 2".to_string()));
             self.emit(M68kInst::Label("__data_ram_end".to_string()));
         }
+
+        // Emit SDK static data (frame counter, operator offsets, etc.)
+        self.emit_sdk_static_data();
 
         Ok(std::mem::take(&mut self.output))
     }
@@ -242,16 +268,14 @@ impl CodeGenerator {
         self.emit(M68kInst::Move(Size::Word, Operand::Imm(0x00E0), Operand::AddrInd(AddrReg::A1))); // Green
         self.emit(M68kInst::Move(Size::Word, Operand::Imm(0x000E), Operand::AddrInd(AddrReg::A1))); // Red
 
-        // Test PSG beep - play a tone on channel 0 to verify sound works
+        // Silence all PSG channels
         // PSG is at $C00011, accessed via byte writes
+        // Volume command: 1xx1 vvvv where xx=channel, vvvv=volume (F=silent)
         self.emit(M68kInst::Lea(Operand::AbsLong(0xC00011), AddrReg::A2));
-        // Set tone channel 0: frequency divider ~254 (0xFE) for ~440Hz
-        // First byte: 1000 0nnn where n = low 4 bits of divider (0xE)
-        self.emit(M68kInst::Move(Size::Byte, Operand::Imm(0x8E), Operand::AddrInd(AddrReg::A2)));
-        // Second byte: 00nn nnnn where n = high 6 bits of divider (0x0F)
-        self.emit(M68kInst::Move(Size::Byte, Operand::Imm(0x0F), Operand::AddrInd(AddrReg::A2)));
-        // Set volume channel 0: 1001 0000 = volume 0 (loudest)
-        self.emit(M68kInst::Move(Size::Byte, Operand::Imm(0x90), Operand::AddrInd(AddrReg::A2)));
+        self.emit(M68kInst::Move(Size::Byte, Operand::Imm(0x9F), Operand::AddrInd(AddrReg::A2))); // Ch 0 silent
+        self.emit(M68kInst::Move(Size::Byte, Operand::Imm(0xBF), Operand::AddrInd(AddrReg::A2))); // Ch 1 silent
+        self.emit(M68kInst::Move(Size::Byte, Operand::Imm(0xDF), Operand::AddrInd(AddrReg::A2))); // Ch 2 silent
+        self.emit(M68kInst::Move(Size::Byte, Operand::Imm(0xFF), Operand::AddrInd(AddrReg::A2))); // Ch 3 (noise) silent
 
         // Enable interrupts
         // move.w #$2000, sr (user mode, enable interrupts)
@@ -672,40 +696,26 @@ impl CodeGenerator {
             }
 
             Inst::Call { dst, func, args } => {
-                // Push arguments right-to-left
-                for arg in args.iter().rev() {
-                    self.load_value(arg, DataReg::D0)?;
-                    self.emit(M68kInst::Move(
-                        Size::Long,
-                        Operand::DataReg(DataReg::D0),
-                        Operand::PreDec(AddrReg::A7),
-                    ));
-                }
+                // Check if this is an SDK function (but not if user defined their own)
+                let is_sdk = !self.defined_functions.contains(func)
+                    && self.sdk_registry.lookup(func).is_some();
 
-                // Call function
-                self.emit(M68kInst::Jsr(Operand::Label(func.clone())));
-
-                // Clean up stack
-                let stack_size = (args.len() * 4) as i32;
-                if stack_size > 0 {
-                    if stack_size <= 8 {
-                        self.emit(M68kInst::Addq(
-                            Size::Long,
-                            stack_size as u8,
-                            Operand::AddrReg(AddrReg::A7),
-                        ));
-                    } else {
-                        self.emit(M68kInst::Adda(
-                            Size::Long,
-                            Operand::Imm(stack_size),
-                            AddrReg::A7,
-                        ));
+                if is_sdk {
+                    let sdk_func = self.sdk_registry.lookup(func).unwrap();
+                    match sdk_func.kind {
+                        SdkFunctionKind::Inline => {
+                            // Emit inline code
+                            self.emit_sdk_inline_call(func, args, dst)?;
+                        }
+                        SdkFunctionKind::Library => {
+                            // Mark function as needed, emit normal call
+                            self.pending_sdk_functions.insert(func.clone());
+                            self.emit_standard_call(func, args, dst)?;
+                        }
                     }
-                }
-
-                // Store return value
-                if let Some(d) = dst {
-                    self.store_temp(*d, DataReg::D0);
+                } else {
+                    // Regular user function call
+                    self.emit_standard_call(func, args, dst)?;
                 }
             }
 
@@ -810,6 +820,135 @@ impl CodeGenerator {
         }
 
         Ok(())
+    }
+
+    // =========================================================================
+    // SDK Support Methods
+    // =========================================================================
+
+    /// Emit inline code for an SDK function call
+    fn emit_sdk_inline_call(
+        &mut self,
+        func: &str,
+        args: &[Value],
+        dst: &Option<Temp>,
+    ) -> CompileResult<()> {
+        // Load arguments into D0, D1, D2, D3 in order
+        let arg_regs = [DataReg::D0, DataReg::D1, DataReg::D2, DataReg::D3];
+        for (i, arg) in args.iter().enumerate() {
+            if i < arg_regs.len() {
+                self.load_value(arg, arg_regs[i])?;
+            }
+        }
+
+        // Generate inline instructions
+        let inline_code = SdkInlineGenerator::generate(func);
+        for inst in inline_code {
+            self.emit(inst);
+        }
+
+        // Store return value if needed
+        if let Some(d) = dst {
+            self.store_temp(*d, DataReg::D0);
+        }
+
+        Ok(())
+    }
+
+    /// Emit a standard function call (push args, JSR, clean stack)
+    fn emit_standard_call(
+        &mut self,
+        func: &str,
+        args: &[Value],
+        dst: &Option<Temp>,
+    ) -> CompileResult<()> {
+        // Push arguments right-to-left
+        for arg in args.iter().rev() {
+            self.load_value(arg, DataReg::D0)?;
+            self.emit(M68kInst::Move(
+                Size::Long,
+                Operand::DataReg(DataReg::D0),
+                Operand::PreDec(AddrReg::A7),
+            ));
+        }
+
+        // Call function
+        self.emit(M68kInst::Jsr(Operand::Label(func.to_string())));
+
+        // Clean up stack
+        let stack_size = (args.len() * 4) as i32;
+        if stack_size > 0 {
+            if stack_size <= 8 {
+                self.emit(M68kInst::Addq(
+                    Size::Long,
+                    stack_size as u8,
+                    Operand::AddrReg(AddrReg::A7),
+                ));
+            } else {
+                self.emit(M68kInst::Adda(
+                    Size::Long,
+                    Operand::Imm(stack_size),
+                    AddrReg::A7,
+                ));
+            }
+        }
+
+        // Store return value
+        if let Some(d) = dst {
+            self.store_temp(*d, DataReg::D0);
+        }
+
+        Ok(())
+    }
+
+    /// Emit SDK library functions that were used
+    fn emit_sdk_library_functions(&mut self) {
+        if self.pending_sdk_functions.is_empty() {
+            return;
+        }
+
+        // Resolve all dependencies
+        let all_functions = resolve_dependencies(&self.pending_sdk_functions);
+
+        // Filter to only library functions
+        let mut library_functions: Vec<_> = all_functions
+            .iter()
+            .filter(|f| {
+                self.sdk_registry.lookup(f)
+                    .map(|sdk| sdk.kind == SdkFunctionKind::Library)
+                    .unwrap_or(false)
+            })
+            .cloned()
+            .collect();
+
+        // Sort for deterministic output
+        library_functions.sort();
+
+        // Generate each function
+        let mut generator = SdkLibraryGenerator::new();
+        for func_name in library_functions {
+            self.emit(M68kInst::Comment(format!("SDK function: {}", func_name)));
+            let code = generator.generate(&func_name);
+            for inst in code {
+                self.emit(inst);
+            }
+        }
+    }
+
+    /// Emit SDK static data (frame counter, operator offsets, etc.)
+    fn emit_sdk_static_data(&mut self) {
+        if self.pending_sdk_functions.is_empty() {
+            return;
+        }
+
+        // Resolve all dependencies to check what data is needed
+        let all_functions = resolve_dependencies(&self.pending_sdk_functions);
+
+        // Generate static data
+        let static_data = generate_static_data(&all_functions);
+        for inst in static_data {
+            self.emit(inst);
+        }
     }
 }
 

@@ -2,11 +2,11 @@
  * Simplest possible VDP test - should show red screen
  */
 
-void main() {
+int main(void) {
     short *vdp_ctrl;
 
     // Direct address assignment
-    vdp_ctrl = 0xC00004;
+    vdp_ctrl = (short *)0xC00004;
 
     // VDP register setup (minimal for display)
     *vdp_ctrl = 0x8004;  // Reg 0: Normal color mode
@@ -23,10 +23,12 @@ void main() {
 
     // Write red color to VDP data port
     short *vdp_data;
-    vdp_data = 0xC00000;
+    vdp_data = (short *)0xC00000;
     *vdp_data = 0x000E;  // Red color in Genesis format (0BGR)
 
     // Infinite loop
     while (1) {
     }
+
+    return 0;
 }

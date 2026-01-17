@@ -124,7 +124,10 @@ impl SemanticAnalyzer {
             self.scope.clear_labels();
 
             // Add parameters to scope
-            for param in &func.params {
+            for param in &mut func.params {
+                // Resolve struct types in parameter types
+                self.resolve_struct_type(&mut param.ty)?;
+
                 if let Some(name) = &param.name {
                     let symbol = Symbol {
                         name: name.clone(),

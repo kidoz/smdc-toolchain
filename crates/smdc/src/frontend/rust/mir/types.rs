@@ -13,6 +13,8 @@ pub struct MirBody {
     pub entry_block: BlockId,
     /// Return type
     pub return_type: RustType,
+    /// Number of function parameters (locals 1..=arg_count are params)
+    pub arg_count: usize,
 }
 
 impl MirBody {
@@ -22,6 +24,7 @@ impl MirBody {
             blocks: Vec::new(),
             entry_block: BlockId(0),
             return_type,
+            arg_count: 0,
         }
     }
 
@@ -238,6 +241,8 @@ pub enum MirConstant {
     Unit,
     /// Function reference
     Function(String),
+    /// Static/global variable reference
+    Static(String),
 }
 
 /// Binary operations in MIR

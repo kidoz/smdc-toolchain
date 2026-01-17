@@ -7,11 +7,13 @@ mod m68k;
 mod emit;
 mod encoder;
 mod assembler;
+pub mod sdk;
 
 pub use m68k::*;
 pub use emit::CodeGenerator;
 pub use encoder::{InstructionEncoder, EncodeError};
 pub use assembler::Assembler;
+pub use sdk::{SdkRegistry, SdkFunction, SdkFunctionKind};
 
 use crate::backend::{Backend, BackendConfig, BackendOutput, OutputFormat};
 use crate::common::CompileResult;

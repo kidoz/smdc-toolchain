@@ -18,6 +18,10 @@
 #define VDP_STATUS_HBLANK   0x0004
 #define VDP_STATUS_DMA      0x0002
 
+/* Timing Constants */
+#define FRAMES_PER_SEC_NTSC 60
+#define FRAMES_PER_SEC_PAL  50
+
 /* Default VRAM Addresses */
 #define VRAM_PLANE_A    0xC000
 #define VRAM_PLANE_B    0xE000
@@ -63,5 +67,43 @@ void vdp_set_hscroll_a(int scroll);
 void vdp_set_hscroll_b(int scroll);
 void vdp_set_vscroll_a(int scroll);
 void vdp_set_vscroll_b(int scroll);
+
+/* ========================================================================== */
+/* Timing Functions - for music and game sync                                 */
+/* ========================================================================== */
+
+/*
+ * Wait for VBlank start - blocks until VBlank begins
+ * Use this for consistent 60Hz (NTSC) or 50Hz (PAL) timing
+ */
+void vdp_wait_vblank_start(void);
+
+/*
+ * Wait for VBlank end - blocks until VBlank ends
+ */
+void vdp_wait_vblank_end(void);
+
+/*
+ * Wait for next frame - full VBlank cycle
+ * This ensures consistent frame-locked timing for music
+ */
+void vdp_wait_frame(void);
+
+/*
+ * Check if currently in VBlank (non-blocking)
+ * Returns: 1 if in VBlank, 0 otherwise
+ */
+int vdp_in_vblank(void);
+
+/*
+ * Get frame counter - increments each VBlank
+ * Useful for timing music and animations
+ */
+unsigned int vdp_get_frame_count(void);
+
+/*
+ * Reset frame counter to 0
+ */
+void vdp_reset_frame_count(void);
 
 #endif

@@ -3,7 +3,7 @@
 use crate::common::CompileResult;
 use crate::frontend::rust::ast::*;
 use super::types::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Lowers Rust AST to MIR
 pub struct MirLowerer {
@@ -17,10 +17,22 @@ pub struct MirLowerer {
     break_targets: Vec<BlockId>,
     /// Continue targets for loops
     continue_targets: Vec<BlockId>,
+    /// Const values (name -> integer value)
+    const_values: HashMap<String, i64>,
+    /// Static variable names (for global references)
+    static_names: HashSet<String>,
 }
 
 impl MirLowerer {
     pub fn new(return_type: RustType) -> Self {
+        Self::with_constants(return_type, HashMap::new(), HashSet::new())
+    }
+
+    pub fn with_constants(
+        return_type: RustType,
+        const_values: HashMap<String, i64>,
+        static_names: HashSet<String>,
+    ) -> Self {
         let mut body = MirBody::new(return_type.clone());
         let entry = body.add_block();
 
@@ -33,6 +45,8 @@ impl MirLowerer {
             locals_map: HashMap::new(),
             break_targets: Vec::new(),
             continue_targets: Vec::new(),
+            const_values,
+            static_names,
         }
     }
 
@@ -45,6 +59,8 @@ impl MirLowerer {
                 self.locals_map.insert(name, local);
             }
         }
+        // Record how many parameters we have
+        self.body.arg_count = func.params.len();
 
         // Lower body
         if let Some(body) = &func.body {
@@ -133,14 +149,31 @@ impl MirLowerer {
             }
             ExprKind::Identifier(name) => {
                 if let Some(&local) = self.locals_map.get(name) {
+                    // Local variable
                     Ok(Operand::Copy(Place::local(local)))
+                } else if let Some(&value) = self.const_values.get(name) {
+                    // Const item - inline the value
+                    Ok(Operand::Constant(MirConstant::Int(value)))
+                } else if self.static_names.contains(name) {
+                    // Static variable - reference by name
+                    Ok(Operand::Constant(MirConstant::Static(name.clone())))
                 } else {
-                    // Might be a function or constant
+                    // Might be a function
                     Ok(Operand::Constant(MirConstant::Function(name.clone())))
                 }
             }
             ExprKind::Path(path) => {
-                Ok(Operand::Constant(MirConstant::Function(path.name().to_string())))
+                let name = path.name().to_string();
+                if let Some(&value) = self.const_values.get(&name) {
+                    // Const item - inline the value
+                    Ok(Operand::Constant(MirConstant::Int(value)))
+                } else if self.static_names.contains(&name) {
+                    // Static variable - reference by name
+                    Ok(Operand::Constant(MirConstant::Static(name)))
+                } else {
+                    // Might be a function
+                    Ok(Operand::Constant(MirConstant::Function(name)))
+                }
             }
             ExprKind::Binary { op, left, right } => {
                 let left_op = self.lower_expr(left)?;

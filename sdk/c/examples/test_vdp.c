@@ -5,12 +5,12 @@
 int VDP_DATA_ADDR = 0xC00000;
 int VDP_CTRL_ADDR = 0xC00004;
 
-void main() {
+int main(void) {
     short *vdp_ctrl;
     short *vdp_data;
 
-    vdp_ctrl = VDP_CTRL_ADDR;
-    vdp_data = VDP_DATA_ADDR;
+    vdp_ctrl = (short *)VDP_CTRL_ADDR;
+    vdp_data = (short *)VDP_DATA_ADDR;
 
     // Set VDP register 1: enable display
     *vdp_ctrl = 0x8144;
@@ -28,4 +28,6 @@ void main() {
     // Infinite loop
     while (1) {
     }
+
+    return 0;
 }

@@ -40,8 +40,11 @@ impl<'a> RustParser<'a> {
         let start = self.lexer.peek()?.span;
 
         let kind = if self.check(&RustTokenKind::Fn)? ||
-                     (self.check(&RustTokenKind::Unsafe)? || self.check(&RustTokenKind::Const)?) {
+                     self.check(&RustTokenKind::Unsafe)? ||
+                     self.check_const_fn()? {
             self.parse_fn_item()?
+        } else if self.check(&RustTokenKind::Const)? {
+            self.parse_const_item()?
         } else if self.check(&RustTokenKind::Struct)? {
             self.parse_struct_item()?
         } else if self.check(&RustTokenKind::Enum)? {
@@ -1592,6 +1595,15 @@ impl<'a> RustParser<'a> {
 
     fn check(&mut self, expected: &RustTokenKind) -> CompileResult<bool> {
         self.lexer.check(expected)
+    }
+
+    /// Check if current position is `const fn` (lookahead)
+    fn check_const_fn(&mut self) -> CompileResult<bool> {
+        if !self.check(&RustTokenKind::Const)? {
+            return Ok(false);
+        }
+        // Look ahead to see if next token is 'fn'
+        self.lexer.check_lookahead(&RustTokenKind::Fn)
     }
 
     fn match_token(&mut self, expected: &RustTokenKind) -> CompileResult<bool> {

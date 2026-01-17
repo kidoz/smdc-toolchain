@@ -2,12 +2,12 @@
  * Minimal VDP test - just set background color to red
  */
 
-void main() {
+int main(void) {
     short *vdp_ctrl;
     short *vdp_data;
 
-    vdp_ctrl = 0xC00004;
-    vdp_data = 0xC00000;
+    vdp_ctrl = (short *)0xC00004;
+    vdp_data = (short *)0xC00000;
 
     // Initialize VDP registers first
     *vdp_ctrl = 0x8004;  // Reg 0 = 0x04
@@ -36,4 +36,6 @@ void main() {
     // Infinite loop
     while (1) {
     }
+
+    return 0;
 }

@@ -7,7 +7,8 @@ use logos::Logos;
 /// Lexer for Rust source code
 pub struct RustLexer<'a> {
     inner: logos::Lexer<'a, RustTokenKind>,
-    peeked: Option<RustToken>,
+    /// Buffer for peeked tokens (supports 2-token lookahead)
+    peeked: Vec<RustToken>,
     at_eof: bool,
 }
 
@@ -16,17 +17,23 @@ impl<'a> RustLexer<'a> {
     pub fn new(source: &'a str) -> Self {
         Self {
             inner: RustTokenKind::lexer(source),
-            peeked: None,
+            peeked: Vec::new(),
             at_eof: false,
         }
     }
 
     /// Get the next token
     pub fn next_token(&mut self) -> CompileResult<RustToken> {
-        if let Some(token) = self.peeked.take() {
-            return Ok(token);
+        // Return from buffer first
+        if !self.peeked.is_empty() {
+            return Ok(self.peeked.remove(0));
         }
 
+        self.scan_token()
+    }
+
+    /// Scan a new token from source
+    fn scan_token(&mut self) -> CompileResult<RustToken> {
         if self.at_eof {
             return Ok(RustToken::new(RustTokenKind::Eof, Span::default()));
         }
@@ -53,15 +60,33 @@ impl<'a> RustLexer<'a> {
 
     /// Peek at the next token without consuming it
     pub fn peek(&mut self) -> CompileResult<&RustToken> {
-        if self.peeked.is_none() {
-            self.peeked = Some(self.next_token()?);
+        if self.peeked.is_empty() {
+            let token = self.scan_token()?;
+            self.peeked.push(token);
         }
-        Ok(self.peeked.as_ref().unwrap())
+        Ok(&self.peeked[0])
+    }
+
+    /// Peek at the token at offset (0 = next, 1 = after next, etc.)
+    pub fn peek_at(&mut self, offset: usize) -> CompileResult<&RustToken> {
+        // Ensure we have enough tokens in the buffer
+        while self.peeked.len() <= offset {
+            let token = self.scan_token()?;
+            self.peeked.push(token);
+        }
+        Ok(&self.peeked[offset])
     }
 
     /// Check if the next token matches the expected kind
     pub fn check(&mut self, expected: &RustTokenKind) -> CompileResult<bool> {
         Ok(std::mem::discriminant(&self.peek()?.kind) == std::mem::discriminant(expected))
+    }
+
+    /// Check if the token AFTER the current peek matches expected kind (2-token lookahead)
+    pub fn check_lookahead(&mut self, expected: &RustTokenKind) -> CompileResult<bool> {
+        // Use peek_at(1) to look at the token after the current one
+        let token = self.peek_at(1)?;
+        Ok(std::mem::discriminant(&token.kind) == std::mem::discriminant(expected))
     }
 
     /// Consume the next token if it matches, return true if consumed

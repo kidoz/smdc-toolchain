@@ -2,12 +2,13 @@
 
 use crate::ir::{IrFunction, Inst, Label, Temp, Value, BinOp as IrBinOp, UnOp as IrUnOp};
 use crate::frontend::c::ast::CType;
+use crate::frontend::rust::ast::{RustType, RustTypeKind};
 use crate::common::Span;
 use super::types::*;
 use std::collections::HashMap;
 
 /// Converts MIR to the shared IR
-pub struct MirToIr {
+pub struct MirToIr<'a> {
     /// Mapping from MIR locals to IR temps
     local_to_temp: HashMap<LocalId, Temp>,
     /// Mapping from MIR blocks to IR labels
@@ -18,9 +19,13 @@ pub struct MirToIr {
     next_label: usize,
     /// Generated instructions
     instructions: Vec<Inst>,
+    /// Current function name (for unique labels)
+    func_name: String,
+    /// Reference to the MIR body for type lookups
+    mir_body: Option<&'a MirBody>,
 }
 
-impl MirToIr {
+impl<'a> MirToIr<'a> {
     pub fn new() -> Self {
         Self {
             local_to_temp: HashMap::new(),
@@ -28,21 +33,56 @@ impl MirToIr {
             next_temp: 0,
             next_label: 0,
             instructions: Vec::new(),
+            func_name: String::new(),
+            mir_body: None,
         }
     }
 
     /// Convert a MIR body to IR
-    pub fn convert(&mut self, name: String, mir: &MirBody) -> IrFunction {
+    pub fn convert(&mut self, name: String, mir: &'a MirBody) -> IrFunction {
+        // Store function name for unique labels
+        self.func_name = name.clone();
+        // Store MIR body reference for type lookups
+        self.mir_body = Some(mir);
+
         // Create temps for all locals
         for local in &mir.locals {
             let temp = self.new_temp();
             self.local_to_temp.insert(local.id, temp);
         }
 
-        // Create labels for all blocks
+        // Create labels for all blocks (include function name for uniqueness)
         for block in &mir.blocks {
-            let label = self.new_label(&format!("bb{}", block.id.0));
+            let label = Label(format!(".L{}_bb{}", self.func_name, block.id.0));
             self.block_to_label.insert(block.id, label.clone());
+        }
+
+        // Emit LoadParam instructions for function parameters
+        // Parameters are locals 1..=arg_count (local 0 is return value)
+        // The backend stores param ADDRESSES in temps, so we need to load
+        // the actual value afterwards.
+        for i in 0..mir.arg_count {
+            let local_id = LocalId(i + 1); // +1 because local 0 is return value
+            if let Some(&temp) = self.local_to_temp.get(&local_id) {
+                let size = mir.locals.get(i + 1)
+                    .map(|l| l.ty.size())
+                    .unwrap_or(4);
+                // Create a temp for the address
+                let addr_temp = self.new_temp();
+                self.emit(Inst::LoadParam {
+                    dst: addr_temp,
+                    index: i,
+                    size,
+                });
+                // Load the actual value from the address into the final temp
+                self.emit(Inst::Load {
+                    dst: temp,
+                    addr: Value::Temp(addr_temp),
+                    size,
+                    volatile: false,
+                    signed: true,
+                });
+            }
         }
 
         // Convert each block
@@ -81,14 +121,47 @@ impl MirToIr {
     fn convert_statement(&mut self, stmt: &MirStatement) {
         match stmt {
             MirStatement::Assign { dest, value } => {
-                let dest_temp = self.place_to_temp(dest);
-                self.convert_rvalue(dest_temp, value);
+                // Check if destination has a Deref projection (i.e., *ptr = value)
+                if self.place_has_deref(dest) {
+                    // Store through pointer
+                    let addr_temp = self.get_local_temp(&dest.local);
+                    let size = self.get_deref_size(dest);
+                    let value_temp = self.new_temp();
+                    self.convert_rvalue(value_temp, value);
+                    self.emit(Inst::Store {
+                        addr: Value::Temp(addr_temp),
+                        src: Value::Temp(value_temp),
+                        size,
+                        volatile: false,
+                    });
+                } else {
+                    let dest_temp = self.place_to_temp(dest);
+                    self.convert_rvalue(dest_temp, value);
+                }
             }
             MirStatement::Drop(_) => {
                 // No-op for now (no destructors)
             }
             MirStatement::Nop => {}
         }
+    }
+
+    fn place_has_deref(&self, place: &Place) -> bool {
+        place.projections.iter().any(|p| matches!(p, Projection::Deref))
+    }
+
+    /// Get the size of the pointee type for a dereferenced place
+    fn get_deref_size(&self, place: &Place) -> usize {
+        if let Some(mir) = self.mir_body {
+            if let Some(local) = mir.locals.get(place.local.0) {
+                // Get the pointer type and extract the pointee size
+                if let RustTypeKind::Pointer { inner, .. } = &local.ty.kind {
+                    return inner.size();
+                }
+            }
+        }
+        // Default to 4 bytes (i32) if we can't determine the type
+        4
     }
 
     fn convert_rvalue(&mut self, dest: Temp, rvalue: &Rvalue) {
@@ -249,10 +322,26 @@ impl MirToIr {
         self.get_local_temp(&place.local)
     }
 
-    fn operand_to_value(&self, operand: &Operand) -> Value {
+    fn operand_to_value(&mut self, operand: &Operand) -> Value {
         match operand {
             Operand::Copy(place) | Operand::Move(place) => {
-                Value::Temp(self.place_to_temp(place))
+                // Check if place has a Deref projection (i.e., reading *ptr)
+                if self.place_has_deref(place) {
+                    // Load through pointer
+                    let addr_temp = self.get_local_temp(&place.local);
+                    let size = self.get_deref_size(place);
+                    let result_temp = self.new_temp();
+                    self.emit(Inst::Load {
+                        dst: result_temp,
+                        addr: Value::Temp(addr_temp),
+                        size,
+                        volatile: false,
+                        signed: true,
+                    });
+                    Value::Temp(result_temp)
+                } else {
+                    Value::Temp(self.place_to_temp(place))
+                }
             }
             Operand::Constant(constant) => {
                 match constant {
@@ -266,6 +355,18 @@ impl MirToIr {
                     }
                     MirConstant::Unit => Value::IntConst(0),
                     MirConstant::Function(name) => Value::Name(name.clone()),
+                    MirConstant::Static(name) => {
+                        // Static variables need to be loaded from their address
+                        let result_temp = self.new_temp();
+                        self.emit(Inst::Load {
+                            dst: result_temp,
+                            addr: Value::Name(name.clone()),
+                            size: 4, // Assume i32 for now
+                            volatile: false,
+                            signed: true,
+                        });
+                        Value::Temp(result_temp)
+                    }
                 }
             }
         }
@@ -308,7 +409,7 @@ impl MirToIr {
     fn new_label(&mut self, prefix: &str) -> Label {
         let id = self.next_label;
         self.next_label += 1;
-        Label(format!("{}_{}", prefix, id))
+        Label(format!(".L{}_{}{}", self.func_name, prefix, id))
     }
 
     fn emit(&mut self, inst: Inst) {
@@ -316,7 +417,7 @@ impl MirToIr {
     }
 }
 
-impl Default for MirToIr {
+impl Default for MirToIr<'_> {
     fn default() -> Self {
         Self::new()
     }
