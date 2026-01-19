@@ -125,9 +125,18 @@ impl InstructionEncoder {
 
             M68kInst::Eor(size, _, dst) => 2 + self.operand_extension_size(dst, *size),
 
-            M68kInst::Lsl(_, _, _) | M68kInst::Lsr(_, _, _) |
-            M68kInst::Asl(_, _, _) | M68kInst::Asr(_, _, _) |
-            M68kInst::Rol(_, _, _) | M68kInst::Ror(_, _, _) => 2,
+            M68kInst::Lsl(_, count, _) | M68kInst::Lsr(_, count, _) |
+            M68kInst::Asl(_, count, _) | M68kInst::Asr(_, count, _) |
+            M68kInst::Rol(_, count, _) | M68kInst::Ror(_, count, _) => {
+                // Each shift instruction is 2 bytes, but shifts > 8 need multiple instructions
+                match count {
+                    Operand::Imm(n) => {
+                        let num_shifts = ((*n as u32 + 7) / 8) as usize; // ceiling division
+                        2 * num_shifts.max(1)
+                    }
+                    _ => 2,
+                }
+            }
 
             M68kInst::Btst(bit, op) | M68kInst::Bset(bit, op) |
             M68kInst::Bclr(bit, op) | M68kInst::Bchg(bit, op) => {
@@ -752,17 +761,26 @@ impl InstructionEncoder {
     fn encode_shift(&self, base: u16, size: Size, count: &Operand, reg: &DataReg, bytes: &mut Vec<u8>) -> Result<(), EncodeError> {
         let size_bits = size_bits(size);
 
-        let opword = match count {
+        match count {
             Operand::Imm(n) => {
-                let cnt = if *n == 8 { 0 } else { *n as u16 & 7 };
-                base | (cnt << 9) | ((size_bits as u16) << 6) | reg_num_data(reg) as u16
+                // 68000 immediate shifts can only be 1-8
+                // For larger shifts, generate multiple instructions
+                let mut remaining = *n as u16;
+                while remaining > 0 {
+                    let cnt = if remaining >= 8 { 8 } else { remaining };
+                    remaining -= cnt;
+                    // Shift by 8 is encoded as 0, shifts 1-7 as-is
+                    let encoded_cnt = if cnt == 8 { 0 } else { cnt };
+                    let opword = base | (encoded_cnt << 9) | ((size_bits as u16) << 6) | reg_num_data(reg) as u16;
+                    bytes.extend_from_slice(&opword.to_be_bytes());
+                }
             }
             Operand::DataReg(cnt_reg) => {
-                base | ((reg_num_data(cnt_reg) as u16) << 9) | (1 << 5) | ((size_bits as u16) << 6) | reg_num_data(reg) as u16
+                let opword = base | ((reg_num_data(cnt_reg) as u16) << 9) | (1 << 5) | ((size_bits as u16) << 6) | reg_num_data(reg) as u16;
+                bytes.extend_from_slice(&opword.to_be_bytes());
             }
             _ => return Err(EncodeError::InvalidOperands("shift count must be immediate or Dn".to_string())),
         };
-        bytes.extend_from_slice(&opword.to_be_bytes());
         Ok(())
     }
 

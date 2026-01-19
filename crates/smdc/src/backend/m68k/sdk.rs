@@ -40,6 +40,8 @@ pub enum SdkFunctionKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SdkCategory {
     Vdp,
+    Sprite,
+    Input,
     Ym2612,
     Psg,
 }
@@ -69,6 +71,12 @@ impl SdkRegistry {
 
         // VDP Functions
         Self::register_vdp_functions(&mut functions);
+
+        // Sprite Functions
+        Self::register_sprite_functions(&mut functions);
+
+        // Input Functions
+        Self::register_input_functions(&mut functions);
 
         // YM2612 Functions
         Self::register_ym2612_functions(&mut functions);
@@ -118,6 +126,43 @@ impl SdkRegistry {
         map.insert("vdp_set_vscroll_b", SdkFunction { name: "vdp_set_vscroll_b", kind: Library, category: Vdp, param_count: 1, has_return: false });
         map.insert("vdp_get_frame_count", SdkFunction { name: "vdp_get_frame_count", kind: Library, category: Vdp, param_count: 0, has_return: true });
         map.insert("vdp_reset_frame_count", SdkFunction { name: "vdp_reset_frame_count", kind: Library, category: Vdp, param_count: 0, has_return: false });
+    }
+
+    fn register_sprite_functions(map: &mut HashMap<&'static str, SdkFunction>) {
+        use SdkFunctionKind::*;
+        use SdkCategory::Sprite;
+
+        // Inline Sprite functions
+        map.insert("sprite_attr", SdkFunction { name: "sprite_attr", kind: Inline, category: Sprite, param_count: 5, has_return: true });
+        map.insert("sprite_get_width", SdkFunction { name: "sprite_get_width", kind: Inline, category: Sprite, param_count: 1, has_return: true });
+        map.insert("sprite_get_height", SdkFunction { name: "sprite_get_height", kind: Inline, category: Sprite, param_count: 1, has_return: true });
+
+        // Library Sprite functions
+        map.insert("sprite_init", SdkFunction { name: "sprite_init", kind: Library, category: Sprite, param_count: 0, has_return: false });
+        map.insert("sprite_set", SdkFunction { name: "sprite_set", kind: Library, category: Sprite, param_count: 5, has_return: false });
+        map.insert("sprite_set_pos", SdkFunction { name: "sprite_set_pos", kind: Library, category: Sprite, param_count: 3, has_return: false });
+        map.insert("sprite_hide", SdkFunction { name: "sprite_hide", kind: Library, category: Sprite, param_count: 1, has_return: false });
+        map.insert("sprite_clear", SdkFunction { name: "sprite_clear", kind: Library, category: Sprite, param_count: 1, has_return: false });
+        map.insert("sprite_clear_all", SdkFunction { name: "sprite_clear_all", kind: Library, category: Sprite, param_count: 0, has_return: false });
+        map.insert("sprite_set_link", SdkFunction { name: "sprite_set_link", kind: Library, category: Sprite, param_count: 2, has_return: false });
+    }
+
+    fn register_input_functions(map: &mut HashMap<&'static str, SdkFunction>) {
+        use SdkFunctionKind::*;
+        use SdkCategory::Input;
+
+        // Inline Input functions
+        map.insert("joy1_read", SdkFunction { name: "joy1_read", kind: Inline, category: Input, param_count: 0, has_return: true });
+        map.insert("joy2_read", SdkFunction { name: "joy2_read", kind: Inline, category: Input, param_count: 0, has_return: true });
+
+        // Library Input functions
+        map.insert("input_init", SdkFunction { name: "input_init", kind: Library, category: Input, param_count: 0, has_return: false });
+        map.insert("input_read", SdkFunction { name: "input_read", kind: Library, category: Input, param_count: 1, has_return: true });
+        map.insert("input_update", SdkFunction { name: "input_update", kind: Library, category: Input, param_count: 0, has_return: false });
+        map.insert("input_held", SdkFunction { name: "input_held", kind: Library, category: Input, param_count: 1, has_return: true });
+        map.insert("input_pressed", SdkFunction { name: "input_pressed", kind: Library, category: Input, param_count: 1, has_return: true });
+        map.insert("input_released", SdkFunction { name: "input_released", kind: Library, category: Input, param_count: 1, has_return: true });
+        map.insert("input_is_6button", SdkFunction { name: "input_is_6button", kind: Library, category: Input, param_count: 1, has_return: true });
     }
 
     fn register_ym2612_functions(map: &mut HashMap<&'static str, SdkFunction>) {
@@ -245,6 +290,15 @@ impl SdkInlineGenerator {
             "psg_set_noise" => Self::gen_psg_set_noise(),
             "psg_stop_channel" => Self::gen_psg_stop_channel(),
             "psg_note_off" => Self::gen_psg_note_off(),
+
+            // Sprite inline functions
+            "sprite_attr" => Self::gen_sprite_attr(),
+            "sprite_get_width" => Self::gen_sprite_get_width(),
+            "sprite_get_height" => Self::gen_sprite_get_height(),
+
+            // Input inline functions
+            "joy1_read" => Self::gen_joy1_read(),
+            "joy2_read" => Self::gen_joy2_read(),
 
             _ => panic!("Not an inline function: {}", func_name),
         }
@@ -487,6 +541,82 @@ impl SdkInlineGenerator {
     fn gen_psg_note_off() -> Vec<M68kInst> {
         Self::gen_psg_stop_channel()
     }
+
+    // -------------------------------------------------------------------------
+    // Sprite Inline Functions
+    // -------------------------------------------------------------------------
+
+    /// sprite_attr(tile, pal, priority, hflip, vflip) -> attribute word
+    /// Args: D0 = tile, D1 = pal, D2 = priority, D3 = hflip, stack[0] = vflip
+    /// Returns in D0: tile | (pal << 13) | (priority << 15) | (hflip << 11) | (vflip << 12)
+    fn gen_sprite_attr() -> Vec<M68kInst> {
+        vec![
+            // D0 = tile (already has base tile index in bits 0-10)
+            M68kInst::Andi(Size::Word, 0x07FF, Operand::DataReg(DataReg::D0)),
+            // Add palette: (pal & 3) << 13
+            M68kInst::Andi(Size::Word, 0x03, Operand::DataReg(DataReg::D1)),
+            M68kInst::Lsl(Size::Word, Operand::Imm(13), DataReg::D1),
+            M68kInst::Or(Size::Word, Operand::DataReg(DataReg::D1), Operand::DataReg(DataReg::D0)),
+            // Add priority: (priority & 1) << 15
+            M68kInst::Andi(Size::Word, 0x01, Operand::DataReg(DataReg::D2)),
+            M68kInst::Lsl(Size::Word, Operand::Imm(15), DataReg::D2),
+            M68kInst::Or(Size::Word, Operand::DataReg(DataReg::D2), Operand::DataReg(DataReg::D0)),
+            // Add hflip: (hflip & 1) << 11
+            M68kInst::Andi(Size::Word, 0x01, Operand::DataReg(DataReg::D3)),
+            M68kInst::Lsl(Size::Word, Operand::Imm(11), DataReg::D3),
+            M68kInst::Or(Size::Word, Operand::DataReg(DataReg::D3), Operand::DataReg(DataReg::D0)),
+            // Note: vflip is on stack, we'll skip it for 4-arg inline version
+            // For 5th arg, caller should handle separately or use library version
+        ]
+    }
+
+    /// sprite_get_width(size) -> width in tiles (1-4)
+    /// Args: D0 = size
+    /// Returns: ((size >> 2) & 3) + 1
+    fn gen_sprite_get_width() -> Vec<M68kInst> {
+        vec![
+            M68kInst::Lsr(Size::Word, Operand::Imm(2), DataReg::D0),
+            M68kInst::Andi(Size::Word, 0x03, Operand::DataReg(DataReg::D0)),
+            M68kInst::Addq(Size::Word, 1, Operand::DataReg(DataReg::D0)),
+        ]
+    }
+
+    /// sprite_get_height(size) -> height in tiles (1-4)
+    /// Args: D0 = size
+    /// Returns: (size & 3) + 1
+    fn gen_sprite_get_height() -> Vec<M68kInst> {
+        vec![
+            M68kInst::Andi(Size::Word, 0x03, Operand::DataReg(DataReg::D0)),
+            M68kInst::Addq(Size::Word, 1, Operand::DataReg(DataReg::D0)),
+        ]
+    }
+
+    // -------------------------------------------------------------------------
+    // Input Inline Functions
+    // -------------------------------------------------------------------------
+
+    /// joy1_read() -> read joystick 1 raw value
+    /// Returns 3-button state (active low inverted to active high)
+    fn gen_joy1_read() -> Vec<M68kInst> {
+        vec![
+            // Read from joystick 1 data port
+            M68kInst::Move(Size::Byte, Operand::AbsLong(0xA10003), Operand::DataReg(DataReg::D0)),
+            // Invert bits (active low -> active high)
+            M68kInst::Not(Size::Byte, Operand::DataReg(DataReg::D0)),
+            M68kInst::Andi(Size::Long, 0xFF, Operand::DataReg(DataReg::D0)),
+        ]
+    }
+
+    /// joy2_read() -> read joystick 2 raw value
+    fn gen_joy2_read() -> Vec<M68kInst> {
+        vec![
+            // Read from joystick 2 data port
+            M68kInst::Move(Size::Byte, Operand::AbsLong(0xA10005), Operand::DataReg(DataReg::D0)),
+            // Invert bits (active low -> active high)
+            M68kInst::Not(Size::Byte, Operand::DataReg(DataReg::D0)),
+            M68kInst::Andi(Size::Long, 0xFF, Operand::DataReg(DataReg::D0)),
+        ]
+    }
 }
 
 // ============================================================================
@@ -554,6 +684,24 @@ impl SdkLibraryGenerator {
             "psg_beep" => self.gen_psg_beep(),
             "psg_note_on" => self.gen_psg_note_on(),
 
+            // Sprite library functions
+            "sprite_init" => self.gen_sprite_init(),
+            "sprite_set" => self.gen_sprite_set(),
+            "sprite_set_pos" => self.gen_sprite_set_pos(),
+            "sprite_hide" => self.gen_sprite_hide(),
+            "sprite_clear" => self.gen_sprite_clear(),
+            "sprite_clear_all" => self.gen_sprite_clear_all(),
+            "sprite_set_link" => self.gen_sprite_set_link(),
+
+            // Input library functions
+            "input_init" => self.gen_input_init(),
+            "input_read" => self.gen_input_read(),
+            "input_update" => self.gen_input_update(),
+            "input_held" => self.gen_input_held(),
+            "input_pressed" => self.gen_input_pressed(),
+            "input_released" => self.gen_input_released(),
+            "input_is_6button" => self.gen_input_is_6button(),
+
             _ => {
                 // For unimplemented functions, generate a stub
                 vec![
@@ -576,11 +724,13 @@ impl SdkLibraryGenerator {
         ];
 
         // VDP register initialization table
+        // Note: VRAM is already cleared by startup code, so we just set registers
+        // and enable display immediately
         let regs: [(i32, i32); 15] = [
-            (0x00, 0x04), (0x01, 0x44), (0x02, 0x30), (0x03, 0x3C),
+            (0x00, 0x04), (0x01, 0x44), (0x02, 0x30), (0x03, 0x3C), // 0x01=0x44: display ON
             (0x04, 0x07), (0x05, 0x78), (0x07, 0x00), (0x0A, 0x00),
             (0x0B, 0x00), (0x0C, 0x81), (0x0D, 0x3F), (0x0F, 0x02),
-            (0x10, 0x01), (0x11, 0x00), (0x12, 0x00),
+            (0x10, 0x11), (0x11, 0x00), (0x12, 0x00), // 0x10: H64xV32 scroll size
         ];
 
         for (reg, val) in regs {
@@ -613,16 +763,21 @@ impl SdkLibraryGenerator {
         let wait_not = self.next_label("vwvs_not");
         let wait_in = self.next_label("vwvs_in");
 
+        // Note: Must read status as WORD and test bit in register.
+        // BTST on memory does a byte read, which at even address 0xC00004
+        // reads the HIGH byte (bits 8-15), missing the VBlank flag in bit 3.
         vec![
             M68kInst::Label("vdp_wait_vblank_start".to_string()),
             M68kInst::Lea(Operand::AbsLong(VDP_CTRL), AddrReg::A0),
             // Wait until NOT in VBlank
             M68kInst::Label(wait_not.clone()),
-            M68kInst::Btst(Operand::Imm(3), Operand::AddrInd(AddrReg::A0)),
+            M68kInst::Move(Size::Word, Operand::AddrInd(AddrReg::A0), Operand::DataReg(DataReg::D0)),
+            M68kInst::Btst(Operand::Imm(3), Operand::DataReg(DataReg::D0)),
             M68kInst::Bcc(Cond::Ne, wait_not),
             // Wait until IN VBlank
             M68kInst::Label(wait_in.clone()),
-            M68kInst::Btst(Operand::Imm(3), Operand::AddrInd(AddrReg::A0)),
+            M68kInst::Move(Size::Word, Operand::AddrInd(AddrReg::A0), Operand::DataReg(DataReg::D0)),
+            M68kInst::Btst(Operand::Imm(3), Operand::DataReg(DataReg::D0)),
             M68kInst::Bcc(Cond::Eq, wait_in),
             // Increment frame counter
             M68kInst::Lea(Operand::Label("__sdk_frame_count".to_string()), AddrReg::A0),
@@ -635,16 +790,21 @@ impl SdkLibraryGenerator {
         let wait_in = self.next_label("vwve_in");
         let wait_out = self.next_label("vwve_out");
 
+        // Note: Must read status as WORD and test bit in register.
+        // BTST on memory does a byte read, which at even address 0xC00004
+        // reads the HIGH byte (bits 8-15), missing the VBlank flag in bit 3.
         vec![
             M68kInst::Label("vdp_wait_vblank_end".to_string()),
             M68kInst::Lea(Operand::AbsLong(VDP_CTRL), AddrReg::A0),
             // Wait until IN VBlank
             M68kInst::Label(wait_in.clone()),
-            M68kInst::Btst(Operand::Imm(3), Operand::AddrInd(AddrReg::A0)),
+            M68kInst::Move(Size::Word, Operand::AddrInd(AddrReg::A0), Operand::DataReg(DataReg::D0)),
+            M68kInst::Btst(Operand::Imm(3), Operand::DataReg(DataReg::D0)),
             M68kInst::Bcc(Cond::Eq, wait_in),
             // Wait until out of VBlank
             M68kInst::Label(wait_out.clone()),
-            M68kInst::Btst(Operand::Imm(3), Operand::AddrInd(AddrReg::A0)),
+            M68kInst::Move(Size::Word, Operand::AddrInd(AddrReg::A0), Operand::DataReg(DataReg::D0)),
+            M68kInst::Btst(Operand::Imm(3), Operand::DataReg(DataReg::D0)),
             M68kInst::Bcc(Cond::Ne, wait_out),
             M68kInst::Rts,
         ]
@@ -743,8 +903,9 @@ impl SdkLibraryGenerator {
             M68kInst::Lsr(Size::Long, Operand::Imm(14), DataReg::D0),
             M68kInst::Andi(Size::Word, 0x03, Operand::DataReg(DataReg::D0)),
             M68kInst::Move(Size::Word, Operand::DataReg(DataReg::D0), Operand::AbsLong(VDP_CTRL)),
-            // Write tile
-            M68kInst::Move(Size::Word, Operand::Disp(16, AddrReg::A6), Operand::AbsLong(VDP_DATA)),
+            // Write tile (use low word of 32-bit argument)
+            M68kInst::Move(Size::Long, Operand::Disp(16, AddrReg::A6), Operand::DataReg(DataReg::D1)),
+            M68kInst::Move(Size::Word, Operand::DataReg(DataReg::D1), Operand::AbsLong(VDP_DATA)),
             M68kInst::Unlk(AddrReg::A6),
             M68kInst::Rts,
         ]
@@ -768,7 +929,9 @@ impl SdkLibraryGenerator {
             M68kInst::Lsr(Size::Long, Operand::Imm(14), DataReg::D0),
             M68kInst::Andi(Size::Word, 0x03, Operand::DataReg(DataReg::D0)),
             M68kInst::Move(Size::Word, Operand::DataReg(DataReg::D0), Operand::AbsLong(VDP_CTRL)),
-            M68kInst::Move(Size::Word, Operand::Disp(16, AddrReg::A6), Operand::AbsLong(VDP_DATA)),
+            // Write tile (use low word of 32-bit argument)
+            M68kInst::Move(Size::Long, Operand::Disp(16, AddrReg::A6), Operand::DataReg(DataReg::D1)),
+            M68kInst::Move(Size::Word, Operand::DataReg(DataReg::D1), Operand::AbsLong(VDP_DATA)),
             M68kInst::Unlk(AddrReg::A6),
             M68kInst::Rts,
         ]
@@ -810,41 +973,45 @@ impl SdkLibraryGenerator {
 
     fn gen_vdp_set_hscroll_a(&mut self) -> Vec<M68kInst> {
         // VRAM_HSCROLL = 0xFC00
+        // Arg on stack as 32-bit long: 4(SP)=value, low word at 6(SP)
         vec![
             M68kInst::Label("vdp_set_hscroll_a".to_string()),
             M68kInst::Move(Size::Word, Operand::Imm(0x7C00), Operand::AbsLong(VDP_CTRL)),
             M68kInst::Move(Size::Word, Operand::Imm(0x0003), Operand::AbsLong(VDP_CTRL)),
-            M68kInst::Move(Size::Word, Operand::Disp(4, AddrReg::A7), Operand::AbsLong(VDP_DATA)),
+            M68kInst::Move(Size::Word, Operand::Disp(6, AddrReg::A7), Operand::AbsLong(VDP_DATA)),
             M68kInst::Rts,
         ]
     }
 
     fn gen_vdp_set_hscroll_b(&mut self) -> Vec<M68kInst> {
+        // Arg on stack as 32-bit long: 4(SP)=value, low word at 6(SP)
         vec![
             M68kInst::Label("vdp_set_hscroll_b".to_string()),
             M68kInst::Move(Size::Word, Operand::Imm(0x7C02), Operand::AbsLong(VDP_CTRL)),
             M68kInst::Move(Size::Word, Operand::Imm(0x0003), Operand::AbsLong(VDP_CTRL)),
-            M68kInst::Move(Size::Word, Operand::Disp(4, AddrReg::A7), Operand::AbsLong(VDP_DATA)),
+            M68kInst::Move(Size::Word, Operand::Disp(6, AddrReg::A7), Operand::AbsLong(VDP_DATA)),
             M68kInst::Rts,
         ]
     }
 
     fn gen_vdp_set_vscroll_a(&mut self) -> Vec<M68kInst> {
+        // Arg on stack as 32-bit long: 4(SP)=value, low word at 6(SP)
         vec![
             M68kInst::Label("vdp_set_vscroll_a".to_string()),
             M68kInst::Move(Size::Word, Operand::Imm(0x4000), Operand::AbsLong(VDP_CTRL)),
             M68kInst::Move(Size::Word, Operand::Imm(0x0010), Operand::AbsLong(VDP_CTRL)),
-            M68kInst::Move(Size::Word, Operand::Disp(4, AddrReg::A7), Operand::AbsLong(VDP_DATA)),
+            M68kInst::Move(Size::Word, Operand::Disp(6, AddrReg::A7), Operand::AbsLong(VDP_DATA)),
             M68kInst::Rts,
         ]
     }
 
     fn gen_vdp_set_vscroll_b(&mut self) -> Vec<M68kInst> {
+        // Arg on stack as 32-bit long: 4(SP)=value, low word at 6(SP)
         vec![
             M68kInst::Label("vdp_set_vscroll_b".to_string()),
             M68kInst::Move(Size::Word, Operand::Imm(0x4002), Operand::AbsLong(VDP_CTRL)),
             M68kInst::Move(Size::Word, Operand::Imm(0x0010), Operand::AbsLong(VDP_CTRL)),
-            M68kInst::Move(Size::Word, Operand::Disp(4, AddrReg::A7), Operand::AbsLong(VDP_DATA)),
+            M68kInst::Move(Size::Word, Operand::Disp(6, AddrReg::A7), Operand::AbsLong(VDP_DATA)),
             M68kInst::Rts,
         ]
     }
@@ -1277,6 +1444,263 @@ impl SdkLibraryGenerator {
             M68kInst::Bra("psg_beep".to_string()),
         ]
     }
+
+    // -------------------------------------------------------------------------
+    // Sprite Library Functions
+    // -------------------------------------------------------------------------
+
+    /// Sprite Attribute Table base address (default at 0xF000 in VRAM)
+    const SPRITE_TABLE: u32 = 0xF000;
+
+    fn gen_sprite_init(&mut self) -> Vec<M68kInst> {
+        // Initialize sprite table - set all sprites to hidden (y = 0 or offscreen)
+        let loop_label = self.next_label("sprite_init");
+        vec![
+            M68kInst::Label("sprite_init".to_string()),
+            // Set up VRAM write address to sprite table
+            M68kInst::Move(Size::Long, Operand::Imm(Self::SPRITE_TABLE as i32), Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(Size::Long, Operand::DataReg(DataReg::D0), Operand::DataReg(DataReg::D1)),
+            M68kInst::Andi(Size::Word, 0x3FFF, Operand::DataReg(DataReg::D1)),
+            M68kInst::Ori(Size::Word, 0x4000, Operand::DataReg(DataReg::D1)),
+            M68kInst::Move(Size::Word, Operand::DataReg(DataReg::D1), Operand::AbsLong(VDP_CTRL)),
+            M68kInst::Lsr(Size::Long, Operand::Imm(14), DataReg::D0),
+            M68kInst::Move(Size::Word, Operand::DataReg(DataReg::D0), Operand::AbsLong(VDP_CTRL)),
+            // Clear 80 sprites (80 * 8 = 640 bytes)
+            M68kInst::Moveq(79, DataReg::D0),
+            M68kInst::Label(loop_label.clone()),
+            // Y = 0 (offscreen), size/link = 0, attr = 0, X = 0
+            M68kInst::Move(Size::Long, Operand::Imm(0), Operand::AbsLong(VDP_DATA)),
+            M68kInst::Move(Size::Long, Operand::Imm(0), Operand::AbsLong(VDP_DATA)),
+            M68kInst::Dbf(DataReg::D0, loop_label),
+            M68kInst::Rts,
+        ]
+    }
+
+    fn gen_sprite_set(&mut self) -> Vec<M68kInst> {
+        // sprite_set(index, x, y, size, attr)
+        // Args on stack as 32-bit longs: 4(SP)=index, 8(SP)=x, 12(SP)=y, 16(SP)=size, 20(SP)=attr
+        // On big-endian 68k, to read low word of long at offset N, read from N+2
+        vec![
+            M68kInst::Label("sprite_set".to_string()),
+            // Calculate sprite table address: SPRITE_TABLE + index * 8
+            M68kInst::Move(Size::Long, Operand::Disp(4, AddrReg::A7), Operand::DataReg(DataReg::D0)),
+            M68kInst::Lsl(Size::Long, Operand::Imm(3), DataReg::D0),  // index * 8
+            M68kInst::Addi(Size::Long, Self::SPRITE_TABLE as i32, Operand::DataReg(DataReg::D0)),
+            // Set VRAM write address
+            M68kInst::Move(Size::Long, Operand::DataReg(DataReg::D0), Operand::DataReg(DataReg::D1)),
+            M68kInst::Andi(Size::Word, 0x3FFF, Operand::DataReg(DataReg::D1)),
+            M68kInst::Ori(Size::Word, 0x4000, Operand::DataReg(DataReg::D1)),
+            M68kInst::Move(Size::Word, Operand::DataReg(DataReg::D1), Operand::AbsLong(VDP_CTRL)),
+            M68kInst::Lsr(Size::Long, Operand::Imm(14), DataReg::D0),
+            M68kInst::Move(Size::Word, Operand::DataReg(DataReg::D0), Operand::AbsLong(VDP_CTRL)),
+            // Write Y position (y + 128) - y is at 12(SP), low word at 14(SP)
+            M68kInst::Move(Size::Word, Operand::Disp(14, AddrReg::A7), Operand::DataReg(DataReg::D0)),
+            M68kInst::Addi(Size::Word, 128, Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(Size::Word, Operand::DataReg(DataReg::D0), Operand::AbsLong(VDP_DATA)),
+            // Write size/link (size in upper nibble, link = index+1)
+            // size is at 16(SP), low word at 18(SP); index is at 4(SP), low word at 6(SP)
+            M68kInst::Move(Size::Word, Operand::Disp(18, AddrReg::A7), Operand::DataReg(DataReg::D0)),
+            M68kInst::Lsl(Size::Word, Operand::Imm(8), DataReg::D0),
+            M68kInst::Move(Size::Word, Operand::Disp(6, AddrReg::A7), Operand::DataReg(DataReg::D1)),
+            M68kInst::Addq(Size::Word, 1, Operand::DataReg(DataReg::D1)),
+            M68kInst::Or(Size::Word, Operand::DataReg(DataReg::D1), Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(Size::Word, Operand::DataReg(DataReg::D0), Operand::AbsLong(VDP_DATA)),
+            // Write attribute word - attr is at 20(SP), low word at 22(SP)
+            M68kInst::Move(Size::Word, Operand::Disp(22, AddrReg::A7), Operand::AbsLong(VDP_DATA)),
+            // Write X position (x + 128) - x is at 8(SP), low word at 10(SP)
+            M68kInst::Move(Size::Word, Operand::Disp(10, AddrReg::A7), Operand::DataReg(DataReg::D0)),
+            M68kInst::Addi(Size::Word, 128, Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(Size::Word, Operand::DataReg(DataReg::D0), Operand::AbsLong(VDP_DATA)),
+            M68kInst::Rts,
+        ]
+    }
+
+    fn gen_sprite_set_pos(&mut self) -> Vec<M68kInst> {
+        // sprite_set_pos(index, x, y)
+        // Args on stack as 32-bit longs: 4(SP)=index, 8(SP)=x, 12(SP)=y
+        // On big-endian 68k, to read low word of long at offset N, read from N+2
+        vec![
+            M68kInst::Label("sprite_set_pos".to_string()),
+            // Calculate Y position address: SPRITE_TABLE + index * 8 + 0
+            M68kInst::Move(Size::Long, Operand::Disp(4, AddrReg::A7), Operand::DataReg(DataReg::D0)),
+            M68kInst::Lsl(Size::Long, Operand::Imm(3), DataReg::D0),
+            M68kInst::Addi(Size::Long, Self::SPRITE_TABLE as i32, Operand::DataReg(DataReg::D0)),
+            // Set VRAM write address
+            M68kInst::Move(Size::Long, Operand::DataReg(DataReg::D0), Operand::DataReg(DataReg::D1)),
+            M68kInst::Andi(Size::Word, 0x3FFF, Operand::DataReg(DataReg::D1)),
+            M68kInst::Ori(Size::Word, 0x4000, Operand::DataReg(DataReg::D1)),
+            M68kInst::Move(Size::Word, Operand::DataReg(DataReg::D1), Operand::AbsLong(VDP_CTRL)),
+            M68kInst::Lsr(Size::Long, Operand::Imm(14), DataReg::D0),
+            M68kInst::Move(Size::Word, Operand::DataReg(DataReg::D0), Operand::AbsLong(VDP_CTRL)),
+            // Write Y position - y is at 12(SP), low word at 14(SP)
+            M68kInst::Move(Size::Word, Operand::Disp(14, AddrReg::A7), Operand::DataReg(DataReg::D0)),
+            M68kInst::Addi(Size::Word, 128, Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(Size::Word, Operand::DataReg(DataReg::D0), Operand::AbsLong(VDP_DATA)),
+            // Skip size/link word, write attr (need to read-modify-write for X only)
+            // For simplicity, update X position at offset +6
+            M68kInst::Move(Size::Long, Operand::Disp(4, AddrReg::A7), Operand::DataReg(DataReg::D0)),
+            M68kInst::Lsl(Size::Long, Operand::Imm(3), DataReg::D0),
+            M68kInst::Addi(Size::Long, (Self::SPRITE_TABLE + 6) as i32, Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(Size::Long, Operand::DataReg(DataReg::D0), Operand::DataReg(DataReg::D1)),
+            M68kInst::Andi(Size::Word, 0x3FFF, Operand::DataReg(DataReg::D1)),
+            M68kInst::Ori(Size::Word, 0x4000, Operand::DataReg(DataReg::D1)),
+            M68kInst::Move(Size::Word, Operand::DataReg(DataReg::D1), Operand::AbsLong(VDP_CTRL)),
+            M68kInst::Lsr(Size::Long, Operand::Imm(14), DataReg::D0),
+            M68kInst::Move(Size::Word, Operand::DataReg(DataReg::D0), Operand::AbsLong(VDP_CTRL)),
+            // Write X position - x is at 8(SP), low word at 10(SP)
+            M68kInst::Move(Size::Word, Operand::Disp(10, AddrReg::A7), Operand::DataReg(DataReg::D0)),
+            M68kInst::Addi(Size::Word, 128, Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(Size::Word, Operand::DataReg(DataReg::D0), Operand::AbsLong(VDP_DATA)),
+            M68kInst::Rts,
+        ]
+    }
+
+    fn gen_sprite_hide(&mut self) -> Vec<M68kInst> {
+        // sprite_hide(index) - set Y to 0 (offscreen) and link to 0 (end list)
+        vec![
+            M68kInst::Label("sprite_hide".to_string()),
+            M68kInst::Move(Size::Long, Operand::Disp(4, AddrReg::A7), Operand::DataReg(DataReg::D0)),
+            M68kInst::Lsl(Size::Long, Operand::Imm(3), DataReg::D0),
+            M68kInst::Addi(Size::Long, Self::SPRITE_TABLE as i32, Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(Size::Long, Operand::DataReg(DataReg::D0), Operand::DataReg(DataReg::D1)),
+            M68kInst::Andi(Size::Word, 0x3FFF, Operand::DataReg(DataReg::D1)),
+            M68kInst::Ori(Size::Word, 0x4000, Operand::DataReg(DataReg::D1)),
+            M68kInst::Move(Size::Word, Operand::DataReg(DataReg::D1), Operand::AbsLong(VDP_CTRL)),
+            M68kInst::Lsr(Size::Long, Operand::Imm(14), DataReg::D0),
+            M68kInst::Move(Size::Word, Operand::DataReg(DataReg::D0), Operand::AbsLong(VDP_CTRL)),
+            // Y = 0, link = 0 (end sprite list)
+            M68kInst::Clr(Size::Long, Operand::AbsLong(VDP_DATA)),
+            M68kInst::Rts,
+        ]
+    }
+
+    fn gen_sprite_clear(&mut self) -> Vec<M68kInst> {
+        // Same as sprite_hide for now
+        vec![
+            M68kInst::Label("sprite_clear".to_string()),
+            M68kInst::Bra("sprite_hide".to_string()),
+        ]
+    }
+
+    fn gen_sprite_clear_all(&mut self) -> Vec<M68kInst> {
+        vec![
+            M68kInst::Label("sprite_clear_all".to_string()),
+            M68kInst::Bra("sprite_init".to_string()),
+        ]
+    }
+
+    fn gen_sprite_set_link(&mut self) -> Vec<M68kInst> {
+        // sprite_set_link(index, next)
+        // Args on stack as 32-bit longs: 4(SP)=index, 8(SP)=next
+        // On big-endian 68k, to read low byte of long at offset N, read from N+3
+        vec![
+            M68kInst::Label("sprite_set_link".to_string()),
+            // Address of link byte: SPRITE_TABLE + index * 8 + 3
+            M68kInst::Move(Size::Long, Operand::Disp(4, AddrReg::A7), Operand::DataReg(DataReg::D0)),
+            M68kInst::Lsl(Size::Long, Operand::Imm(3), DataReg::D0),
+            M68kInst::Addi(Size::Long, (Self::SPRITE_TABLE + 3) as i32, Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(Size::Long, Operand::DataReg(DataReg::D0), Operand::DataReg(DataReg::D1)),
+            M68kInst::Andi(Size::Word, 0x3FFF, Operand::DataReg(DataReg::D1)),
+            M68kInst::Ori(Size::Word, 0x4000, Operand::DataReg(DataReg::D1)),
+            M68kInst::Move(Size::Word, Operand::DataReg(DataReg::D1), Operand::AbsLong(VDP_CTRL)),
+            M68kInst::Lsr(Size::Long, Operand::Imm(14), DataReg::D0),
+            M68kInst::Move(Size::Word, Operand::DataReg(DataReg::D0), Operand::AbsLong(VDP_CTRL)),
+            // Write link value - next is at 8(SP), low byte at 11(SP)
+            M68kInst::Move(Size::Byte, Operand::Disp(11, AddrReg::A7), Operand::AbsLong(VDP_DATA)),
+            M68kInst::Rts,
+        ]
+    }
+
+    // -------------------------------------------------------------------------
+    // Input Library Functions
+    // -------------------------------------------------------------------------
+
+    /// Joystick hardware addresses
+    const JOY1_DATA: u32 = 0xA10003;
+    const JOY1_CTRL: u32 = 0xA10009;
+    const JOY2_DATA: u32 = 0xA10005;
+    const JOY2_CTRL: u32 = 0xA1000B;
+
+    fn gen_input_init(&mut self) -> Vec<M68kInst> {
+        // Initialize controller ports
+        vec![
+            M68kInst::Label("input_init".to_string()),
+            // Set port 1 control (output TH, input the rest)
+            M68kInst::Move(Size::Byte, Operand::Imm(0x40), Operand::AbsLong(Self::JOY1_CTRL)),
+            // Set port 2 control
+            M68kInst::Move(Size::Byte, Operand::Imm(0x40), Operand::AbsLong(Self::JOY2_CTRL)),
+            // Set TH high initially
+            M68kInst::Move(Size::Byte, Operand::Imm(0x40), Operand::AbsLong(Self::JOY1_DATA)),
+            M68kInst::Move(Size::Byte, Operand::Imm(0x40), Operand::AbsLong(Self::JOY2_DATA)),
+            M68kInst::Rts,
+        ]
+    }
+
+    fn gen_input_read(&mut self) -> Vec<M68kInst> {
+        // input_read(port) - read 3-button state
+        // Returns buttons active high
+        let port1_label = self.next_label("port1");
+        let done_label = self.next_label("done");
+        vec![
+            M68kInst::Label("input_read".to_string()),
+            M68kInst::Move(Size::Long, Operand::Disp(4, AddrReg::A7), Operand::DataReg(DataReg::D1)),
+            M68kInst::Tst(Size::Long, Operand::DataReg(DataReg::D1)),
+            M68kInst::Bcc(Cond::Eq,port1_label.clone()),
+            // Port 2
+            M68kInst::Move(Size::Byte, Operand::AbsLong(Self::JOY2_DATA), Operand::DataReg(DataReg::D0)),
+            M68kInst::Bra(done_label.clone()),
+            // Port 1
+            M68kInst::Label(port1_label),
+            M68kInst::Move(Size::Byte, Operand::AbsLong(Self::JOY1_DATA), Operand::DataReg(DataReg::D0)),
+            M68kInst::Label(done_label),
+            // Invert (active low -> active high)
+            M68kInst::Not(Size::Byte, Operand::DataReg(DataReg::D0)),
+            M68kInst::Andi(Size::Long, 0xFF, Operand::DataReg(DataReg::D0)),
+            M68kInst::Rts,
+        ]
+    }
+
+    fn gen_input_update(&mut self) -> Vec<M68kInst> {
+        // Placeholder - for more complex input state tracking
+        vec![
+            M68kInst::Label("input_update".to_string()),
+            M68kInst::Rts,
+        ]
+    }
+
+    fn gen_input_held(&mut self) -> Vec<M68kInst> {
+        // Same as input_read for simple implementation
+        vec![
+            M68kInst::Label("input_held".to_string()),
+            M68kInst::Bra("input_read".to_string()),
+        ]
+    }
+
+    fn gen_input_pressed(&mut self) -> Vec<M68kInst> {
+        // For simple implementation, same as input_read
+        vec![
+            M68kInst::Label("input_pressed".to_string()),
+            M68kInst::Bra("input_read".to_string()),
+        ]
+    }
+
+    fn gen_input_released(&mut self) -> Vec<M68kInst> {
+        // Return 0 for simple implementation
+        vec![
+            M68kInst::Label("input_released".to_string()),
+            M68kInst::Moveq(0, DataReg::D0),
+            M68kInst::Rts,
+        ]
+    }
+
+    fn gen_input_is_6button(&mut self) -> Vec<M68kInst> {
+        // Return 0 (not 6-button) for simple implementation
+        vec![
+            M68kInst::Label("input_is_6button".to_string()),
+            M68kInst::Moveq(0, DataReg::D0),
+            M68kInst::Rts,
+        ]
+    }
 }
 
 impl Default for SdkLibraryGenerator {
@@ -1315,6 +1739,14 @@ pub fn get_sdk_dependencies(func_name: &str) -> &'static [&'static str] {
         "psg_set_freq" => &["psg_set_tone"],
         "psg_beep" => &["psg_set_tone"],
         "psg_note_on" => &["psg_beep", "psg_set_tone"],
+
+        // Sprite dependencies
+        "sprite_clear" => &["sprite_hide"],
+        "sprite_clear_all" => &["sprite_init"],
+
+        // Input dependencies
+        "input_held" => &["input_read"],
+        "input_pressed" => &["input_read"],
 
         _ => &[],
     }

@@ -246,7 +246,7 @@ impl CodeGenerator {
         self.emit(M68kInst::Lea(Operand::AbsLong(0xC00004), AddrReg::A1));
         // VDP register writes: 0x8000 | (reg << 8) | value
         self.emit(M68kInst::Move(Size::Word, Operand::Imm(0x8004), Operand::AddrInd(AddrReg::A1))); // Reg 0
-        self.emit(M68kInst::Move(Size::Word, Operand::Imm(0x8144), Operand::AddrInd(AddrReg::A1))); // Reg 1 - display on
+        self.emit(M68kInst::Move(Size::Word, Operand::Imm(0x8104), Operand::AddrInd(AddrReg::A1))); // Reg 1 - display OFF (vdp_init enables after VRAM clear)
         self.emit(M68kInst::Move(Size::Word, Operand::Imm(0x8230), Operand::AddrInd(AddrReg::A1))); // Reg 2
         self.emit(M68kInst::Move(Size::Word, Operand::Imm(0x8407), Operand::AddrInd(AddrReg::A1))); // Reg 4
         self.emit(M68kInst::Move(Size::Word, Operand::Imm(0x8578), Operand::AddrInd(AddrReg::A1))); // Reg 5
@@ -256,7 +256,22 @@ impl CodeGenerator {
         self.emit(M68kInst::Move(Size::Word, Operand::Imm(0x8C81), Operand::AddrInd(AddrReg::A1))); // Reg 12
         self.emit(M68kInst::Move(Size::Word, Operand::Imm(0x8D3F), Operand::AddrInd(AddrReg::A1))); // Reg 13
         self.emit(M68kInst::Move(Size::Word, Operand::Imm(0x8F02), Operand::AddrInd(AddrReg::A1))); // Reg 15
-        self.emit(M68kInst::Move(Size::Word, Operand::Imm(0x9001), Operand::AddrInd(AddrReg::A1))); // Reg 16
+        self.emit(M68kInst::Move(Size::Word, Operand::Imm(0x9011), Operand::AddrInd(AddrReg::A1))); // Reg 16: H64xV32
+
+        // Clear all VRAM (64KB) from address 0 upward
+        // Set VRAM write address to 0x0000
+        // Command format: first word = 0x4000 | (addr & 0x3FFF), second word = (addr >> 14)
+        self.emit(M68kInst::Move(Size::Word, Operand::Imm(0x4000), Operand::AddrInd(AddrReg::A1))); // VRAM write @ 0x0000
+        self.emit(M68kInst::Move(Size::Word, Operand::Imm(0x0000), Operand::AddrInd(AddrReg::A1))); // Upper addr = 0
+        // Clear 64KB (32K words)
+        self.emit(M68kInst::Lea(Operand::AbsLong(0xC00000), AddrReg::A1));
+        self.emit(M68kInst::Move(Size::Word, Operand::Imm(0x7FFF), Operand::DataReg(DataReg::D0)));
+        self.emit(M68kInst::Label(".clear_vram".to_string()));
+        self.emit(M68kInst::Clr(Size::Word, Operand::AddrInd(AddrReg::A1)));
+        self.emit(M68kInst::Dbf(DataReg::D0, ".clear_vram".to_string()));
+
+        // Re-setup A1 for palette write
+        self.emit(M68kInst::Lea(Operand::AbsLong(0xC00004), AddrReg::A1));
 
         // Set up palette - CRAM write
         self.emit(M68kInst::Move(Size::Word, Operand::Imm(0xC000u32 as i32), Operand::AddrInd(AddrReg::A1)));
