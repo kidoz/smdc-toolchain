@@ -41,27 +41,35 @@ static mut sound_timer: i32 = 0;
 // ============================================================================
 
 fn poke16(addr: i32, value: i32) {
-    let ptr: *mut i16 = addr as *mut i16;
-    let val: i16 = value as i16;
-    *ptr = val;
+    unsafe {
+        let ptr: *mut i16 = addr as *mut i16;
+        let val: i16 = value as i16;
+        *ptr = val;
+    }
 }
 
 fn peek16(addr: i32) -> i32 {
-    let ptr: *mut i16 = addr as *mut i16;
-    let val: i16 = *ptr;
-    val as i32
+    unsafe {
+        let ptr: *mut i16 = addr as *mut i16;
+        let val: i16 = *ptr;
+        val as i32
+    }
 }
 
 fn poke8(addr: i32, value: i32) {
-    let ptr: *mut i8 = addr as *mut i8;
-    let val: i8 = value as i8;
-    *ptr = val;
+    unsafe {
+        let ptr: *mut i8 = addr as *mut i8;
+        let val: i8 = value as i8;
+        *ptr = val;
+    }
 }
 
 fn peek8(addr: i32) -> i32 {
-    let ptr: *mut i8 = addr as *mut i8;
-    let val: i8 = *ptr;
-    val as i32
+    unsafe {
+        let ptr: *mut i8 = addr as *mut i8;
+        let val: i8 = *ptr;
+        val as i32
+    }
 }
 
 fn write_vdp_ctrl(value: i32) {
@@ -142,30 +150,38 @@ fn psg_stop() {
 
 // Sound effect: paddle hit (high-pitched blip)
 fn sound_paddle_hit() {
-    psg_set_tone(0, 880);    // A5
-    psg_set_volume(0, 2);    // Slightly quieter
-    sound_timer = 4;
+    unsafe {
+        psg_set_tone(0, 880);    // A5
+        psg_set_volume(0, 2);    // Slightly quieter
+        sound_timer = 4;
+    }
 }
 
 // Sound effect: wall bounce (lower blip)
 fn sound_wall_bounce() {
-    psg_set_tone(0, 440);    // A4
-    psg_set_volume(0, 4);    // Medium volume
-    sound_timer = 3;
+    unsafe {
+        psg_set_tone(0, 440);    // A4
+        psg_set_volume(0, 4);    // Medium volume
+        sound_timer = 3;
+    }
 }
 
 // Sound effect: score (longer descending tone)
 fn sound_score() {
-    psg_set_tone(0, 220);    // A3
-    psg_set_volume(0, 0);    // Max volume
-    sound_timer = 15;
+    unsafe {
+        psg_set_tone(0, 220);    // A3
+        psg_set_volume(0, 0);    // Max volume
+        sound_timer = 15;
+    }
 }
 
 fn sound_update() {
-    if sound_timer > 0 {
-        sound_timer = sound_timer - 1;
-        if sound_timer == 0 {
-            psg_stop();
+    unsafe {
+        if sound_timer > 0 {
+            sound_timer = sound_timer - 1;
+            if sound_timer == 0 {
+                psg_stop();
+            }
         }
     }
 }
@@ -449,10 +465,12 @@ fn draw_digit(x: i32, y: i32, digit: i32) {
 }
 
 fn draw_scores() {
-    // Player 1 score at tile position (8, 2)
-    draw_digit(8, 2, player1_score);
-    // Player 2 score at tile position (28, 2)
-    draw_digit(28, 2, player2_score);
+    unsafe {
+        // Player 1 score at tile position (8, 2)
+        draw_digit(8, 2, player1_score);
+        // Player 2 score at tile position (28, 2)
+        draw_digit(28, 2, player2_score);
+    }
 }
 
 // ============================================================================
@@ -687,106 +705,112 @@ fn clear_sprite(index: i32) {
 // ============================================================================
 
 fn reset_ball() {
-    ball_x = 156;
-    ball_y = 108;
-    if (frame_count & 1) != 0 {
-        ball_dx = BALL_SPEED;
-    } else {
-        ball_dx = 0 - BALL_SPEED;
+    unsafe {
+        ball_x = 156;
+        ball_y = 108;
+        if (frame_count & 1) != 0 {
+            ball_dx = BALL_SPEED;
+        } else {
+            ball_dx = 0 - BALL_SPEED;
+        }
+        ball_dy = 2;
     }
-    ball_dy = 2;
 }
 
 fn update_ball() {
-    let paddle_width: i32 = 8;
+    unsafe {
+        let paddle_width: i32 = 8;
 
-    ball_x = ball_x + ball_dx;
-    ball_y = ball_y + ball_dy;
+        ball_x = ball_x + ball_dx;
+        ball_y = ball_y + ball_dy;
 
-    // Bounce off top/bottom
-    if ball_y < TOP_MARGIN {
-        ball_y = TOP_MARGIN;
-        ball_dy = 0 - ball_dy;
-        sound_wall_bounce();
-    }
-    if ball_y > BOTTOM_MARGIN - BALL_SIZE {
-        ball_y = BOTTOM_MARGIN - BALL_SIZE;
-        ball_dy = 0 - ball_dy;
-        sound_wall_bounce();
-    }
+        // Bounce off top/bottom
+        if ball_y < TOP_MARGIN {
+            ball_y = TOP_MARGIN;
+            ball_dy = 0 - ball_dy;
+            sound_wall_bounce();
+        }
+        if ball_y > BOTTOM_MARGIN - BALL_SIZE {
+            ball_y = BOTTOM_MARGIN - BALL_SIZE;
+            ball_dy = 0 - ball_dy;
+            sound_wall_bounce();
+        }
 
-    // Player 1 paddle collision
-    if ball_x < player1_x + paddle_width {
-        if ball_x > player1_x - BALL_SIZE {
-            if ball_y + BALL_SIZE > player1_y {
-                if ball_y < player1_y + PADDLE_HEIGHT {
-                    ball_x = player1_x + paddle_width;
-                    ball_dx = 0 - ball_dx;
-                    sound_paddle_hit();
+        // Player 1 paddle collision
+        if ball_x < player1_x + paddle_width {
+            if ball_x > player1_x - BALL_SIZE {
+                if ball_y + BALL_SIZE > player1_y {
+                    if ball_y < player1_y + PADDLE_HEIGHT {
+                        ball_x = player1_x + paddle_width;
+                        ball_dx = 0 - ball_dx;
+                        sound_paddle_hit();
+                    }
                 }
             }
         }
-    }
 
-    // Player 2 paddle collision
-    if ball_x + BALL_SIZE > player2_x {
-        if ball_x < player2_x + paddle_width {
-            if ball_y + BALL_SIZE > player2_y {
-                if ball_y < player2_y + PADDLE_HEIGHT {
-                    ball_x = player2_x - BALL_SIZE;
-                    ball_dx = 0 - ball_dx;
-                    sound_paddle_hit();
+        // Player 2 paddle collision
+        if ball_x + BALL_SIZE > player2_x {
+            if ball_x < player2_x + paddle_width {
+                if ball_y + BALL_SIZE > player2_y {
+                    if ball_y < player2_y + PADDLE_HEIGHT {
+                        ball_x = player2_x - BALL_SIZE;
+                        ball_dx = 0 - ball_dx;
+                        sound_paddle_hit();
+                    }
                 }
             }
         }
-    }
 
-    // Scoring
-    if ball_x < LEFT_MARGIN {
-        player2_score = player2_score + 1;
-        sound_score();
-        reset_ball();
-    }
-    if ball_x > RIGHT_MARGIN {
-        player1_score = player1_score + 1;
-        sound_score();
-        reset_ball();
+        // Scoring
+        if ball_x < LEFT_MARGIN {
+            player2_score = player2_score + 1;
+            sound_score();
+            reset_ball();
+        }
+        if ball_x > RIGHT_MARGIN {
+            player1_score = player1_score + 1;
+            sound_score();
+            reset_ball();
+        }
     }
 }
 
 fn update_paddles(buttons: i32) {
-    // Player 1: Up/Down buttons
-    if (buttons & 0x01) == 0 {
-        player1_y = player1_y - PADDLE_SPEED;
-    }
-    if (buttons & 0x02) == 0 {
-        player1_y = player1_y + PADDLE_SPEED;
-    }
-
-    // Clamp player 1
-    if player1_y < TOP_MARGIN {
-        player1_y = TOP_MARGIN;
-    }
-    if player1_y > BOTTOM_MARGIN - PADDLE_HEIGHT {
-        player1_y = BOTTOM_MARGIN - PADDLE_HEIGHT;
-    }
-
-    // AI for player 2
-    if ball_x > 160 {
-        if player2_y + 16 < ball_y {
-            player2_y = player2_y + 3;
+    unsafe {
+        // Player 1: Up/Down buttons
+        if (buttons & 0x01) == 0 {
+            player1_y = player1_y - PADDLE_SPEED;
         }
-        if player2_y + 16 > ball_y {
-            player2_y = player2_y - 3;
+        if (buttons & 0x02) == 0 {
+            player1_y = player1_y + PADDLE_SPEED;
         }
-    }
 
-    // Clamp player 2
-    if player2_y < TOP_MARGIN {
-        player2_y = TOP_MARGIN;
-    }
-    if player2_y > BOTTOM_MARGIN - PADDLE_HEIGHT {
-        player2_y = BOTTOM_MARGIN - PADDLE_HEIGHT;
+        // Clamp player 1
+        if player1_y < TOP_MARGIN {
+            player1_y = TOP_MARGIN;
+        }
+        if player1_y > BOTTOM_MARGIN - PADDLE_HEIGHT {
+            player1_y = BOTTOM_MARGIN - PADDLE_HEIGHT;
+        }
+
+        // AI for player 2
+        if ball_x > 160 {
+            if player2_y + 16 < ball_y {
+                player2_y = player2_y + 3;
+            }
+            if player2_y + 16 > ball_y {
+                player2_y = player2_y - 3;
+            }
+        }
+
+        // Clamp player 2
+        if player2_y < TOP_MARGIN {
+            player2_y = TOP_MARGIN;
+        }
+        if player2_y > BOTTOM_MARGIN - PADDLE_HEIGHT {
+            player2_y = BOTTOM_MARGIN - PADDLE_HEIGHT;
+        }
     }
 }
 
@@ -795,13 +819,15 @@ fn update_paddles(buttons: i32) {
 // ============================================================================
 
 fn render() {
-    // Paddle sprites: size 0x03 = 1 wide x 4 tall (8x32 pixels)
-    update_sprite(0, player1_x, player1_y, 0x03, 1);
-    update_sprite(1, player2_x, player2_y, 0x03, 1);
-    // Ball sprite: size 0x00 = 1x1 (8x8 pixels)
-    update_sprite(2, ball_x, ball_y, 0x00, 6);
-    // End sprite list
-    clear_sprite(3);
+    unsafe {
+        // Paddle sprites: size 0x03 = 1 wide x 4 tall (8x32 pixels)
+        update_sprite(0, player1_x, player1_y, 0x03, 1);
+        update_sprite(1, player2_x, player2_y, 0x03, 1);
+        // Ball sprite: size 0x00 = 1x1 (8x8 pixels)
+        update_sprite(2, ball_x, ball_y, 0x00, 6);
+        // End sprite list
+        clear_sprite(3);
+    }
 }
 
 // ============================================================================
@@ -809,54 +835,56 @@ fn render() {
 // ============================================================================
 
 fn main() {
-    vdp_init();
-    psg_init();
-    init_controller();
-    setup_palette();
-    load_tiles();
+    unsafe {
+        vdp_init();
+        psg_init();
+        init_controller();
+        setup_palette();
+        load_tiles();
 
-    // Clear sprites
-    let mut i: i32 = 0;
-    while i < 80 {
-        clear_sprite(i);
-        i = i + 1;
-    }
-
-    // Wait for START button before starting game
-    wait_for_start();
-
-    // Draw static elements after ready screen is cleared
-    draw_center_line();
-    draw_scores();
-
-    let mut last_p1_score: i32 = 0;
-    let mut last_p2_score: i32 = 0;
-
-    while game_running != 0 {
-        vdp_wait_vblank();
-
-        let buttons: i32 = read_controller();
-        update_paddles(buttons);
-        update_ball();
-        render();
-        sound_update();
-
-        // Update score display when score changes
-        if player1_score != last_p1_score || player2_score != last_p2_score {
-            draw_scores();
-            last_p1_score = player1_score;
-            last_p2_score = player2_score;
+        // Clear sprites
+        let mut i: i32 = 0;
+        while i < 80 {
+            clear_sprite(i);
+            i = i + 1;
         }
 
-        frame_count = frame_count + 1;
+        // Wait for START button before starting game
+        wait_for_start();
 
-        if player1_score >= 10 || player2_score >= 10 {
-            game_running = 0;
+        // Draw static elements after ready screen is cleared
+        draw_center_line();
+        draw_scores();
+
+        let mut last_p1_score: i32 = 0;
+        let mut last_p2_score: i32 = 0;
+
+        while game_running != 0 {
+            vdp_wait_vblank();
+
+            let buttons: i32 = read_controller();
+            update_paddles(buttons);
+            update_ball();
+            render();
+            sound_update();
+
+            // Update score display when score changes
+            if player1_score != last_p1_score || player2_score != last_p2_score {
+                draw_scores();
+                last_p1_score = player1_score;
+                last_p2_score = player2_score;
+            }
+
+            frame_count = frame_count + 1;
+
+            if player1_score >= 10 || player2_score >= 10 {
+                game_running = 0;
+            }
         }
-    }
 
-    // Game over - infinite loop
-    while true {
-        vdp_wait_vblank();
+        // Game over - infinite loop
+        loop {
+            vdp_wait_vblank();
+        }
     }
 }

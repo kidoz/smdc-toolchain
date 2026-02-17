@@ -19,7 +19,7 @@
 //!
 //! use smd::prelude::*;
 //!
-//! #[no_mangle]
+//! #[unsafe(no_mangle)]
 //! pub extern "C" fn main() {
 //!     vdp::init();
 //!     sprite::init();

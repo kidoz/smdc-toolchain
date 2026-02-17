@@ -161,7 +161,7 @@ pub fn reset_off() {
 #[inline]
 pub unsafe fn write_ram(offset: u16, value: u8) {
     let addr = (RAM + offset as u32) as *mut u8;
-    addr.write_volatile(value);
+    unsafe { addr.write_volatile(value) };
 }
 
 /// Read a byte from Z80 RAM
@@ -171,7 +171,7 @@ pub unsafe fn write_ram(offset: u16, value: u8) {
 #[inline]
 pub unsafe fn read_ram(offset: u16) -> u8 {
     let addr = (RAM + offset as u32) as *const u8;
-    addr.read_volatile()
+    unsafe { addr.read_volatile() }
 }
 
 // ============================================================================
