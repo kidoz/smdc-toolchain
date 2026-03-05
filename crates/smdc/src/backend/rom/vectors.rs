@@ -100,7 +100,7 @@ impl VectorTable {
 
         // Helper closure to write u32 big-endian
         let mut write_u32 = |val: u32| {
-            bytes[offset..offset+4].copy_from_slice(&val.to_be_bytes());
+            bytes[offset..offset + 4].copy_from_slice(&val.to_be_bytes());
             offset += 4;
         };
 

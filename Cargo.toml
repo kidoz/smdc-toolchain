@@ -27,6 +27,52 @@ string-interner = "0.17"
 # Testing
 pretty_assertions = "1.4"
 
+[workspace.lints.rust]
+unused_qualifications = "warn"
+
+[workspace.lints.clippy]
+# Pedantic group (warn, then allow noisy ones below)
+pedantic = { level = "warn", priority = -1 }
+
+# Correctness & suspicious — hard errors
+correctness = { level = "deny", priority = -1 }
+
+# Pedantic overrides — too noisy or inapplicable for this codebase
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+return_self_not_must_use = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+too_many_lines = "allow"
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+cast_precision_loss = "allow"
+cast_possible_wrap = "allow"
+cast_lossless = "allow"
+similar_names = "allow"
+wildcard_imports = "allow"
+struct_excessive_bools = "allow"
+fn_params_excessive_bools = "allow"
+unreadable_literal = "allow"
+doc_markdown = "allow"
+unused_self = "allow"
+unnecessary_wraps = "allow"
+match_same_arms = "allow"
+redundant_closure_for_method_calls = "allow"
+trivially_copy_pass_by_ref = "allow"
+needless_pass_by_value = "allow"
+manual_string_new = "allow"
+if_not_else = "allow"
+items_after_statements = "allow"
+single_match_else = "allow"
+match_wildcard_for_single_variants = "allow"
+
+# Cherry-picked restriction lints
+clone_on_ref_ptr = "warn"
+dbg_macro = "warn"
+rest_pat_in_fully_bound_structs = "warn"
+unnecessary_self_imports = "warn"
+
 [profile.release]
 lto = true
 codegen-units = 1

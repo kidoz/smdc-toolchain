@@ -141,16 +141,46 @@ mod tests {
         let source = "fn let mut struct enum impl if else while for";
         let mut lexer = RustLexer::new(source);
 
-        assert!(matches!(lexer.next_token().unwrap().kind, RustTokenKind::Fn));
-        assert!(matches!(lexer.next_token().unwrap().kind, RustTokenKind::Let));
-        assert!(matches!(lexer.next_token().unwrap().kind, RustTokenKind::Mut));
-        assert!(matches!(lexer.next_token().unwrap().kind, RustTokenKind::Struct));
-        assert!(matches!(lexer.next_token().unwrap().kind, RustTokenKind::Enum));
-        assert!(matches!(lexer.next_token().unwrap().kind, RustTokenKind::Impl));
-        assert!(matches!(lexer.next_token().unwrap().kind, RustTokenKind::If));
-        assert!(matches!(lexer.next_token().unwrap().kind, RustTokenKind::Else));
-        assert!(matches!(lexer.next_token().unwrap().kind, RustTokenKind::While));
-        assert!(matches!(lexer.next_token().unwrap().kind, RustTokenKind::For));
+        assert!(matches!(
+            lexer.next_token().unwrap().kind,
+            RustTokenKind::Fn
+        ));
+        assert!(matches!(
+            lexer.next_token().unwrap().kind,
+            RustTokenKind::Let
+        ));
+        assert!(matches!(
+            lexer.next_token().unwrap().kind,
+            RustTokenKind::Mut
+        ));
+        assert!(matches!(
+            lexer.next_token().unwrap().kind,
+            RustTokenKind::Struct
+        ));
+        assert!(matches!(
+            lexer.next_token().unwrap().kind,
+            RustTokenKind::Enum
+        ));
+        assert!(matches!(
+            lexer.next_token().unwrap().kind,
+            RustTokenKind::Impl
+        ));
+        assert!(matches!(
+            lexer.next_token().unwrap().kind,
+            RustTokenKind::If
+        ));
+        assert!(matches!(
+            lexer.next_token().unwrap().kind,
+            RustTokenKind::Else
+        ));
+        assert!(matches!(
+            lexer.next_token().unwrap().kind,
+            RustTokenKind::While
+        ));
+        assert!(matches!(
+            lexer.next_token().unwrap().kind,
+            RustTokenKind::For
+        ));
     }
 
     #[test]
@@ -158,14 +188,38 @@ mod tests {
         let source = "i8 i16 i32 u8 u16 u32 bool char";
         let mut lexer = RustLexer::new(source);
 
-        assert!(matches!(lexer.next_token().unwrap().kind, RustTokenKind::I8));
-        assert!(matches!(lexer.next_token().unwrap().kind, RustTokenKind::I16));
-        assert!(matches!(lexer.next_token().unwrap().kind, RustTokenKind::I32));
-        assert!(matches!(lexer.next_token().unwrap().kind, RustTokenKind::U8));
-        assert!(matches!(lexer.next_token().unwrap().kind, RustTokenKind::U16));
-        assert!(matches!(lexer.next_token().unwrap().kind, RustTokenKind::U32));
-        assert!(matches!(lexer.next_token().unwrap().kind, RustTokenKind::Bool));
-        assert!(matches!(lexer.next_token().unwrap().kind, RustTokenKind::Char));
+        assert!(matches!(
+            lexer.next_token().unwrap().kind,
+            RustTokenKind::I8
+        ));
+        assert!(matches!(
+            lexer.next_token().unwrap().kind,
+            RustTokenKind::I16
+        ));
+        assert!(matches!(
+            lexer.next_token().unwrap().kind,
+            RustTokenKind::I32
+        ));
+        assert!(matches!(
+            lexer.next_token().unwrap().kind,
+            RustTokenKind::U8
+        ));
+        assert!(matches!(
+            lexer.next_token().unwrap().kind,
+            RustTokenKind::U16
+        ));
+        assert!(matches!(
+            lexer.next_token().unwrap().kind,
+            RustTokenKind::U32
+        ));
+        assert!(matches!(
+            lexer.next_token().unwrap().kind,
+            RustTokenKind::Bool
+        ));
+        assert!(matches!(
+            lexer.next_token().unwrap().kind,
+            RustTokenKind::Char
+        ));
     }
 
     #[test]
@@ -223,23 +277,74 @@ mod tests {
         let source = "+ - * / % == != < > <= >= && || -> => :: ..";
         let mut lexer = RustLexer::new(source);
 
-        assert!(matches!(lexer.next_token().unwrap().kind, RustTokenKind::Plus));
-        assert!(matches!(lexer.next_token().unwrap().kind, RustTokenKind::Minus));
-        assert!(matches!(lexer.next_token().unwrap().kind, RustTokenKind::Star));
-        assert!(matches!(lexer.next_token().unwrap().kind, RustTokenKind::Slash));
-        assert!(matches!(lexer.next_token().unwrap().kind, RustTokenKind::Percent));
-        assert!(matches!(lexer.next_token().unwrap().kind, RustTokenKind::EqEq));
-        assert!(matches!(lexer.next_token().unwrap().kind, RustTokenKind::NotEq));
-        assert!(matches!(lexer.next_token().unwrap().kind, RustTokenKind::Lt));
-        assert!(matches!(lexer.next_token().unwrap().kind, RustTokenKind::Gt));
-        assert!(matches!(lexer.next_token().unwrap().kind, RustTokenKind::LtEq));
-        assert!(matches!(lexer.next_token().unwrap().kind, RustTokenKind::GtEq));
-        assert!(matches!(lexer.next_token().unwrap().kind, RustTokenKind::AmpAmp));
-        assert!(matches!(lexer.next_token().unwrap().kind, RustTokenKind::PipePipe));
-        assert!(matches!(lexer.next_token().unwrap().kind, RustTokenKind::Arrow));
-        assert!(matches!(lexer.next_token().unwrap().kind, RustTokenKind::FatArrow));
-        assert!(matches!(lexer.next_token().unwrap().kind, RustTokenKind::ColonColon));
-        assert!(matches!(lexer.next_token().unwrap().kind, RustTokenKind::DotDot));
+        assert!(matches!(
+            lexer.next_token().unwrap().kind,
+            RustTokenKind::Plus
+        ));
+        assert!(matches!(
+            lexer.next_token().unwrap().kind,
+            RustTokenKind::Minus
+        ));
+        assert!(matches!(
+            lexer.next_token().unwrap().kind,
+            RustTokenKind::Star
+        ));
+        assert!(matches!(
+            lexer.next_token().unwrap().kind,
+            RustTokenKind::Slash
+        ));
+        assert!(matches!(
+            lexer.next_token().unwrap().kind,
+            RustTokenKind::Percent
+        ));
+        assert!(matches!(
+            lexer.next_token().unwrap().kind,
+            RustTokenKind::EqEq
+        ));
+        assert!(matches!(
+            lexer.next_token().unwrap().kind,
+            RustTokenKind::NotEq
+        ));
+        assert!(matches!(
+            lexer.next_token().unwrap().kind,
+            RustTokenKind::Lt
+        ));
+        assert!(matches!(
+            lexer.next_token().unwrap().kind,
+            RustTokenKind::Gt
+        ));
+        assert!(matches!(
+            lexer.next_token().unwrap().kind,
+            RustTokenKind::LtEq
+        ));
+        assert!(matches!(
+            lexer.next_token().unwrap().kind,
+            RustTokenKind::GtEq
+        ));
+        assert!(matches!(
+            lexer.next_token().unwrap().kind,
+            RustTokenKind::AmpAmp
+        ));
+        assert!(matches!(
+            lexer.next_token().unwrap().kind,
+            RustTokenKind::PipePipe
+        ));
+        assert!(matches!(
+            lexer.next_token().unwrap().kind,
+            RustTokenKind::Arrow
+        ));
+        assert!(matches!(
+            lexer.next_token().unwrap().kind,
+            RustTokenKind::FatArrow
+        ));
+        assert!(matches!(
+            lexer.next_token().unwrap().kind,
+            RustTokenKind::ColonColon
+        ));
+        assert!(matches!(
+            lexer.next_token().unwrap().kind,
+            RustTokenKind::DotDot
+        ));
     }
 
     #[test]
@@ -266,13 +371,22 @@ mod tests {
         let source = "fn // line comment\nmain /* block */ ()";
         let mut lexer = RustLexer::new(source);
 
-        assert!(matches!(lexer.next_token().unwrap().kind, RustTokenKind::Fn));
+        assert!(matches!(
+            lexer.next_token().unwrap().kind,
+            RustTokenKind::Fn
+        ));
         assert!(matches!(
             lexer.next_token().unwrap().kind,
             RustTokenKind::Identifier(s) if s == "main"
         ));
-        assert!(matches!(lexer.next_token().unwrap().kind, RustTokenKind::LParen));
-        assert!(matches!(lexer.next_token().unwrap().kind, RustTokenKind::RParen));
+        assert!(matches!(
+            lexer.next_token().unwrap().kind,
+            RustTokenKind::LParen
+        ));
+        assert!(matches!(
+            lexer.next_token().unwrap().kind,
+            RustTokenKind::RParen
+        ));
     }
 
     #[test]

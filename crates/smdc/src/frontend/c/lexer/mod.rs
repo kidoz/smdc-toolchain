@@ -1,7 +1,7 @@
 //! Lexer module for tokenizing C source code
 
-mod token;
 mod scanner;
+mod token;
 
-pub use token::{Token, TokenKind};
 pub use scanner::Lexer;
+pub use token::{Token, TokenKind};

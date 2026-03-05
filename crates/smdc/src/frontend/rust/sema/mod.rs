@@ -1,9 +1,9 @@
 //! Rust semantic analysis module
 
-mod scope;
 mod analyzer;
+mod scope;
 mod types;
 
-pub use scope::{RustScope, RustSymbol, RustSymbolKind};
 pub use analyzer::RustAnalyzer;
+pub use scope::{RustScope, RustSymbol, RustSymbolKind};
 pub use types::TypeChecker;

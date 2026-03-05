@@ -14,13 +14,9 @@
 //! ## Quick Start
 //!
 //! ```no_run
-//! #![no_std]
-//! #![no_main]
-//!
 //! use smd::prelude::*;
 //!
-//! #[unsafe(no_mangle)]
-//! pub extern "C" fn main() {
+//! fn main() {
 //!     vdp::init();
 //!     sprite::init();
 //!     input::init();
@@ -60,11 +56,11 @@
 #![no_std]
 #![allow(dead_code)]
 
-pub mod vdp;
-pub mod sprite;
 pub mod input;
 pub mod psg;
+pub mod sprite;
 pub mod types;
+pub mod vdp;
 pub mod ym2612;
 pub mod z80;
 
@@ -75,11 +71,11 @@ pub mod z80;
 /// use smd::prelude::*;
 /// ```
 pub mod prelude {
-    pub use crate::vdp::{self, Color};
-    pub use crate::sprite::{self, SpriteSize};
     pub use crate::input::{self, Button, Buttons};
     pub use crate::psg;
+    pub use crate::sprite::{self, SpriteSize};
     pub use crate::types::*;
+    pub use crate::vdp::{self, Color};
     pub use crate::ym2612;
     pub use crate::z80;
 }

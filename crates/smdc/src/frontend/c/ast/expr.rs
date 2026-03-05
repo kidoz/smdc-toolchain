@@ -53,10 +53,7 @@ pub enum ExprKind {
     },
 
     /// Unary operation: -x, !flag, *ptr
-    Unary {
-        op: UnaryOp,
-        operand: Box<Expr>,
-    },
+    Unary { op: UnaryOp, operand: Box<Expr> },
 
     /// Assignment: x = y, a += b
     Assign {
@@ -73,34 +70,19 @@ pub enum ExprKind {
     },
 
     /// Function call: foo(a, b)
-    Call {
-        callee: Box<Expr>,
-        args: Vec<Expr>,
-    },
+    Call { callee: Box<Expr>, args: Vec<Expr> },
 
     /// Array subscript: arr[i]
-    Index {
-        array: Box<Expr>,
-        index: Box<Expr>,
-    },
+    Index { array: Box<Expr>, index: Box<Expr> },
 
     /// Member access: obj.field
-    Member {
-        object: Box<Expr>,
-        field: String,
-    },
+    Member { object: Box<Expr>, field: String },
 
     /// Pointer member access: ptr->field
-    PtrMember {
-        pointer: Box<Expr>,
-        field: String,
-    },
+    PtrMember { pointer: Box<Expr>, field: String },
 
     /// Type cast: (int)x
-    Cast {
-        ty: CType,
-        expr: Box<Expr>,
-    },
+    Cast { ty: CType, expr: Box<Expr> },
 
     /// sizeof expression: sizeof(x) or sizeof(int)
     Sizeof(SizeofArg),
@@ -190,12 +172,7 @@ impl BinaryOp {
     pub fn is_comparison(&self) -> bool {
         matches!(
             self,
-            BinaryOp::Eq
-                | BinaryOp::Ne
-                | BinaryOp::Lt
-                | BinaryOp::Le
-                | BinaryOp::Gt
-                | BinaryOp::Ge
+            BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge
         )
     }
 
@@ -207,9 +184,9 @@ impl BinaryOp {
 /// Unary operators
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnaryOp {
-    Neg,     // -x
-    Not,     // !x
-    BitNot,  // ~x
+    Neg,    // -x
+    Not,    // !x
+    BitNot, // ~x
 }
 
 impl UnaryOp {

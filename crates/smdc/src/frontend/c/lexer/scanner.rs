@@ -118,7 +118,10 @@ mod tests {
 
         assert!(matches!(lexer.next_token().unwrap().kind, TokenKind::Int));
         assert!(matches!(lexer.next_token().unwrap().kind, TokenKind::Void));
-        assert!(matches!(lexer.next_token().unwrap().kind, TokenKind::Return));
+        assert!(matches!(
+            lexer.next_token().unwrap().kind,
+            TokenKind::Return
+        ));
         assert!(matches!(lexer.next_token().unwrap().kind, TokenKind::If));
         assert!(matches!(lexer.next_token().unwrap().kind, TokenKind::Else));
         assert!(matches!(lexer.next_token().unwrap().kind, TokenKind::While));
@@ -188,15 +191,24 @@ mod tests {
         assert!(matches!(lexer.next_token().unwrap().kind, TokenKind::Minus));
         assert!(matches!(lexer.next_token().unwrap().kind, TokenKind::Star));
         assert!(matches!(lexer.next_token().unwrap().kind, TokenKind::Slash));
-        assert!(matches!(lexer.next_token().unwrap().kind, TokenKind::Percent));
+        assert!(matches!(
+            lexer.next_token().unwrap().kind,
+            TokenKind::Percent
+        ));
         assert!(matches!(lexer.next_token().unwrap().kind, TokenKind::EqEq));
         assert!(matches!(lexer.next_token().unwrap().kind, TokenKind::NotEq));
         assert!(matches!(lexer.next_token().unwrap().kind, TokenKind::Lt));
         assert!(matches!(lexer.next_token().unwrap().kind, TokenKind::Gt));
         assert!(matches!(lexer.next_token().unwrap().kind, TokenKind::LtEq));
         assert!(matches!(lexer.next_token().unwrap().kind, TokenKind::GtEq));
-        assert!(matches!(lexer.next_token().unwrap().kind, TokenKind::AmpAmp));
-        assert!(matches!(lexer.next_token().unwrap().kind, TokenKind::PipePipe));
+        assert!(matches!(
+            lexer.next_token().unwrap().kind,
+            TokenKind::AmpAmp
+        ));
+        assert!(matches!(
+            lexer.next_token().unwrap().kind,
+            TokenKind::PipePipe
+        ));
         assert!(matches!(lexer.next_token().unwrap().kind, TokenKind::Bang));
     }
 

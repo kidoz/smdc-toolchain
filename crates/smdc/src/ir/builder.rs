@@ -1,8 +1,8 @@
 //! IR builder - converts AST to IR
 
-use crate::frontend::c::ast::*;
-use crate::common::{CompileResult, CompileError};
 use super::inst::*;
+use crate::common::{CompileError, CompileResult};
+use crate::frontend::c::ast::*;
 use std::collections::HashMap;
 
 /// Builds IR from AST
@@ -53,7 +53,17 @@ impl IrBuilder {
 
     fn emit(&mut self, inst: Inst) {
         if let Some(func) = &mut self.current_func {
-            func.body.push(inst);
+            if let Inst::Label(label) = inst {
+                func.blocks.push(BasicBlock::new(label));
+            } else {
+                if func.blocks.is_empty() {
+                    let entry_label = Label(format!(".L{}_entry", func.name));
+                    func.blocks.push(BasicBlock::new(entry_label));
+                }
+                if let Some(block) = func.blocks.last_mut() {
+                    block.insts.push(inst);
+                }
+            }
         }
     }
 
@@ -80,7 +90,7 @@ impl IrBuilder {
 
         let global = IrGlobal {
             name: var.name.clone(),
-            ty: var.ty.clone(),
+            ty: var.ty.to_ir_type(),
             init: init_bytes,
         };
         self.module.globals.push(global);
@@ -90,12 +100,8 @@ impl IrBuilder {
     /// Evaluate a constant initializer to bytes
     fn evaluate_initializer(&self, init: &Initializer, ty: &CType) -> CompileResult<Vec<u8>> {
         match init {
-            Initializer::Expr(expr) => {
-                self.evaluate_const_expr_to_bytes(expr, ty)
-            }
-            Initializer::List(items) => {
-                self.evaluate_init_list_to_bytes(items, ty)
-            }
+            Initializer::Expr(expr) => self.evaluate_const_expr_to_bytes(expr, ty),
+            Initializer::List(items) => self.evaluate_init_list_to_bytes(items, ty),
             Initializer::Designated { .. } => {
                 // For designated initializers, return zero-initialized for now
                 Ok(vec![0u8; ty.size()])
@@ -115,7 +121,7 @@ impl IrBuilder {
             4 => ((value as i32).to_be_bytes()).to_vec(),
             _ => {
                 // For larger types, pad with zeros
-                let mut bytes = (value as i64).to_be_bytes().to_vec();
+                let mut bytes = { value }.to_be_bytes().to_vec();
                 while bytes.len() < size {
                     bytes.insert(0, 0);
                 }
@@ -134,7 +140,7 @@ impl IrBuilder {
                 let val = self.evaluate_const_expr(operand)?;
                 Ok(match op {
                     UnaryOp::Neg => -val,
-                    UnaryOp::Not => if val == 0 { 1 } else { 0 },
+                    UnaryOp::Not => i64::from(val == 0),
                     UnaryOp::BitNot => !val,
                 })
             }
@@ -147,13 +153,17 @@ impl IrBuilder {
                     BinaryOp::Mul => l.wrapping_mul(r),
                     BinaryOp::Div => {
                         if r == 0 {
-                            return Err(CompileError::codegen("division by zero in constant expression"));
+                            return Err(CompileError::codegen(
+                                "division by zero in constant expression",
+                            ));
                         }
                         l / r
                     }
                     BinaryOp::Mod => {
                         if r == 0 {
-                            return Err(CompileError::codegen("modulo by zero in constant expression"));
+                            return Err(CompileError::codegen(
+                                "modulo by zero in constant expression",
+                            ));
                         }
                         l % r
                     }
@@ -162,17 +172,21 @@ impl IrBuilder {
                     BinaryOp::BitXor => l ^ r,
                     BinaryOp::Shl => l.wrapping_shl(r as u32),
                     BinaryOp::Shr => l.wrapping_shr(r as u32),
-                    BinaryOp::Eq => if l == r { 1 } else { 0 },
-                    BinaryOp::Ne => if l != r { 1 } else { 0 },
-                    BinaryOp::Lt => if l < r { 1 } else { 0 },
-                    BinaryOp::Le => if l <= r { 1 } else { 0 },
-                    BinaryOp::Gt => if l > r { 1 } else { 0 },
-                    BinaryOp::Ge => if l >= r { 1 } else { 0 },
-                    BinaryOp::LogAnd => if l != 0 && r != 0 { 1 } else { 0 },
-                    BinaryOp::LogOr => if l != 0 || r != 0 { 1 } else { 0 },
+                    BinaryOp::Eq => i64::from(l == r),
+                    BinaryOp::Ne => i64::from(l != r),
+                    BinaryOp::Lt => i64::from(l < r),
+                    BinaryOp::Le => i64::from(l <= r),
+                    BinaryOp::Gt => i64::from(l > r),
+                    BinaryOp::Ge => i64::from(l >= r),
+                    BinaryOp::LogAnd => i64::from(l != 0 && r != 0),
+                    BinaryOp::LogOr => i64::from(l != 0 || r != 0),
                 })
             }
-            ExprKind::Ternary { condition, then_expr, else_expr } => {
+            ExprKind::Ternary {
+                condition,
+                then_expr,
+                else_expr,
+            } => {
                 let cond = self.evaluate_const_expr(condition)?;
                 if cond != 0 {
                     self.evaluate_const_expr(then_expr)
@@ -187,16 +201,22 @@ impl IrBuilder {
             ExprKind::Sizeof(arg) => {
                 let size = match arg {
                     SizeofArg::Type(ty) => ty.size(),
-                    SizeofArg::Expr(e) => e.ty.as_ref().map(|t| t.size()).unwrap_or(4),
+                    SizeofArg::Expr(e) => e.ty.as_ref().map_or(4, |t| t.size()),
                 };
                 Ok(size as i64)
             }
-            _ => Err(CompileError::codegen("non-constant expression in global initializer")),
+            _ => Err(CompileError::codegen(
+                "non-constant expression in global initializer",
+            )),
         }
     }
 
     /// Evaluate an initializer list to bytes
-    fn evaluate_init_list_to_bytes(&self, items: &[Initializer], ty: &CType) -> CompileResult<Vec<u8>> {
+    fn evaluate_init_list_to_bytes(
+        &self,
+        items: &[Initializer],
+        ty: &CType,
+    ) -> CompileResult<Vec<u8>> {
         match &ty.kind {
             TypeKind::Array { element, size } => {
                 let elem_size = element.size();
@@ -251,43 +271,52 @@ impl IrBuilder {
 
     /// Get the offset and type of a struct field for member access (obj.field)
     fn get_struct_field_offset(&self, object: &Expr, field: &str) -> CompileResult<(usize, CType)> {
-        let obj_ty = object.ty.as_ref()
+        let obj_ty = object
+            .ty
+            .as_ref()
             .ok_or_else(|| CompileError::codegen("missing type for struct member access"))?;
 
         match &obj_ty.kind {
-            TypeKind::Struct { members, .. } => {
-                self.calculate_field_offset(members, field)
-            }
+            TypeKind::Struct { members, .. } => self.calculate_field_offset(members, field),
             _ => Err(CompileError::codegen(format!(
-                "member access on non-struct type: {:?}", obj_ty.kind
+                "member access on non-struct type: {:?}",
+                obj_ty.kind
             ))),
         }
     }
 
     /// Get the offset and type of a struct field for pointer member access (ptr->field)
-    fn get_ptr_struct_field_offset(&self, pointer: &Expr, field: &str) -> CompileResult<(usize, CType)> {
-        let ptr_ty = pointer.ty.as_ref()
+    fn get_ptr_struct_field_offset(
+        &self,
+        pointer: &Expr,
+        field: &str,
+    ) -> CompileResult<(usize, CType)> {
+        let ptr_ty = pointer
+            .ty
+            .as_ref()
             .ok_or_else(|| CompileError::codegen("missing type for pointer member access"))?;
 
         match &ptr_ty.kind {
-            TypeKind::Pointer(inner) => {
-                match &inner.kind {
-                    TypeKind::Struct { members, .. } => {
-                        self.calculate_field_offset(members, field)
-                    }
-                    _ => Err(CompileError::codegen(format!(
-                        "pointer member access on non-struct pointer: {:?}", inner.kind
-                    ))),
-                }
-            }
+            TypeKind::Pointer(inner) => match &inner.kind {
+                TypeKind::Struct { members, .. } => self.calculate_field_offset(members, field),
+                _ => Err(CompileError::codegen(format!(
+                    "pointer member access on non-struct pointer: {:?}",
+                    inner.kind
+                ))),
+            },
             _ => Err(CompileError::codegen(format!(
-                "-> operator on non-pointer type: {:?}", ptr_ty.kind
+                "-> operator on non-pointer type: {:?}",
+                ptr_ty.kind
             ))),
         }
     }
 
     /// Calculate field offset within struct members
-    fn calculate_field_offset(&self, members: &[(String, CType)], field: &str) -> CompileResult<(usize, CType)> {
+    fn calculate_field_offset(
+        &self,
+        members: &[(String, CType)],
+        field: &str,
+    ) -> CompileResult<(usize, CType)> {
         let mut offset = 0;
 
         for (name, member_ty) in members {
@@ -302,7 +331,9 @@ impl IrBuilder {
             offset += member_ty.size();
         }
 
-        Err(CompileError::codegen(format!("unknown struct field: {}", field)))
+        Err(CompileError::codegen(format!(
+            "unknown struct field: {field}"
+        )))
     }
 
     fn build_function(&mut self, func: &FuncDecl) -> CompileResult<()> {
@@ -310,16 +341,16 @@ impl IrBuilder {
             return Ok(()); // Skip declarations without body
         }
 
-        let params: Vec<(String, CType)> = func
+        let params: Vec<(String, crate::types::IrType)> = func
             .params
             .iter()
-            .map(|p| (p.name.clone().unwrap_or_default(), p.ty.clone()))
+            .map(|p| (p.name.clone().unwrap_or_default(), p.ty.to_ir_type()))
             .collect();
 
         self.current_func = Some(IrFunction::new(
             func.name.clone(),
             params.clone(),
-            func.return_type.clone(),
+            func.return_type.to_ir_type(),
         ));
         self.locals.clear();
         self.temp_counter = 0;
@@ -337,7 +368,7 @@ impl IrBuilder {
                 self.emit(Inst::LoadParam {
                     dst: temp,
                     index: idx,
-                    size: ty.size(),
+                    size: ty.size,
                 });
             }
         }
@@ -352,7 +383,9 @@ impl IrBuilder {
             self.emit(Inst::Return(None));
         }
 
-        let built_func = self.current_func.take()
+        let built_func = self
+            .current_func
+            .take()
             .ok_or_else(|| CompileError::codegen("No current function to finalize"))?;
         self.module.functions.push(built_func);
 
@@ -363,17 +396,15 @@ impl IrBuilder {
         for item in &block.items {
             match item {
                 BlockItem::Statement(stmt) => self.build_stmt(stmt)?,
-                BlockItem::Declaration(decl) => {
-                    match &decl.kind {
-                        DeclKind::Variable(var) => self.build_local_var(var)?,
-                        DeclKind::MultipleVariables(vars) => {
-                            for var in vars {
-                                self.build_local_var(var)?;
-                            }
+                BlockItem::Declaration(decl) => match &decl.kind {
+                    DeclKind::Variable(var) => self.build_local_var(var)?,
+                    DeclKind::MultipleVariables(vars) => {
+                        for var in vars {
+                            self.build_local_var(var)?;
                         }
-                        _ => {}
                     }
-                }
+                    _ => {}
+                },
             }
         }
         Ok(())
@@ -386,19 +417,23 @@ impl IrBuilder {
         // Allocate stack space
         let size = var.ty.size();
         let align = var.ty.alignment();
-        self.emit(Inst::Alloca { dst: temp, size, align });
+        self.emit(Inst::Alloca {
+            dst: temp,
+            size,
+            align,
+        });
 
         // Handle initializer
-        if let Some(init) = &var.init {
-            if let Initializer::Expr(expr) = init {
-                let value = self.build_expr(expr)?;
-                self.emit(Inst::Store {
-                    addr: Value::Temp(temp),
-                    src: value,
-                    size,
-                    volatile: false,
-                });
-            }
+        if let Some(init) = &var.init
+            && let Initializer::Expr(expr) = init
+        {
+            let value = self.build_expr(expr)?;
+            self.emit(Inst::Store {
+                addr: Value::Temp(temp),
+                src: value,
+                size,
+                volatile: false,
+            });
         }
 
         Ok(())
@@ -413,7 +448,11 @@ impl IrBuilder {
             StmtKind::Block(block) => {
                 self.build_block(block)?;
             }
-            StmtKind::If { condition, then_branch, else_branch } => {
+            StmtKind::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
                 self.build_if(condition, then_branch, else_branch.as_deref())?;
             }
             StmtKind::While { condition, body } => {
@@ -422,7 +461,12 @@ impl IrBuilder {
             StmtKind::DoWhile { body, condition } => {
                 self.build_do_while(body, condition)?;
             }
-            StmtKind::For { init, condition, update, body } => {
+            StmtKind::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
                 self.build_for(init, condition, update, body)?;
             }
             StmtKind::Return(value) => {
@@ -456,17 +500,15 @@ impl IrBuilder {
                 self.emit(Inst::Label(Label(name.clone())));
                 self.build_stmt(stmt)?;
             }
-            StmtKind::Declaration(decl) => {
-                match &decl.kind {
-                    DeclKind::Variable(var) => self.build_local_var(var)?,
-                    DeclKind::MultipleVariables(vars) => {
-                        for var in vars {
-                            self.build_local_var(var)?;
-                        }
+            StmtKind::Declaration(decl) => match &decl.kind {
+                DeclKind::Variable(var) => self.build_local_var(var)?,
+                DeclKind::MultipleVariables(vars) => {
+                    for var in vars {
+                        self.build_local_var(var)?;
                     }
-                    _ => {}
                 }
-            }
+                _ => {}
+            },
         }
         Ok(())
     }
@@ -555,28 +597,26 @@ impl IrBuilder {
 
     fn build_for(
         &mut self,
-        init: &Option<ForInit>,
+        init: &Option<Box<ForInit>>,
         condition: &Option<Expr>,
         update: &Option<Expr>,
         body: &Stmt,
     ) -> CompileResult<()> {
         // Init
         if let Some(init) = init {
-            match init {
+            match &**init {
                 ForInit::Expr(expr) => {
                     self.build_expr(expr)?;
                 }
-                ForInit::Declaration(decl) => {
-                    match &decl.kind {
-                        DeclKind::Variable(var) => self.build_local_var(var)?,
-                        DeclKind::MultipleVariables(vars) => {
-                            for var in vars {
-                                self.build_local_var(var)?;
-                            }
+                ForInit::Declaration(decl) => match &decl.kind {
+                    DeclKind::Variable(var) => self.build_local_var(var)?,
+                    DeclKind::MultipleVariables(vars) => {
+                        for var in vars {
+                            self.build_local_var(var)?;
                         }
-                        _ => {}
                     }
-                }
+                    _ => {}
+                },
             }
         }
 
@@ -620,7 +660,10 @@ impl IrBuilder {
         // Evaluate switch expression
         let switch_val = self.build_expr(expr)?;
         let switch_temp = self.new_temp();
-        self.emit(Inst::Copy { dst: switch_temp, src: switch_val });
+        self.emit(Inst::Copy {
+            dst: switch_temp,
+            src: switch_val,
+        });
 
         // Collect case labels and create jump targets
         let end_label = self.new_label("endswitch");
@@ -704,10 +747,10 @@ impl IrBuilder {
         match &stmt.kind {
             StmtKind::Case { value, stmt: inner } => {
                 // Find the label for this case
-                if let Ok(val) = self.evaluate_const_expr(value) {
-                    if let Some((_, label)) = cases.iter().find(|(v, _)| *v == val) {
-                        self.emit(Inst::Label(label.clone()));
-                    }
+                if let Ok(val) = self.evaluate_const_expr(value)
+                    && let Some((_, label)) = cases.iter().find(|(v, _)| *v == val)
+                {
+                    self.emit(Inst::Label(label.clone()));
                 }
                 self.emit_switch_body(inner, cases, default_label)?;
             }
@@ -723,17 +766,15 @@ impl IrBuilder {
                         BlockItem::Statement(s) => {
                             self.emit_switch_body(s, cases, default_label)?;
                         }
-                        BlockItem::Declaration(decl) => {
-                            match &decl.kind {
-                                DeclKind::Variable(var) => self.build_local_var(var)?,
-                                DeclKind::MultipleVariables(vars) => {
-                                    for var in vars {
-                                        self.build_local_var(var)?;
-                                    }
+                        BlockItem::Declaration(decl) => match &decl.kind {
+                            DeclKind::Variable(var) => self.build_local_var(var)?,
+                            DeclKind::MultipleVariables(vars) => {
+                                for var in vars {
+                                    self.build_local_var(var)?;
                                 }
-                                _ => {}
                             }
-                        }
+                            _ => {}
+                        },
                     }
                 }
             }
@@ -766,8 +807,8 @@ impl IrBuilder {
                 if let Some(&temp) = self.locals.get(name) {
                     // Load from local variable
                     let dst = self.new_temp();
-                    let size = expr.ty.as_ref().map(|t| t.size()).unwrap_or(4);
-                    let signed = expr.ty.as_ref().map(|t| t.is_signed()).unwrap_or(false);
+                    let size = expr.ty.as_ref().map_or(4, |t| t.size());
+                    let signed = expr.ty.as_ref().is_some_and(|t| t.is_signed());
                     self.emit(Inst::Load {
                         dst,
                         addr: Value::Temp(temp),
@@ -817,15 +858,27 @@ impl IrBuilder {
                 let dst = self.new_temp();
 
                 // Check if either operand is unsigned (for div/mod)
-                let is_unsigned = left.ty.as_ref().map(|t| !t.is_signed()).unwrap_or(false)
-                    || right.ty.as_ref().map(|t| !t.is_signed()).unwrap_or(false);
+                let is_unsigned = left.ty.as_ref().is_some_and(|t| !t.is_signed())
+                    || right.ty.as_ref().is_some_and(|t| !t.is_signed());
 
                 let ir_op = match op {
                     BinaryOp::Add => BinOp::Add,
                     BinaryOp::Sub => BinOp::Sub,
                     BinaryOp::Mul => BinOp::Mul,
-                    BinaryOp::Div => if is_unsigned { BinOp::UDiv } else { BinOp::Div },
-                    BinaryOp::Mod => if is_unsigned { BinOp::UMod } else { BinOp::Mod },
+                    BinaryOp::Div => {
+                        if is_unsigned {
+                            BinOp::UDiv
+                        } else {
+                            BinOp::Div
+                        }
+                    }
+                    BinaryOp::Mod => {
+                        if is_unsigned {
+                            BinOp::UMod
+                        } else {
+                            BinOp::Mod
+                        }
+                    }
                     BinaryOp::BitAnd => BinOp::And,
                     BinaryOp::BitOr => BinOp::Or,
                     BinaryOp::BitXor => BinOp::Xor,
@@ -863,7 +916,11 @@ impl IrBuilder {
                     UnaryOp::BitNot => UnOp::BitNot,
                 };
 
-                self.emit(Inst::Unary { dst, op: ir_op, src });
+                self.emit(Inst::Unary {
+                    dst,
+                    op: ir_op,
+                    src,
+                });
                 Ok(Value::Temp(dst))
             }
 
@@ -876,8 +933,8 @@ impl IrBuilder {
                 // Handle compound assignment
                 let final_val = if let Some(bin_op) = op.to_binary_op() {
                     let old_val = self.new_temp();
-                    let size = target.ty.as_ref().map(|t| t.size()).unwrap_or(4);
-                    let signed = target.ty.as_ref().map(|t| t.is_signed()).unwrap_or(false);
+                    let size = target.ty.as_ref().map_or(4, |t| t.size());
+                    let signed = target.ty.as_ref().is_some_and(|t| t.is_signed());
                     self.emit(Inst::Load {
                         dst: old_val,
                         addr: addr.clone(),
@@ -893,8 +950,20 @@ impl IrBuilder {
                         BinaryOp::Add => BinOp::Add,
                         BinaryOp::Sub => BinOp::Sub,
                         BinaryOp::Mul => BinOp::Mul,
-                        BinaryOp::Div => if is_unsigned { BinOp::UDiv } else { BinOp::Div },
-                        BinaryOp::Mod => if is_unsigned { BinOp::UMod } else { BinOp::Mod },
+                        BinaryOp::Div => {
+                            if is_unsigned {
+                                BinOp::UDiv
+                            } else {
+                                BinOp::Div
+                            }
+                        }
+                        BinaryOp::Mod => {
+                            if is_unsigned {
+                                BinOp::UMod
+                            } else {
+                                BinOp::Mod
+                            }
+                        }
                         BinaryOp::BitAnd => BinOp::And,
                         BinaryOp::BitOr => BinOp::Or,
                         BinaryOp::BitXor => BinOp::Xor,
@@ -915,7 +984,7 @@ impl IrBuilder {
                     val
                 };
 
-                let size = target.ty.as_ref().map(|t| t.size()).unwrap_or(4);
+                let size = target.ty.as_ref().map_or(4, |t| t.size());
                 self.emit(Inst::Store {
                     addr,
                     src: final_val.clone(),
@@ -957,7 +1026,9 @@ impl IrBuilder {
                     .ty
                     .as_ref()
                     .and_then(|t| match &t.kind {
-                        TypeKind::Array { element, .. } => Some((element.size(), element.is_signed())),
+                        TypeKind::Array { element, .. } => {
+                            Some((element.size(), element.is_signed()))
+                        }
                         TypeKind::Pointer(inner) => Some((inner.size(), inner.is_signed())),
                         _ => None,
                     })
@@ -991,30 +1062,36 @@ impl IrBuilder {
                 Ok(Value::Temp(dst))
             }
 
-            ExprKind::AddrOf(operand) => {
-                self.build_lvalue(operand)
-            }
+            ExprKind::AddrOf(operand) => self.build_lvalue(operand),
 
             ExprKind::Deref(operand) => {
                 let addr = self.build_expr(operand)?;
                 let dst = self.new_temp();
-                let size = expr.ty.as_ref().map(|t| t.size()).unwrap_or(4);
-                let signed = expr.ty.as_ref().map(|t| t.is_signed()).unwrap_or(false);
+                let size = expr.ty.as_ref().map_or(4, |t| t.size());
+                let signed = expr.ty.as_ref().is_some_and(|t| t.is_signed());
                 // Check if pointer type is volatile
-                let is_volatile = operand.ty.as_ref()
-                    .map(|t| t.qualifiers.is_volatile)
-                    .unwrap_or(false);
-                self.emit(Inst::Load { dst, addr, size, volatile: is_volatile, signed });
+                let is_volatile = operand
+                    .ty
+                    .as_ref()
+                    .is_some_and(|t| t.qualifiers.is_volatile);
+                self.emit(Inst::Load {
+                    dst,
+                    addr,
+                    size,
+                    volatile: is_volatile,
+                    signed,
+                });
                 Ok(Value::Temp(dst))
             }
 
             ExprKind::PreIncrement(operand) | ExprKind::PreDecrement(operand) => {
                 let addr = self.build_lvalue(operand)?;
-                let size = operand.ty.as_ref().map(|t| t.size()).unwrap_or(4);
-                let signed = operand.ty.as_ref().map(|t| t.is_signed()).unwrap_or(false);
-                let is_volatile = operand.ty.as_ref()
-                    .map(|t| t.qualifiers.is_volatile)
-                    .unwrap_or(false);
+                let size = operand.ty.as_ref().map_or(4, |t| t.size());
+                let signed = operand.ty.as_ref().is_some_and(|t| t.is_signed());
+                let is_volatile = operand
+                    .ty
+                    .as_ref()
+                    .is_some_and(|t| t.qualifiers.is_volatile);
 
                 let old = self.new_temp();
                 self.emit(Inst::Load {
@@ -1051,11 +1128,12 @@ impl IrBuilder {
 
             ExprKind::PostIncrement(operand) | ExprKind::PostDecrement(operand) => {
                 let addr = self.build_lvalue(operand)?;
-                let size = operand.ty.as_ref().map(|t| t.size()).unwrap_or(4);
-                let signed = operand.ty.as_ref().map(|t| t.is_signed()).unwrap_or(false);
-                let is_volatile = operand.ty.as_ref()
-                    .map(|t| t.qualifiers.is_volatile)
-                    .unwrap_or(false);
+                let size = operand.ty.as_ref().map_or(4, |t| t.size());
+                let signed = operand.ty.as_ref().is_some_and(|t| t.is_signed());
+                let is_volatile = operand
+                    .ty
+                    .as_ref()
+                    .is_some_and(|t| t.qualifiers.is_volatile);
 
                 let old = self.new_temp();
                 self.emit(Inst::Load {
@@ -1090,7 +1168,11 @@ impl IrBuilder {
                 Ok(Value::Temp(old)) // Return old value
             }
 
-            ExprKind::Ternary { condition, then_expr, else_expr } => {
+            ExprKind::Ternary {
+                condition,
+                then_expr,
+                else_expr,
+            } => {
                 let cond = self.build_expr(condition)?;
                 let else_label = self.new_label("ternelse");
                 let end_label = self.new_label("ternend");
@@ -1127,7 +1209,7 @@ impl IrBuilder {
             ExprKind::Sizeof(arg) => {
                 let size = match arg {
                     SizeofArg::Type(ty) => ty.size(),
-                    SizeofArg::Expr(e) => e.ty.as_ref().map(|t| t.size()).unwrap_or(4),
+                    SizeofArg::Expr(e) => e.ty.as_ref().map_or(4, |t| t.size()),
                 };
                 Ok(Value::IntConst(size as i64))
             }
@@ -1217,9 +1299,7 @@ impl IrBuilder {
                     Ok(Value::Temp(dst))
                 }
             }
-            ExprKind::Deref(inner) => {
-                self.build_expr(inner)
-            }
+            ExprKind::Deref(inner) => self.build_expr(inner),
             ExprKind::Index { array, index } => {
                 let base = self.build_expr(array)?;
                 let idx = self.build_expr(index)?;

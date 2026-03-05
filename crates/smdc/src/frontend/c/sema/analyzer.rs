@@ -1,8 +1,8 @@
 //! Semantic analyzer - type checking and validation
 
-use crate::frontend::c::ast::*;
+use super::scope::{Scope, StructDef, Symbol, SymbolKind, UnionDef};
 use crate::common::{CompileError, CompileResult};
-use super::scope::{Scope, Symbol, SymbolKind, StructDef, UnionDef};
+use crate::frontend::c::ast::*;
 
 /// Semantic analyzer for type checking
 pub struct SemanticAnalyzer {
@@ -57,9 +57,9 @@ impl SemanticAnalyzer {
             kind: SymbolKind::Variable,
             ty: var.ty.clone(),
         };
-        self.scope.define(symbol).map_err(|e| {
-            CompileError::semantic(e, var.span)
-        })?;
+        self.scope
+            .define(symbol)
+            .map_err(|e| CompileError::semantic(e, var.span))?;
 
         // Analyze initializer if present
         if let Some(init) = &mut var.init {
@@ -72,13 +72,19 @@ impl SemanticAnalyzer {
     /// Resolve struct/union types by looking up definitions and filling in members
     fn resolve_struct_type(&self, ty: &mut CType) -> CompileResult<()> {
         match &mut ty.kind {
-            TypeKind::Struct { name: Some(struct_name), members } if members.is_empty() => {
+            TypeKind::Struct {
+                name: Some(struct_name),
+                members,
+            } if members.is_empty() => {
                 // Look up the struct definition
                 if let Some(def) = self.scope.lookup_struct(struct_name) {
                     *members = def.members.clone();
                 }
             }
-            TypeKind::Union { name: Some(union_name), members } if members.is_empty() => {
+            TypeKind::Union {
+                name: Some(union_name),
+                members,
+            } if members.is_empty() => {
                 // Look up the union definition
                 if let Some(def) = self.scope.lookup_union(union_name) {
                     *members = def.members.clone();
@@ -100,7 +106,11 @@ impl SemanticAnalyzer {
         let func_type = CType::new(
             TypeKind::Function {
                 return_type: Box::new(func.return_type.clone()),
-                params: func.params.iter().map(|p| (p.name.clone(), p.ty.clone())).collect(),
+                params: func
+                    .params
+                    .iter()
+                    .map(|p| (p.name.clone(), p.ty.clone()))
+                    .collect(),
                 variadic: func.variadic,
             },
             func.span,
@@ -134,9 +144,9 @@ impl SemanticAnalyzer {
                         kind: SymbolKind::Parameter,
                         ty: param.ty.clone(),
                     };
-                    self.scope.define(symbol).map_err(|e| {
-                        CompileError::semantic(e, param.span)
-                    })?;
+                    self.scope
+                        .define(symbol)
+                        .map_err(|e| CompileError::semantic(e, param.span))?;
                 }
             }
 
@@ -175,9 +185,9 @@ impl SemanticAnalyzer {
                 members: struct_members,
             };
 
-            self.scope.define_struct(def).map_err(|e| {
-                CompileError::semantic(e, s.span)
-            })?;
+            self.scope
+                .define_struct(def)
+                .map_err(|e| CompileError::semantic(e, s.span))?;
         }
         Ok(())
     }
@@ -195,9 +205,9 @@ impl SemanticAnalyzer {
                 members: union_members,
             };
 
-            self.scope.define_union(def).map_err(|e| {
-                CompileError::semantic(e, u.span)
-            })?;
+            self.scope
+                .define_union(def)
+                .map_err(|e| CompileError::semantic(e, u.span))?;
         }
         Ok(())
     }
@@ -206,22 +216,22 @@ impl SemanticAnalyzer {
         // Register enum constants
         if let Some(variants) = &e.variants {
             for variant in variants {
-                let value = variant.value.as_ref().map(|e| {
+                let value = variant.value.as_ref().map_or(0, |e| {
                     if let ExprKind::IntLiteral(v) = &e.kind {
                         *v
                     } else {
                         0
                     }
-                }).unwrap_or(0);
+                });
 
                 let symbol = Symbol {
                     name: variant.name.clone(),
                     kind: SymbolKind::EnumConstant(value),
                     ty: CType::int(variant.span),
                 };
-                self.scope.define(symbol).map_err(|err| {
-                    CompileError::semantic(err, variant.span)
-                })?;
+                self.scope
+                    .define(symbol)
+                    .map_err(|err| CompileError::semantic(err, variant.span))?;
             }
         }
         Ok(())
@@ -233,9 +243,9 @@ impl SemanticAnalyzer {
             kind: SymbolKind::Typedef,
             ty: t.ty.clone(),
         };
-        self.scope.define(symbol).map_err(|e| {
-            CompileError::semantic(e, t.span)
-        })?;
+        self.scope
+            .define(symbol)
+            .map_err(|e| CompileError::semantic(e, t.span))?;
         Ok(())
     }
 
@@ -260,7 +270,11 @@ impl SemanticAnalyzer {
                 self.analyze_block(block)?;
                 self.scope.pop_to_parent();
             }
-            StmtKind::If { condition, then_branch, else_branch } => {
+            StmtKind::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
                 self.analyze_expr(condition)?;
                 self.analyze_stmt(then_branch)?;
                 if let Some(else_branch) = else_branch {
@@ -281,13 +295,22 @@ impl SemanticAnalyzer {
                 self.in_loop = was_in_loop;
                 self.analyze_expr(condition)?;
             }
-            StmtKind::For { init, condition, update, body } => {
+            StmtKind::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
                 self.scope.push_child();
 
                 if let Some(init) = init {
-                    match init {
-                        ForInit::Expr(expr) => { self.analyze_expr(expr)?; }
-                        ForInit::Declaration(decl) => { self.analyze_declaration(decl)?; }
+                    match init.as_mut() {
+                        ForInit::Expr(expr) => {
+                            self.analyze_expr(expr)?;
+                        }
+                        ForInit::Declaration(decl) => {
+                            self.analyze_declaration(decl)?;
+                        }
                     }
                 }
                 if let Some(cond) = condition {
@@ -326,7 +349,10 @@ impl SemanticAnalyzer {
             }
             StmtKind::Break => {
                 if !self.in_loop && !self.in_switch {
-                    return Err(CompileError::semantic("break outside loop or switch", stmt.span));
+                    return Err(CompileError::semantic(
+                        "break outside loop or switch",
+                        stmt.span,
+                    ));
                 }
             }
             StmtKind::Continue => {
@@ -346,9 +372,9 @@ impl SemanticAnalyzer {
             }
             StmtKind::Label { name, stmt } => {
                 // Define the label
-                self.scope.define_label(name).map_err(|e| {
-                    CompileError::semantic(e, stmt.span)
-                })?;
+                self.scope
+                    .define_label(name)
+                    .map_err(|e| CompileError::semantic(e, stmt.span))?;
                 self.analyze_stmt(stmt)?;
             }
             StmtKind::Declaration(decl) => {
@@ -370,7 +396,7 @@ impl SemanticAnalyzer {
                     sym.ty.clone()
                 } else {
                     return Err(CompileError::semantic(
-                        format!("undefined identifier '{}'", name),
+                        format!("undefined identifier '{name}'"),
                         expr.span,
                     ));
                 }
@@ -384,9 +410,7 @@ impl SemanticAnalyzer {
                 left_ty
             }
 
-            ExprKind::Unary { operand, .. } => {
-                self.analyze_expr(operand)?
-            }
+            ExprKind::Unary { operand, .. } => self.analyze_expr(operand)?,
 
             ExprKind::Assign { target, value, .. } => {
                 let target_ty = self.analyze_expr(target)?;
@@ -394,7 +418,11 @@ impl SemanticAnalyzer {
                 target_ty
             }
 
-            ExprKind::Ternary { condition, then_expr, else_expr } => {
+            ExprKind::Ternary {
+                condition,
+                then_expr,
+                else_expr,
+            } => {
                 self.analyze_expr(condition)?;
                 let then_ty = self.analyze_expr(then_expr)?;
                 let _else_ty = self.analyze_expr(else_expr)?;
@@ -422,10 +450,12 @@ impl SemanticAnalyzer {
                 match array_ty.kind {
                     TypeKind::Array { element, .. } => *element,
                     TypeKind::Pointer(inner) => *inner,
-                    _ => return Err(CompileError::type_error(
-                        "subscripted value is not an array or pointer",
-                        expr.span,
-                    )),
+                    _ => {
+                        return Err(CompileError::type_error(
+                            "subscripted value is not an array or pointer",
+                            expr.span,
+                        ));
+                    }
                 }
             }
 
@@ -439,14 +469,16 @@ impl SemanticAnalyzer {
                             }
                         }
                         return Err(CompileError::type_error(
-                            format!("no member named '{}' in struct", field),
+                            format!("no member named '{field}' in struct"),
                             expr.span,
                         ));
                     }
-                    _ => return Err(CompileError::type_error(
-                        "member access on non-struct type",
-                        expr.span,
-                    )),
+                    _ => {
+                        return Err(CompileError::type_error(
+                            "member access on non-struct type",
+                            expr.span,
+                        ));
+                    }
                 }
             }
 
@@ -461,21 +493,22 @@ impl SemanticAnalyzer {
                                 }
                             }
                             return Err(CompileError::type_error(
-                                format!("no member named '{}' in struct", field),
+                                format!("no member named '{field}' in struct"),
                                 expr.span,
                             ));
                         }
-                        _ => return Err(CompileError::type_error(
-                            "member access on non-struct type",
-                            expr.span,
-                        )),
+                        _ => {
+                            return Err(CompileError::type_error(
+                                "member access on non-struct type",
+                                expr.span,
+                            ));
+                        }
                     }
-                } else {
-                    return Err(CompileError::type_error(
-                        "arrow operator on non-pointer type",
-                        expr.span,
-                    ));
                 }
+                return Err(CompileError::type_error(
+                    "arrow operator on non-pointer type",
+                    expr.span,
+                ));
             }
 
             ExprKind::Cast { ty, expr: inner } => {
@@ -485,7 +518,9 @@ impl SemanticAnalyzer {
 
             ExprKind::Sizeof(arg) => {
                 match arg {
-                    SizeofArg::Expr(e) => { self.analyze_expr(e)?; }
+                    SizeofArg::Expr(e) => {
+                        self.analyze_expr(e)?;
+                    }
                     SizeofArg::Type(_) => {}
                 }
                 // sizeof returns size_t, but we'll use unsigned long
@@ -509,10 +544,10 @@ impl SemanticAnalyzer {
                 }
             }
 
-            ExprKind::PreIncrement(operand) | ExprKind::PreDecrement(operand) |
-            ExprKind::PostIncrement(operand) | ExprKind::PostDecrement(operand) => {
-                self.analyze_expr(operand)?
-            }
+            ExprKind::PreIncrement(operand)
+            | ExprKind::PreDecrement(operand)
+            | ExprKind::PostIncrement(operand)
+            | ExprKind::PostDecrement(operand) => self.analyze_expr(operand)?,
 
             ExprKind::Comma(exprs) => {
                 let mut last_ty = CType::void(expr.span);
@@ -534,7 +569,11 @@ impl SemanticAnalyzer {
         Ok(ty)
     }
 
-    fn analyze_initializer(&mut self, init: &mut Initializer, _expected_ty: &CType) -> CompileResult<()> {
+    fn analyze_initializer(
+        &mut self,
+        init: &mut Initializer,
+        _expected_ty: &CType,
+    ) -> CompileResult<()> {
         match init {
             Initializer::Expr(expr) => {
                 self.analyze_expr(expr)?;

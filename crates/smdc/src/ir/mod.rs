@@ -2,8 +2,8 @@
 //!
 //! Three-address code IR for optimization and code generation.
 
-mod inst;
 mod builder;
+mod inst;
 
-pub use inst::*;
 pub use builder::IrBuilder;
+pub use inst::*;

@@ -3,17 +3,17 @@
 //! This backend generates Motorola 68000 assembly code from the shared IR,
 //! targeting the Sega Megadrive/Genesis console.
 
-mod m68k;
+mod assembler;
 mod emit;
 mod encoder;
-mod assembler;
+mod m68k;
 pub mod sdk;
 
-pub use m68k::*;
-pub use emit::CodeGenerator;
-pub use encoder::{InstructionEncoder, EncodeError};
 pub use assembler::Assembler;
-pub use sdk::{SdkRegistry, SdkFunction, SdkFunctionKind};
+pub use emit::CodeGenerator;
+pub use encoder::{EncodeError, InstructionEncoder};
+pub use m68k::*;
+pub use sdk::{SdkFunction, SdkFunctionKind, SdkRegistry};
 
 use crate::backend::{Backend, BackendConfig, BackendOutput, OutputFormat};
 use crate::common::CompileResult;
@@ -50,6 +50,7 @@ impl Backend for M68kBackend {
     fn generate(
         &self,
         module: &IrModule,
+        _ctx: &crate::frontend::CompileContext,
         config: &BackendConfig,
     ) -> CompileResult<BackendOutput> {
         if config.verbose {

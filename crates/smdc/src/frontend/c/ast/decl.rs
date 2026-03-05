@@ -148,7 +148,11 @@ pub struct StructDecl {
 
 impl StructDecl {
     pub fn new(name: Option<String>, members: Option<Vec<StructMember>>, span: Span) -> Self {
-        Self { name, members, span }
+        Self {
+            name,
+            members,
+            span,
+        }
     }
 }
 
@@ -182,7 +186,11 @@ pub struct UnionDecl {
 
 impl UnionDecl {
     pub fn new(name: Option<String>, members: Option<Vec<StructMember>>, span: Span) -> Self {
-        Self { name, members, span }
+        Self {
+            name,
+            members,
+            span,
+        }
     }
 }
 
@@ -196,7 +204,11 @@ pub struct EnumDecl {
 
 impl EnumDecl {
     pub fn new(name: Option<String>, variants: Option<Vec<EnumVariant>>, span: Span) -> Self {
-        Self { name, variants, span }
+        Self {
+            name,
+            variants,
+            span,
+        }
     }
 }
 

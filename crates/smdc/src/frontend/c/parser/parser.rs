@@ -1,7 +1,7 @@
 //! Recursive descent parser for C
 
-use crate::frontend::c::ast::*;
 use crate::common::{CompileError, CompileResult, Span};
+use crate::frontend::c::ast::*;
 use crate::frontend::c::lexer::{Lexer, Token, TokenKind};
 
 /// Recursive descent parser for C
@@ -90,7 +90,12 @@ impl<'a> Parser<'a> {
                 TypeKind::Struct { name, members } => Ok(Declaration::new(
                     DeclKind::Struct(StructDecl::new(
                         name,
-                        Some(members.into_iter().map(|(n, t)| StructMember::new(n, t, span)).collect()),
+                        Some(
+                            members
+                                .into_iter()
+                                .map(|(n, t)| StructMember::new(n, t, span))
+                                .collect(),
+                        ),
                         span,
                     )),
                     span,
@@ -98,7 +103,12 @@ impl<'a> Parser<'a> {
                 TypeKind::Union { name, members } => Ok(Declaration::new(
                     DeclKind::Union(UnionDecl::new(
                         name,
-                        Some(members.into_iter().map(|(n, t)| StructMember::new(n, t, span)).collect()),
+                        Some(
+                            members
+                                .into_iter()
+                                .map(|(n, t)| StructMember::new(n, t, span))
+                                .collect(),
+                        ),
                         span,
                     )),
                     span,
@@ -106,9 +116,18 @@ impl<'a> Parser<'a> {
                 TypeKind::Enum { name, variants } => Ok(Declaration::new(
                     DeclKind::Enum(EnumDecl::new(
                         name,
-                        Some(variants.into_iter().map(|(n, v)| {
-                            EnumVariant::new(n, v.map(|val| Expr::new(ExprKind::IntLiteral(val), span)), span)
-                        }).collect()),
+                        Some(
+                            variants
+                                .into_iter()
+                                .map(|(n, v)| {
+                                    EnumVariant::new(
+                                        n,
+                                        v.map(|val| Expr::new(ExprKind::IntLiteral(val), span)),
+                                        span,
+                                    )
+                                })
+                                .collect(),
+                        ),
                         span,
                     )),
                     span,
@@ -126,7 +145,12 @@ impl<'a> Parser<'a> {
             let body = self.parse_block()?;
             let span = start_span.merge(body.span);
 
-            if let TypeKind::Function { return_type, params, variadic } = ty.kind {
+            if let TypeKind::Function {
+                return_type,
+                params,
+                variadic,
+            } = ty.kind
+            {
                 let params: Vec<ParamDecl> = params
                     .into_iter()
                     .map(|(name, ty)| ParamDecl::new(name, ty, span))
@@ -147,10 +171,18 @@ impl<'a> Parser<'a> {
                     span,
                 ))
             }
-        } else if self.check(&TokenKind::Semi) || self.check(&TokenKind::Comma) || self.check(&TokenKind::Eq) {
+        } else if self.check(&TokenKind::Semi)
+            || self.check(&TokenKind::Comma)
+            || self.check(&TokenKind::Eq)
+        {
             // Variable declaration or function declaration
             self.parse_declaration_rest(name, ty, storage_class, start_span)
-        } else if let TypeKind::Function { return_type, params, variadic } = &ty.kind {
+        } else if let TypeKind::Function {
+            return_type,
+            params,
+            variadic,
+        } = &ty.kind
+        {
             // K&R-style function definition - parameter declarations between ) and {
             // Parse K&R parameter declarations
             let mut kr_params = params.clone();
@@ -161,7 +193,8 @@ impl<'a> Parser<'a> {
 
                 // Parse declarator(s) - may be multiple like "int a, b;"
                 loop {
-                    let (param_name, param_type) = self.parse_declarator(param_base_type.clone())?;
+                    let (param_name, param_type) =
+                        self.parse_declarator(param_base_type.clone())?;
 
                     // Find and update the corresponding parameter
                     for (name, param_ty) in &mut kr_params {
@@ -213,7 +246,12 @@ impl<'a> Parser<'a> {
         start_span: Span,
     ) -> CompileResult<Declaration> {
         // Check for function declaration
-        if let TypeKind::Function { return_type, params, variadic } = first_type.kind {
+        if let TypeKind::Function {
+            return_type,
+            params,
+            variadic,
+        } = first_type.kind
+        {
             self.expect(TokenKind::Semi)?;
             let span = start_span.merge(self.current.span);
 
@@ -222,8 +260,8 @@ impl<'a> Parser<'a> {
                 .map(|(name, ty)| ParamDecl::new(name, ty, span))
                 .collect();
 
-            let mut func = FuncDecl::new(first_name, *return_type, params, span)
-                .with_variadic(variadic);
+            let mut func =
+                FuncDecl::new(first_name, *return_type, params, span).with_variadic(variadic);
 
             if let Some(sc) = storage_class {
                 func = func.with_storage_class(sc);
@@ -240,7 +278,7 @@ impl<'a> Parser<'a> {
         };
 
         let mut var = VarDecl::new(first_name, first_type.clone(), start_span);
-        if let Some(sc) = storage_class.clone() {
+        if let Some(sc) = storage_class {
             var = var.with_storage_class(sc);
         }
         if let Some(init) = init {
@@ -262,7 +300,7 @@ impl<'a> Parser<'a> {
             };
 
             let mut var = VarDecl::new(name, ty, start_span);
-            if let Some(sc) = storage_class.clone() {
+            if let Some(sc) = storage_class {
                 var = var.with_storage_class(sc);
             }
             if let Some(init) = init {
@@ -285,7 +323,10 @@ impl<'a> Parser<'a> {
         for var in &mut declarations {
             var.span = span;
         }
-        Ok(Declaration::new(DeclKind::MultipleVariables(declarations), span))
+        Ok(Declaration::new(
+            DeclKind::MultipleVariables(declarations),
+            span,
+        ))
     }
 
     /// Extract base type (strip pointers and arrays from first declarator for subsequent declarators)
@@ -398,19 +439,28 @@ impl<'a> Parser<'a> {
                     self.advance()?;
                     let ty = self.parse_struct_or_union(true)?;
                     let span = start_span.merge(self.current.span);
-                    return Ok((storage_class, CType::new(ty, span).with_qualifiers(qualifiers)));
+                    return Ok((
+                        storage_class,
+                        CType::new(ty, span).with_qualifiers(qualifiers),
+                    ));
                 }
                 TokenKind::Union => {
                     self.advance()?;
                     let ty = self.parse_struct_or_union(false)?;
                     let span = start_span.merge(self.current.span);
-                    return Ok((storage_class, CType::new(ty, span).with_qualifiers(qualifiers)));
+                    return Ok((
+                        storage_class,
+                        CType::new(ty, span).with_qualifiers(qualifiers),
+                    ));
                 }
                 TokenKind::Enum => {
                     self.advance()?;
                     let ty = self.parse_enum()?;
                     let span = start_span.merge(self.current.span);
-                    return Ok((storage_class, CType::new(ty, span).with_qualifiers(qualifiers)));
+                    return Ok((
+                        storage_class,
+                        CType::new(ty, span).with_qualifiers(qualifiers),
+                    ));
                 }
 
                 // Typedef name (identifier that is a type)
@@ -428,13 +478,20 @@ impl<'a> Parser<'a> {
         let kind = self.type_from_specifiers(&type_specs, signed)?;
         let span = start_span.merge(self.current.span);
 
-        Ok((storage_class, CType::new(kind, span).with_qualifiers(qualifiers)))
+        Ok((
+            storage_class,
+            CType::new(kind, span).with_qualifiers(qualifiers),
+        ))
     }
 
-    fn type_from_specifiers(&self, specs: &[&str], signed: Option<bool>) -> CompileResult<TypeKind> {
+    fn type_from_specifiers(
+        &self,
+        specs: &[&str],
+        signed: Option<bool>,
+    ) -> CompileResult<TypeKind> {
         let signed = signed.unwrap_or(true);
 
-        match specs.as_ref() {
+        match specs {
             [] | ["int"] => Ok(TypeKind::Int { signed }),
             ["void"] => Ok(TypeKind::Void),
             ["char"] => Ok(TypeKind::Char { signed }),
@@ -446,7 +503,7 @@ impl<'a> Parser<'a> {
             ["long", "double"] => Ok(TypeKind::Double), // Treat as double
             ["_Bool"] => Ok(TypeKind::Char { signed: false }), // _Bool as unsigned char
             _ => Err(CompileError::parser(
-                format!("invalid type specifier combination: {:?}", specs),
+                format!("invalid type specifier combination: {specs:?}"),
                 self.current.span,
             )),
         }
@@ -602,7 +659,10 @@ impl<'a> Parser<'a> {
             return Ok((name, ty));
         } else {
             return Err(CompileError::parser(
-                format!("expected identifier in declarator, found {}", self.current.kind),
+                format!(
+                    "expected identifier in declarator, found {}",
+                    self.current.kind
+                ),
                 self.current.span,
             ));
         };
@@ -714,7 +774,10 @@ impl<'a> Parser<'a> {
         match &self.current.kind {
             TokenKind::LBrace => {
                 let block = self.parse_block()?;
-                Ok(Stmt::new(StmtKind::Block(block), start_span.merge(self.current.span)))
+                Ok(Stmt::new(
+                    StmtKind::Block(block),
+                    start_span.merge(self.current.span),
+                ))
             }
 
             TokenKind::If => self.parse_if_statement(),
@@ -785,7 +848,7 @@ impl<'a> Parser<'a> {
                 items.push(BlockItem::Declaration(decl));
             } else {
                 let stmt = self.parse_statement()?;
-                items.push(BlockItem::Statement(stmt));
+                items.push(BlockItem::Statement(Box::new(stmt)));
             }
         }
 
@@ -914,7 +977,7 @@ impl<'a> Parser<'a> {
 
         Ok(Stmt::new(
             StmtKind::For {
-                init,
+                init: init.map(Box::new),
                 condition,
                 update,
                 body,
@@ -961,14 +1024,20 @@ impl<'a> Parser<'a> {
         let start_span = self.current.span;
         self.expect(TokenKind::Break)?;
         self.expect(TokenKind::Semi)?;
-        Ok(Stmt::new(StmtKind::Break, start_span.merge(self.current.span)))
+        Ok(Stmt::new(
+            StmtKind::Break,
+            start_span.merge(self.current.span),
+        ))
     }
 
     fn parse_continue_statement(&mut self) -> CompileResult<Stmt> {
         let start_span = self.current.span;
         self.expect(TokenKind::Continue)?;
         self.expect(TokenKind::Semi)?;
-        Ok(Stmt::new(StmtKind::Continue, start_span.merge(self.current.span)))
+        Ok(Stmt::new(
+            StmtKind::Continue,
+            start_span.merge(self.current.span),
+        ))
     }
 
     fn parse_return_statement(&mut self) -> CompileResult<Stmt> {
@@ -996,7 +1065,10 @@ impl<'a> Parser<'a> {
             self.advance()?;
             n
         } else {
-            return Err(CompileError::parser("expected label name", self.current.span));
+            return Err(CompileError::parser(
+                "expected label name",
+                self.current.span,
+            ));
         };
 
         self.expect(TokenKind::Semi)?;
@@ -1389,7 +1461,8 @@ impl<'a> Parser<'a> {
                     if self.current.kind.can_start_declaration() {
                         let (_, ty) = self.parse_declaration_specifiers()?;
                         // Handle abstract declarator
-                        let ty = if self.check(&TokenKind::Star) || self.check(&TokenKind::LBracket) {
+                        let ty = if self.check(&TokenKind::Star) || self.check(&TokenKind::LBracket)
+                        {
                             let (_, ty) = self.parse_declarator(ty)?;
                             ty
                         } else {
@@ -1397,17 +1470,23 @@ impl<'a> Parser<'a> {
                         };
                         self.expect(TokenKind::RParen)?;
                         let span = start_span.merge(self.current.span);
-                        return Ok(Expr::new(ExprKind::Sizeof(SizeofArg::Type(ty)), span));
+                        Ok(Expr::new(ExprKind::Sizeof(SizeofArg::Type(ty)), span))
                     } else {
                         let expr = self.parse_expression()?;
                         self.expect(TokenKind::RParen)?;
                         let span = start_span.merge(self.current.span);
-                        return Ok(Expr::new(ExprKind::Sizeof(SizeofArg::Expr(Box::new(expr))), span));
+                        Ok(Expr::new(
+                            ExprKind::Sizeof(SizeofArg::Expr(Box::new(expr))),
+                            span,
+                        ))
                     }
                 } else {
                     let operand = self.parse_unary_expression()?;
                     let span = start_span.merge(operand.span);
-                    Ok(Expr::new(ExprKind::Sizeof(SizeofArg::Expr(Box::new(operand))), span))
+                    Ok(Expr::new(
+                        ExprKind::Sizeof(SizeofArg::Expr(Box::new(operand))),
+                        span,
+                    ))
                 }
             }
             // Cast expression: (type)expr
@@ -1475,7 +1554,13 @@ impl<'a> Parser<'a> {
                 }
             };
             self.expect(TokenKind::RBracket)?;
-            ty = CType::new(TypeKind::Array { element: Box::new(ty), size }, span);
+            ty = CType::new(
+                TypeKind::Array {
+                    element: Box::new(ty),
+                    size,
+                },
+                span,
+            );
         }
 
         Ok(ty)
@@ -1520,7 +1605,10 @@ impl<'a> Parser<'a> {
                         self.advance()?;
                         n
                     } else {
-                        return Err(CompileError::parser("expected field name", self.current.span));
+                        return Err(CompileError::parser(
+                            "expected field name",
+                            self.current.span,
+                        ));
                     };
                     let span = start_span.merge(self.current.span);
                     expr = Expr::new(
@@ -1538,7 +1626,10 @@ impl<'a> Parser<'a> {
                         self.advance()?;
                         n
                     } else {
-                        return Err(CompileError::parser("expected field name", self.current.span));
+                        return Err(CompileError::parser(
+                            "expected field name",
+                            self.current.span,
+                        ));
                     };
                     let span = start_span.merge(self.current.span);
                     expr = Expr::new(
@@ -1610,7 +1701,10 @@ impl<'a> Parser<'a> {
             TokenKind::FloatLiteral(s) => {
                 let s = s.clone();
                 self.advance()?;
-                let value: f64 = s.trim_end_matches(['f', 'F', 'l', 'L']).parse().unwrap_or(0.0);
+                let value: f64 = s
+                    .trim_end_matches(['f', 'F', 'l', 'L'])
+                    .parse()
+                    .unwrap_or(0.0);
                 Ok(Expr::new(ExprKind::FloatLiteral(value), span))
             }
             TokenKind::CharLiteral(s) => {
@@ -1650,7 +1744,7 @@ impl<'a> Parser<'a> {
     fn parse_int_literal(&self, s: &str) -> CompileResult<i64> {
         let s = s.trim_end_matches(['u', 'U', 'l', 'L']);
         s.parse().map_err(|_| {
-            CompileError::parser(format!("invalid integer literal: {}", s), self.current.span)
+            CompileError::parser(format!("invalid integer literal: {s}"), self.current.span)
         })
     }
 
@@ -1658,7 +1752,7 @@ impl<'a> Parser<'a> {
         let s = s.trim_start_matches("0x").trim_start_matches("0X");
         let s = s.trim_end_matches(['u', 'U', 'l', 'L']);
         i64::from_str_radix(s, 16).map_err(|_| {
-            CompileError::parser(format!("invalid hex literal: {}", s), self.current.span)
+            CompileError::parser(format!("invalid hex literal: {s}"), self.current.span)
         })
     }
 
@@ -1669,7 +1763,7 @@ impl<'a> Parser<'a> {
             return Ok(0);
         }
         i64::from_str_radix(s, 8).map_err(|_| {
-            CompileError::parser(format!("invalid octal literal: {}", s), self.current.span)
+            CompileError::parser(format!("invalid octal literal: {s}"), self.current.span)
         })
     }
 
@@ -1677,7 +1771,7 @@ impl<'a> Parser<'a> {
         let s = s.trim_start_matches("0b").trim_start_matches("0B");
         let s = s.trim_end_matches(['u', 'U', 'l', 'L']);
         i64::from_str_radix(s, 2).map_err(|_| {
-            CompileError::parser(format!("invalid binary literal: {}", s), self.current.span)
+            CompileError::parser(format!("invalid binary literal: {s}"), self.current.span)
         })
     }
 
@@ -1686,8 +1780,7 @@ impl<'a> Parser<'a> {
         if inner.starts_with('\\') {
             let mut chars = inner.chars().peekable();
             chars.next(); // consume backslash
-            self.parse_escape_sequence(&mut chars)
-                .map(|c| c as char)
+            self.parse_escape_sequence(&mut chars).map(|c| c as char)
         } else {
             Ok(inner.chars().next().unwrap_or('\0'))
         }
@@ -1711,7 +1804,10 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse an escape sequence after the backslash
-    fn parse_escape_sequence(&self, chars: &mut std::iter::Peekable<std::str::Chars>) -> CompileResult<u8> {
+    fn parse_escape_sequence(
+        &self,
+        chars: &mut std::iter::Peekable<std::str::Chars>,
+    ) -> CompileResult<u8> {
         match chars.next() {
             Some('n') => Ok(b'\n'),
             Some('r') => Ok(b'\r'),
@@ -1719,13 +1815,14 @@ impl<'a> Parser<'a> {
             Some('0') => {
                 // Could be null or octal escape
                 // Check if next char is a digit (octal)
-                if chars.peek().map(|c| c.is_ascii_digit() && *c < '8').unwrap_or(false) {
+                if chars.peek().is_some_and(|c| c.is_ascii_digit() && *c < '8') {
                     // Octal escape: \0nn (up to 3 total octal digits including the leading 0)
                     let mut value: u32 = 0;
                     let mut count = 0;
-                    while count < 2 { // Already consumed '0', so 2 more digits max
+                    while count < 2 {
+                        // Already consumed '0', so 2 more digits max
                         if let Some(&c) = chars.peek() {
-                            if c >= '0' && c <= '7' {
+                            if ('0'..='7').contains(&c) {
                                 chars.next();
                                 value = value * 8 + (c as u32 - '0' as u32);
                                 count += 1;
@@ -1741,13 +1838,13 @@ impl<'a> Parser<'a> {
                     Ok(0) // Just \0 = null
                 }
             }
-            Some(c) if c >= '1' && c <= '7' => {
+            Some(c) if ('1'..='7').contains(&c) => {
                 // Octal escape: \nnn (1-3 octal digits)
                 let mut value: u32 = c as u32 - '0' as u32;
                 let mut count = 1;
                 while count < 3 {
                     if let Some(&next) = chars.peek() {
-                        if next >= '0' && next <= '7' {
+                        if ('0'..='7').contains(&next) {
                             chars.next();
                             value = value * 8 + (next as u32 - '0' as u32);
                             count += 1;
@@ -1843,7 +1940,10 @@ impl<'a> Parser<'a> {
                 self.advance()?;
                 n
             } else {
-                return Err(CompileError::parser("expected field name", self.current.span));
+                return Err(CompileError::parser(
+                    "expected field name",
+                    self.current.span,
+                ));
             };
             Ok(Designator::Field(name))
         } else if self.match_token(&TokenKind::LBracket)? {
@@ -1851,7 +1951,10 @@ impl<'a> Parser<'a> {
             self.expect(TokenKind::RBracket)?;
             Ok(Designator::Index(Box::new(index)))
         } else {
-            Err(CompileError::parser("expected designator", self.current.span))
+            Err(CompileError::parser(
+                "expected designator",
+                self.current.span,
+            ))
         }
     }
 }

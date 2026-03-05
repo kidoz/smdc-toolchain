@@ -1,6 +1,6 @@
 //! Rust expression AST nodes
 
-use super::{RustType, TypePath, Block, Pattern};
+use super::{Block, Pattern, RustType, TypePath};
 use crate::common::Span;
 
 /// A Rust expression
@@ -13,7 +13,11 @@ pub struct Expr {
 
 impl Expr {
     pub fn new(kind: ExprKind, span: Span) -> Self {
-        Self { kind, span, ty: None }
+        Self {
+            kind,
+            span,
+            ty: None,
+        }
     }
 }
 
@@ -47,10 +51,7 @@ pub enum ExprKind {
         right: Box<Expr>,
     },
     /// Unary operation: -x, !x, *x, &x
-    Unary {
-        op: UnaryOp,
-        operand: Box<Expr>,
-    },
+    Unary { op: UnaryOp, operand: Box<Expr> },
 
     /// Assignment: x = 5, x += 1
     Assign {
@@ -60,10 +61,7 @@ pub enum ExprKind {
     },
 
     /// Function/method call: foo(x, y)
-    Call {
-        callee: Box<Expr>,
-        args: Vec<Expr>,
-    },
+    Call { callee: Box<Expr>, args: Vec<Expr> },
     /// Method call: x.foo(y)
     MethodCall {
         receiver: Box<Expr>,
@@ -72,34 +70,19 @@ pub enum ExprKind {
     },
 
     /// Field access: x.field
-    Field {
-        object: Box<Expr>,
-        field: String,
-    },
+    Field { object: Box<Expr>, field: String },
     /// Tuple field access: x.0
-    TupleField {
-        object: Box<Expr>,
-        index: usize,
-    },
+    TupleField { object: Box<Expr>, index: usize },
     /// Index: array[i]
-    Index {
-        object: Box<Expr>,
-        index: Box<Expr>,
-    },
+    Index { object: Box<Expr>, index: Box<Expr> },
 
     /// Reference: &x, &mut x
-    Reference {
-        mutable: bool,
-        operand: Box<Expr>,
-    },
+    Reference { mutable: bool, operand: Box<Expr> },
     /// Dereference: *x
     Dereference(Box<Expr>),
 
     /// Type cast: x as i32
-    Cast {
-        expr: Box<Expr>,
-        ty: RustType,
-    },
+    Cast { expr: Box<Expr>, ty: RustType },
 
     /// Block expression: { ... }
     Block(Block),
@@ -112,10 +95,7 @@ pub enum ExprKind {
     },
 
     /// Loop: loop { }
-    Loop {
-        label: Option<String>,
-        body: Block,
-    },
+    Loop { label: Option<String>, body: Block },
     /// While loop: while cond { }
     While {
         label: Option<String>,
@@ -142,9 +122,7 @@ pub enum ExprKind {
         value: Option<Box<Expr>>,
     },
     /// Continue: continue, continue 'label
-    Continue {
-        label: Option<String>,
-    },
+    Continue { label: Option<String> },
     /// Return: return, return value
     Return(Option<Box<Expr>>),
 
@@ -160,10 +138,7 @@ pub enum ExprKind {
     /// Array: [a, b, c]
     Array(Vec<Expr>),
     /// Array with repeat: [0; 10]
-    ArrayRepeat {
-        value: Box<Expr>,
-        count: Box<Expr>,
-    },
+    ArrayRepeat { value: Box<Expr>, count: Box<Expr> },
 
     /// Struct literal: Foo { x: 1, y: 2 }
     Struct {
@@ -190,11 +165,11 @@ pub enum ExprKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinOp {
     // Arithmetic
-    Add,    // +
-    Sub,    // -
-    Mul,    // *
-    Div,    // /
-    Rem,    // %
+    Add, // +
+    Sub, // -
+    Mul, // *
+    Div, // /
+    Rem, // %
 
     // Bitwise
     BitAnd, // &
@@ -204,21 +179,24 @@ pub enum BinOp {
     Shr,    // >>
 
     // Logical
-    And,    // &&
-    Or,     // ||
+    And, // &&
+    Or,  // ||
 
     // Comparison
-    Eq,     // ==
-    Ne,     // !=
-    Lt,     // <
-    Le,     // <=
-    Gt,     // >
-    Ge,     // >=
+    Eq, // ==
+    Ne, // !=
+    Lt, // <
+    Le, // <=
+    Gt, // >
+    Ge, // >=
 }
 
 impl BinOp {
     pub fn is_comparison(&self) -> bool {
-        matches!(self, BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge)
+        matches!(
+            self,
+            BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge
+        )
     }
 
     pub fn is_logical(&self) -> bool {

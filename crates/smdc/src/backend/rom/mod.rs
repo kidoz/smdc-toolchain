@@ -6,18 +6,18 @@
 //! - Code and data sections
 //! - Calculated checksum
 
+mod builder;
+mod checksum;
 mod header;
 mod vectors;
-mod checksum;
-mod builder;
 
+pub use builder::RomBuilder;
+pub use checksum::{calculate_checksum, update_checksum, verify_checksum};
 pub use header::RomHeader;
 pub use vectors::VectorTable;
-pub use checksum::{calculate_checksum, update_checksum, verify_checksum};
-pub use builder::RomBuilder;
 
+use crate::backend::m68k::{Assembler, CodeGenerator};
 use crate::backend::{Backend, BackendConfig, BackendOutput, OutputFormat, RomConfig};
-use crate::backend::m68k::{CodeGenerator, Assembler};
 use crate::common::{CompileError, CompileResult};
 use crate::ir::IrModule;
 
@@ -38,9 +38,7 @@ impl RomBackend {
     }
 
     pub fn with_config(config: RomConfig) -> Self {
-        Self {
-            rom_config: config,
-        }
+        Self { rom_config: config }
     }
 
     /// Set the ROM configuration
@@ -56,8 +54,9 @@ impl RomBackend {
 
         // 2. Assemble to binary (code starts at 0x200 after header)
         let mut assembler = Assembler::new(self.rom_config.entry_point);
-        let code_binary = assembler.assemble(&instructions)
-            .map_err(|e| CompileError::backend(format!("assembly error: {}", e)))?;
+        let code_binary = assembler
+            .assemble(&instructions)
+            .map_err(|e| CompileError::backend(format!("assembly error: {e}")))?;
 
         // 3. Build ROM with actual code
         let mut builder = RomBuilder::new(self.rom_config.clone());
@@ -88,11 +87,12 @@ impl Backend for RomBackend {
     fn generate(
         &self,
         module: &IrModule,
+        _ctx: &crate::frontend::CompileContext,
         config: &BackendConfig,
     ) -> CompileResult<BackendOutput> {
         if config.output_format != OutputFormat::Binary {
             return Err(CompileError::backend(
-                "ROM backend only supports binary output format"
+                "ROM backend only supports binary output format",
             ));
         }
 

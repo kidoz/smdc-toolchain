@@ -10,6 +10,8 @@
 //!
 //! input::init();
 //!
+//! # let mut player_y = 0;
+//! # let shoot = || {};
 //! loop {
 //!     let buttons = input::read(0);
 //!
@@ -79,6 +81,8 @@ impl Buttons {
     ///
     /// # Example
     /// ```no_run
+    /// # use smd::input::{Buttons, Button};
+    /// # let buttons = Buttons::NONE;
     /// if buttons.contains(Button::A) {
     ///     // A is pressed
     /// }
@@ -173,9 +177,8 @@ pub fn read_raw(port: u8) -> u8 {
 
         // Set TH high to read A/Start
         ctrl.write_volatile(0x40);
-        let high = data.read_volatile();
 
-        high
+        data.read_volatile()
     }
 }
 
@@ -202,14 +205,30 @@ pub fn read(port: u8) -> Buttons {
     // Bit 6: A (when TH=1)
     // Bit 7: Start (when TH=1)
 
-    if (raw & 0x01) == 0 { buttons |= Button::UP as u16; }
-    if (raw & 0x02) == 0 { buttons |= Button::DOWN as u16; }
-    if (raw & 0x04) == 0 { buttons |= Button::LEFT as u16; }
-    if (raw & 0x08) == 0 { buttons |= Button::RIGHT as u16; }
-    if (raw & 0x10) == 0 { buttons |= Button::B as u16; }
-    if (raw & 0x20) == 0 { buttons |= Button::C as u16; }
-    if (raw & 0x40) == 0 { buttons |= Button::A as u16; }
-    if (raw & 0x80) == 0 { buttons |= Button::START as u16; }
+    if (raw & 0x01) == 0 {
+        buttons |= Button::UP as u16;
+    }
+    if (raw & 0x02) == 0 {
+        buttons |= Button::DOWN as u16;
+    }
+    if (raw & 0x04) == 0 {
+        buttons |= Button::LEFT as u16;
+    }
+    if (raw & 0x08) == 0 {
+        buttons |= Button::RIGHT as u16;
+    }
+    if (raw & 0x10) == 0 {
+        buttons |= Button::B as u16;
+    }
+    if (raw & 0x20) == 0 {
+        buttons |= Button::C as u16;
+    }
+    if (raw & 0x40) == 0 {
+        buttons |= Button::A as u16;
+    }
+    if (raw & 0x80) == 0 {
+        buttons |= Button::START as u16;
+    }
 
     Buttons(buttons)
 }

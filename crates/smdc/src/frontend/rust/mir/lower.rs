@@ -1,8 +1,8 @@
 //! Lower Rust AST to MIR
 
+use super::types::*;
 use crate::common::CompileResult;
 use crate::frontend::rust::ast::*;
-use super::types::*;
 use std::collections::{HashMap, HashSet};
 
 /// Lowers Rust AST to MIR
@@ -68,10 +68,7 @@ impl MirLowerer {
 
             // Store result in return local if there is a value
             if let Some(result) = result {
-                self.emit_assign(
-                    Place::local(LocalId(0)),
-                    Rvalue::Use(result),
-                );
+                self.emit_assign(Place::local(LocalId(0)), Rvalue::Use(result));
             }
 
             self.terminate(MirTerminator::Return);
@@ -124,24 +121,14 @@ impl MirLowerer {
 
     fn lower_expr(&mut self, expr: &Expr) -> CompileResult<Operand> {
         match &expr.kind {
-            ExprKind::IntLiteral(value) => {
-                Ok(Operand::Constant(MirConstant::Int(*value)))
-            }
-            ExprKind::FloatLiteral(value) => {
-                Ok(Operand::Constant(MirConstant::Float(*value)))
-            }
-            ExprKind::BoolLiteral(value) => {
-                Ok(Operand::Constant(MirConstant::Bool(*value)))
-            }
-            ExprKind::CharLiteral(value) => {
-                Ok(Operand::Constant(MirConstant::Char(*value)))
-            }
+            ExprKind::IntLiteral(value) => Ok(Operand::Constant(MirConstant::Int(*value))),
+            ExprKind::FloatLiteral(value) => Ok(Operand::Constant(MirConstant::Float(*value))),
+            ExprKind::BoolLiteral(value) => Ok(Operand::Constant(MirConstant::Bool(*value))),
+            ExprKind::CharLiteral(value) => Ok(Operand::Constant(MirConstant::Char(*value))),
             ExprKind::StringLiteral(value) => {
                 Ok(Operand::Constant(MirConstant::String(value.clone())))
             }
-            ExprKind::ByteLiteral(value) => {
-                Ok(Operand::Constant(MirConstant::Int(*value as i64)))
-            }
+            ExprKind::ByteLiteral(value) => Ok(Operand::Constant(MirConstant::Int(*value as i64))),
             ExprKind::ByteStringLiteral(bytes) => {
                 // Store as string for now
                 let s = String::from_utf8_lossy(bytes).to_string();
@@ -234,7 +221,10 @@ impl MirLowerer {
                         let result = self.new_temp(ty);
                         self.emit_assign(
                             Place::local(result),
-                            Rvalue::UnaryOp { op: mir_op, operand: operand_value },
+                            Rvalue::UnaryOp {
+                                op: mir_op,
+                                operand: operand_value,
+                            },
                         );
                         Ok(Operand::Copy(Place::local(result)))
                     }
@@ -267,7 +257,8 @@ impl MirLowerer {
             }
             ExprKind::Call { callee, args } => {
                 let func = self.lower_expr(callee)?;
-                let args: Vec<_> = args.iter()
+                let args: Vec<_> = args
+                    .iter()
                     .map(|a| self.lower_expr(a))
                     .collect::<CompileResult<_>>()?;
 
@@ -285,7 +276,11 @@ impl MirLowerer {
                 self.current_block = next_block;
                 Ok(Operand::Copy(Place::local(result)))
             }
-            ExprKind::MethodCall { receiver, method, args } => {
+            ExprKind::MethodCall {
+                receiver,
+                method,
+                args,
+            } => {
                 // Desugar to regular call
                 let receiver_op = self.lower_expr(receiver)?;
                 let mut all_args = vec![receiver_op];
@@ -327,7 +322,10 @@ impl MirLowerer {
                 let result = self.new_temp(ty);
                 self.emit_assign(
                     Place::local(result),
-                    Rvalue::Ref { mutable: *mutable, place },
+                    Rvalue::Ref {
+                        mutable: *mutable,
+                        place,
+                    },
                 );
                 Ok(Operand::Copy(Place::local(result)))
             }
@@ -340,7 +338,10 @@ impl MirLowerer {
                 let result = self.new_temp(ty.clone());
                 self.emit_assign(
                     Place::local(result),
-                    Rvalue::Cast { operand, ty: ty.clone() },
+                    Rvalue::Cast {
+                        operand,
+                        ty: ty.clone(),
+                    },
                 );
                 Ok(Operand::Copy(Place::local(result)))
             }
@@ -348,7 +349,11 @@ impl MirLowerer {
                 let result = self.lower_block(block)?;
                 Ok(result.unwrap_or(Operand::Constant(MirConstant::Unit)))
             }
-            ExprKind::If { condition, then_block, else_block } => {
+            ExprKind::If {
+                condition,
+                then_block,
+                else_block,
+            } => {
                 let cond = self.lower_expr(condition)?;
 
                 let then_bb = self.body.add_block();
@@ -392,7 +397,10 @@ impl MirLowerer {
                 let loop_bb = self.body.add_block();
                 let exit_bb = self.body.add_block();
 
-                let ty = expr.ty.clone().unwrap_or_else(|| RustType::never(expr.span));
+                let ty = expr
+                    .ty
+                    .clone()
+                    .unwrap_or_else(|| RustType::never(expr.span));
                 let result = self.new_temp(ty);
 
                 self.break_targets.push(exit_bb);
@@ -410,7 +418,9 @@ impl MirLowerer {
                 self.current_block = exit_bb;
                 Ok(Operand::Copy(Place::local(result)))
             }
-            ExprKind::While { condition, body, .. } => {
+            ExprKind::While {
+                condition, body, ..
+            } => {
                 let cond_bb = self.body.add_block();
                 let body_bb = self.body.add_block();
                 let exit_bb = self.body.add_block();
@@ -438,7 +448,12 @@ impl MirLowerer {
                 self.current_block = exit_bb;
                 Ok(Operand::Constant(MirConstant::Unit))
             }
-            ExprKind::For { pattern, iter, body, .. } => {
+            ExprKind::For {
+                pattern,
+                iter,
+                body,
+                ..
+            } => {
                 // Simplified: desugar to while loop over iterator
                 let _iter_val = self.lower_expr(iter)?;
 
@@ -489,7 +504,7 @@ impl MirLowerer {
                     // Check pattern type
                     match &arm.pattern.kind {
                         PatternKind::Literal(lit_expr) => {
-                            if let ExprKind::IntLiteral(value) = &(**lit_expr).kind {
+                            if let ExprKind::IntLiteral(value) = &lit_expr.kind {
                                 targets.push((*value, arm_bb));
                             }
                         }
@@ -526,13 +541,10 @@ impl MirLowerer {
                     self.current_block = arm_bb;
 
                     // Bind pattern variables
-                    if let PatternKind::Binding { name, .. } = &arm.pattern.kind {
-                        if let Some(&local) = self.locals_map.get(name) {
-                            self.emit_assign(
-                                Place::local(local),
-                                Rvalue::Use(scrutinee_val.clone()),
-                            );
-                        }
+                    if let PatternKind::Binding { name, .. } = &arm.pattern.kind
+                        && let Some(&local) = self.locals_map.get(name)
+                    {
+                        self.emit_assign(Place::local(local), Rvalue::Use(scrutinee_val.clone()));
                     }
 
                     let arm_result = self.lower_expr(&arm.body)?;
@@ -568,7 +580,8 @@ impl MirLowerer {
                 Ok(Operand::Constant(MirConstant::Unit))
             }
             ExprKind::Tuple(exprs) => {
-                let operands: Vec<_> = exprs.iter()
+                let operands: Vec<_> = exprs
+                    .iter()
                     .map(|e| self.lower_expr(e))
                     .collect::<CompileResult<_>>()?;
 
@@ -584,7 +597,8 @@ impl MirLowerer {
                 Ok(Operand::Copy(Place::local(result)))
             }
             ExprKind::Array(exprs) => {
-                let operands: Vec<_> = exprs.iter()
+                let operands: Vec<_> = exprs
+                    .iter()
                     .map(|e| self.lower_expr(e))
                     .collect::<CompileResult<_>>()?;
 
@@ -599,7 +613,11 @@ impl MirLowerer {
                 );
                 Ok(Operand::Copy(Place::local(result)))
             }
-            ExprKind::Struct { path, fields, rest: _ } => {
+            ExprKind::Struct {
+                path,
+                fields,
+                rest: _,
+            } => {
                 let mut operands = Vec::new();
                 for field in fields {
                     if let Some(value) = &field.value {
@@ -627,9 +645,7 @@ impl MirLowerer {
                 let result = self.lower_block(block)?;
                 Ok(result.unwrap_or(Operand::Constant(MirConstant::Unit)))
             }
-            ExprKind::Paren(inner) => {
-                self.lower_expr(inner)
-            }
+            ExprKind::Paren(inner) => self.lower_expr(inner),
             _ => {
                 // For unhandled cases, return unit
                 Ok(Operand::Constant(MirConstant::Unit))
@@ -682,7 +698,9 @@ impl MirLowerer {
     }
 
     fn emit_assign(&mut self, dest: Place, value: Rvalue) {
-        self.body.block_mut(self.current_block).push(MirStatement::Assign { dest, value });
+        self.body
+            .block_mut(self.current_block)
+            .push(MirStatement::Assign { dest, value });
     }
 
     fn terminate(&mut self, term: MirTerminator) {

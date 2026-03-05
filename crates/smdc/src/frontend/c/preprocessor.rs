@@ -66,7 +66,9 @@ impl Preprocessor {
     pub fn new(include_paths: Vec<PathBuf>) -> Self {
         // Get current date/time for predefined macros
         let now = std::time::SystemTime::now();
-        let datetime = now.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+        let datetime = now
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default();
         let secs = datetime.as_secs();
 
         // Simple date/time calculation (not perfect but good enough)
@@ -78,12 +80,13 @@ impl Preprocessor {
         let minute = ((secs % 3600) / 60) as u32;
         let second = (secs % 60) as u32;
 
-        let months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
-                      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+        let months = [
+            "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+        ];
         let month_name = months.get((month - 1) as usize).unwrap_or(&"Jan");
 
-        let date_str = format!("\"{} {:2} {}\"", month_name, day, year);
-        let time_str = format!("\"{:02}:{:02}:{:02}\"", hour, minute, second);
+        let date_str = format!("\"{month_name} {day:2} {year}\"");
+        let time_str = format!("\"{hour:02}:{minute:02}:{second:02}\"");
 
         let mut pp = Self {
             include_paths,
@@ -97,37 +100,55 @@ impl Preprocessor {
         };
 
         // Register predefined macros
-        pp.macros.insert("__STDC__".to_string(), MacroDef {
-            params: None,
-            body: "1".to_string(),
-            is_predefined: false,
-        });
-        pp.macros.insert("__STDC_VERSION__".to_string(), MacroDef {
-            params: None,
-            body: "199409L".to_string(), // C89 with amendments
-            is_predefined: false,
-        });
+        pp.macros.insert(
+            "__STDC__".to_string(),
+            MacroDef {
+                params: None,
+                body: "1".to_string(),
+                is_predefined: false,
+            },
+        );
+        pp.macros.insert(
+            "__STDC_VERSION__".to_string(),
+            MacroDef {
+                params: None,
+                body: "199409L".to_string(), // C89 with amendments
+                is_predefined: false,
+            },
+        );
         // __FILE__, __LINE__, __DATE__, __TIME__ are handled specially
-        pp.macros.insert("__FILE__".to_string(), MacroDef {
-            params: None,
-            body: String::new(),
-            is_predefined: true,
-        });
-        pp.macros.insert("__LINE__".to_string(), MacroDef {
-            params: None,
-            body: String::new(),
-            is_predefined: true,
-        });
-        pp.macros.insert("__DATE__".to_string(), MacroDef {
-            params: None,
-            body: String::new(),
-            is_predefined: true,
-        });
-        pp.macros.insert("__TIME__".to_string(), MacroDef {
-            params: None,
-            body: String::new(),
-            is_predefined: true,
-        });
+        pp.macros.insert(
+            "__FILE__".to_string(),
+            MacroDef {
+                params: None,
+                body: String::new(),
+                is_predefined: true,
+            },
+        );
+        pp.macros.insert(
+            "__LINE__".to_string(),
+            MacroDef {
+                params: None,
+                body: String::new(),
+                is_predefined: true,
+            },
+        );
+        pp.macros.insert(
+            "__DATE__".to_string(),
+            MacroDef {
+                params: None,
+                body: String::new(),
+                is_predefined: true,
+            },
+        );
+        pp.macros.insert(
+            "__TIME__".to_string(),
+            MacroDef {
+                params: None,
+                body: String::new(),
+                is_predefined: true,
+            },
+        );
 
         pp
     }
@@ -138,8 +159,7 @@ impl Preprocessor {
         self.current_file = source_path.to_path_buf();
         self.current_dir = source_path
             .parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| PathBuf::from("."));
+            .map_or_else(|| PathBuf::from("."), |p| p.to_path_buf());
 
         // Add source file to include stack to detect circular includes
         let mut pushed_root = false;
@@ -329,7 +349,8 @@ impl Preprocessor {
                 result.push('\n');
             } else if trimmed.starts_with("#include") {
                 if active {
-                    let (include_content, include_path) = self.parse_include_directive(trimmed, 0)?;
+                    let (include_content, include_path) =
+                        self.parse_include_directive(trimmed, 0)?;
                     result.push_str(&format!("#line 1 \"{}\"\n", include_path.display()));
                     result.push_str(&include_content);
                     if !include_content.ends_with('\n') {
@@ -377,7 +398,7 @@ impl Preprocessor {
                 result.push('\n');
             } else if trimmed.starts_with("#elif") {
                 // Check seen_else first before mutable borrow
-                let seen_else = cond_stack.last().map(|s| s.seen_else).unwrap_or(false);
+                let seen_else = cond_stack.last().is_some_and(|s| s.seen_else);
                 if seen_else {
                     return Err(CompileError::parser(
                         "#elif after #else",
@@ -387,9 +408,11 @@ impl Preprocessor {
 
                 let expr = trimmed.trim_start_matches("#elif").trim();
                 // Calculate parent_active before mutable borrow
-                let parent_active = cond_stack.len() <= 1 ||
-                    cond_stack[..cond_stack.len().saturating_sub(1)].iter().all(|s| s.active);
-                let any_branch_taken = cond_stack.last().map(|s| s.any_branch_taken).unwrap_or(false);
+                let parent_active = cond_stack.len() <= 1
+                    || cond_stack[..cond_stack.len().saturating_sub(1)]
+                        .iter()
+                        .all(|s| s.active);
+                let any_branch_taken = cond_stack.last().is_some_and(|s| s.any_branch_taken);
 
                 if let Some(state) = cond_stack.last_mut() {
                     if parent_active && !any_branch_taken {
@@ -406,7 +429,7 @@ impl Preprocessor {
                 result.push('\n');
             } else if trimmed.starts_with("#else") {
                 // Check seen_else first before mutable borrow
-                let seen_else = cond_stack.last().map(|s| s.seen_else).unwrap_or(false);
+                let seen_else = cond_stack.last().is_some_and(|s| s.seen_else);
                 if seen_else {
                     return Err(CompileError::parser(
                         "duplicate #else",
@@ -415,9 +438,11 @@ impl Preprocessor {
                 }
 
                 // Calculate parent_active before mutable borrow
-                let parent_active = cond_stack.len() <= 1 ||
-                    cond_stack[..cond_stack.len().saturating_sub(1)].iter().all(|s| s.active);
-                let any_branch_taken = cond_stack.last().map(|s| s.any_branch_taken).unwrap_or(false);
+                let parent_active = cond_stack.len() <= 1
+                    || cond_stack[..cond_stack.len().saturating_sub(1)]
+                        .iter()
+                        .all(|s| s.active);
+                let any_branch_taken = cond_stack.last().is_some_and(|s| s.any_branch_taken);
 
                 if let Some(state) = cond_stack.last_mut() {
                     state.seen_else = true;
@@ -453,7 +478,7 @@ impl Preprocessor {
                 if active {
                     let msg = trimmed.trim_start_matches("#error").trim();
                     return Err(CompileError::parser(
-                        format!("#error: {}", msg),
+                        format!("#error: {msg}"),
                         Span::new(0, trimmed.len()),
                     ));
                 }
@@ -581,36 +606,37 @@ impl Preprocessor {
         }
 
         // Handle ternary operator (lowest precedence)
-        if let Some((cond, rest)) = self.split_ternary(expr) {
-            if let Some((then_expr, else_expr)) = self.split_at_char(rest, ':') {
-                let cond_val = self.eval_expr(cond);
-                return if cond_val != 0 {
-                    self.eval_expr(then_expr)
-                } else {
-                    self.eval_expr(else_expr)
-                };
-            }
+        if let Some((cond, rest)) = self.split_ternary(expr)
+            && let Some((then_expr, else_expr)) = self.split_at_char(rest, ':')
+        {
+            let cond_val = self.eval_expr(cond);
+            return if cond_val != 0 {
+                self.eval_expr(then_expr)
+            } else {
+                self.eval_expr(else_expr)
+            };
         }
 
         // Handle logical OR (||)
         if let Some((left, right)) = self.split_binary_op(expr, "||") {
             let l = self.eval_expr(left);
             let r = self.eval_expr(right);
-            return if l != 0 || r != 0 { 1 } else { 0 };
+            return i64::from(l != 0 || r != 0);
         }
 
         // Handle logical AND (&&)
         if let Some((left, right)) = self.split_binary_op(expr, "&&") {
             let l = self.eval_expr(left);
             let r = self.eval_expr(right);
-            return if l != 0 && r != 0 { 1 } else { 0 };
+            return i64::from(l != 0 && r != 0);
         }
 
         // Handle bitwise OR (|)
-        if let Some((left, right)) = self.split_binary_op(expr, "|") {
-            if !right.starts_with('|') { // Avoid matching ||
-                return self.eval_expr(left) | self.eval_expr(right);
-            }
+        if let Some((left, right)) = self.split_binary_op(expr, "|")
+            && !right.starts_with('|')
+        {
+            // Avoid matching ||
+            return self.eval_expr(left) | self.eval_expr(right);
         }
 
         // Handle bitwise XOR (^)
@@ -619,50 +645,61 @@ impl Preprocessor {
         }
 
         // Handle bitwise AND (&)
-        if let Some((left, right)) = self.split_binary_op(expr, "&") {
-            if !right.starts_with('&') { // Avoid matching &&
-                return self.eval_expr(left) & self.eval_expr(right);
-            }
+        if let Some((left, right)) = self.split_binary_op(expr, "&")
+            && !right.starts_with('&')
+        {
+            // Avoid matching &&
+            return self.eval_expr(left) & self.eval_expr(right);
         }
 
         // Handle equality operators (==, !=)
         if let Some((left, right)) = self.split_binary_op(expr, "==") {
-            return if self.eval_expr(left) == self.eval_expr(right) { 1 } else { 0 };
+            return i64::from(self.eval_expr(left) == self.eval_expr(right));
         }
         if let Some((left, right)) = self.split_binary_op(expr, "!=") {
-            return if self.eval_expr(left) != self.eval_expr(right) { 1 } else { 0 };
+            return i64::from(self.eval_expr(left) != self.eval_expr(right));
         }
 
         // Handle relational operators (<=, >=, <, >)
         if let Some((left, right)) = self.split_binary_op(expr, "<=") {
-            return if self.eval_expr(left) <= self.eval_expr(right) { 1 } else { 0 };
+            return i64::from(self.eval_expr(left) <= self.eval_expr(right));
         }
         if let Some((left, right)) = self.split_binary_op(expr, ">=") {
-            return if self.eval_expr(left) >= self.eval_expr(right) { 1 } else { 0 };
+            return i64::from(self.eval_expr(left) >= self.eval_expr(right));
         }
-        if let Some((left, right)) = self.split_binary_op(expr, "<") {
-            if !right.starts_with('<') && !right.starts_with('=') {
-                return if self.eval_expr(left) < self.eval_expr(right) { 1 } else { 0 };
-            }
+        if let Some((left, right)) = self.split_binary_op(expr, "<")
+            && !right.starts_with('<')
+            && !right.starts_with('=')
+        {
+            return i64::from(self.eval_expr(left) < self.eval_expr(right));
         }
-        if let Some((left, right)) = self.split_binary_op(expr, ">") {
-            if !right.starts_with('>') && !right.starts_with('=') {
-                return if self.eval_expr(left) > self.eval_expr(right) { 1 } else { 0 };
-            }
+        if let Some((left, right)) = self.split_binary_op(expr, ">")
+            && !right.starts_with('>')
+            && !right.starts_with('=')
+        {
+            return i64::from(self.eval_expr(left) > self.eval_expr(right));
         }
 
         // Handle shift operators (<<, >>)
         if let Some((left, right)) = self.split_binary_op(expr, "<<") {
-            return self.eval_expr(left).wrapping_shl(self.eval_expr(right) as u32);
+            return self
+                .eval_expr(left)
+                .wrapping_shl(self.eval_expr(right) as u32);
         }
         if let Some((left, right)) = self.split_binary_op(expr, ">>") {
-            return self.eval_expr(left).wrapping_shr(self.eval_expr(right) as u32);
+            return self
+                .eval_expr(left)
+                .wrapping_shr(self.eval_expr(right) as u32);
         }
 
         // Handle additive operators (+, -)
         // Be careful with unary minus
         if let Some((left, right)) = self.split_additive(expr) {
-            let op = if expr[left.len()..].starts_with('+') { '+' } else { '-' };
+            let op = if expr[left.len()..].starts_with('+') {
+                '+'
+            } else {
+                '-'
+            };
             let l = self.eval_expr(left);
             let r = self.eval_expr(right);
             return if op == '+' { l + r } else { l - r };
@@ -674,18 +711,22 @@ impl Preprocessor {
         }
         if let Some((left, right)) = self.split_binary_op(expr, "/") {
             let r = self.eval_expr(right);
-            if r == 0 { return 0; }
+            if r == 0 {
+                return 0;
+            }
             return self.eval_expr(left) / r;
         }
         if let Some((left, right)) = self.split_binary_op(expr, "%") {
             let r = self.eval_expr(right);
-            if r == 0 { return 0; }
+            if r == 0 {
+                return 0;
+            }
             return self.eval_expr(left) % r;
         }
 
         // Handle unary operators
         if expr.starts_with('!') {
-            return if self.eval_expr(&expr[1..]) == 0 { 1 } else { 0 };
+            return i64::from(self.eval_expr(&expr[1..]) == 0);
         }
         if expr.starts_with('~') {
             return !self.eval_expr(&expr[1..]);
@@ -699,7 +740,7 @@ impl Preprocessor {
 
         // Handle parentheses
         if expr.starts_with('(') && expr.ends_with(')') {
-            let inner = &expr[1..expr.len()-1];
+            let inner = &expr[1..expr.len() - 1];
             // Check if the parens are balanced
             let mut depth = 0;
             let mut balanced = true;
@@ -723,7 +764,7 @@ impl Preprocessor {
 
         // Handle character literals
         if expr.starts_with('\'') && expr.ends_with('\'') && expr.len() >= 3 {
-            let inner = &expr[1..expr.len()-1];
+            let inner = &expr[1..expr.len() - 1];
             if inner.starts_with('\\') {
                 match inner.chars().nth(1) {
                     Some('n') => return b'\n' as i64,
@@ -735,9 +776,8 @@ impl Preprocessor {
                     Some(c) => return c as i64,
                     None => return 0,
                 }
-            } else {
-                return inner.chars().next().unwrap_or('\0') as i64;
             }
+            return inner.chars().next().unwrap_or('\0') as i64;
         }
 
         // Handle numeric literals
@@ -746,7 +786,10 @@ impl Preprocessor {
             i64::from_str_radix(&expr[2..], 16).unwrap_or(0)
         } else if expr.starts_with("0b") || expr.starts_with("0B") {
             i64::from_str_radix(&expr[2..], 2).unwrap_or(0)
-        } else if expr.starts_with('0') && expr.len() > 1 && expr.chars().skip(1).all(|c| c >= '0' && c <= '7') {
+        } else if expr.starts_with('0')
+            && expr.len() > 1
+            && expr.chars().skip(1).all(|c| ('0'..='7').contains(&c))
+        {
             i64::from_str_radix(&expr[1..], 8).unwrap_or(0)
         } else {
             expr.parse().unwrap_or(0)
@@ -761,7 +804,7 @@ impl Preprocessor {
                 '(' => depth += 1,
                 ')' => depth -= 1,
                 '?' if depth == 0 => {
-                    return Some((&expr[..i], &expr[i+1..]));
+                    return Some((&expr[..i], &expr[i + 1..]));
                 }
                 _ => {}
             }
@@ -777,7 +820,7 @@ impl Preprocessor {
                 '(' => depth += 1,
                 ')' => depth -= 1,
                 c if c == sep && depth == 0 => {
-                    return Some((&expr[..i], &expr[i+1..]));
+                    return Some((&expr[..i], &expr[i + 1..]));
                 }
                 _ => {}
             }
@@ -834,7 +877,12 @@ impl Preprocessor {
                     let right = &expr[i + 1..];
                     // Make sure this isn't a unary operator or part of another operator
                     let prev = chars.get(i.saturating_sub(1));
-                    if !left.is_empty() && !matches!(prev, Some('*') | Some('/') | Some('%') | Some('<') | Some('>') | Some('&') | Some('|') | Some('^') | Some('=') | Some('!') | Some('(')) {
+                    if !left.is_empty()
+                        && !matches!(
+                            prev,
+                            Some('*' | '/' | '%' | '<' | '>' | '&' | '|' | '^' | '=' | '!' | '(')
+                        )
+                    {
                         return Some((left.trim(), right.trim()));
                     }
                 }
@@ -860,23 +908,29 @@ impl Preprocessor {
         if let Some(paren_pos) = rest.find('(') {
             // Make sure there's no space before the paren (function-like macro requirement)
             let name = &rest[..paren_pos];
-            if !name.contains(char::is_whitespace) {
-                if let Some(end_paren) = rest.find(')') {
-                    let params_str = &rest[paren_pos + 1..end_paren];
-                    let params: Vec<String> = if params_str.trim().is_empty() {
-                        vec![]
-                    } else {
-                        params_str.split(',').map(|s| s.trim().to_string()).collect()
-                    };
-                    let body = rest[end_paren + 1..].trim().to_string();
+            if !name.contains(char::is_whitespace)
+                && let Some(end_paren) = rest.find(')')
+            {
+                let params_str = &rest[paren_pos + 1..end_paren];
+                let params: Vec<String> = if params_str.trim().is_empty() {
+                    vec![]
+                } else {
+                    params_str
+                        .split(',')
+                        .map(|s| s.trim().to_string())
+                        .collect()
+                };
+                let body = rest[end_paren + 1..].trim().to_string();
 
-                    self.macros.insert(name.to_string(), MacroDef {
+                self.macros.insert(
+                    name.to_string(),
+                    MacroDef {
                         params: Some(params),
                         body,
                         is_predefined: false,
-                    });
-                    return;
-                }
+                    },
+                );
+                return;
             }
         }
 
@@ -884,11 +938,14 @@ impl Preprocessor {
         let mut parts = rest.splitn(2, char::is_whitespace);
         if let Some(name) = parts.next() {
             let body = parts.next().unwrap_or("").trim().to_string();
-            self.macros.insert(name.to_string(), MacroDef {
-                params: None,
-                body,
-                is_predefined: false,
-            });
+            self.macros.insert(
+                name.to_string(),
+                MacroDef {
+                    params: None,
+                    body,
+                    is_predefined: false,
+                },
+            );
         }
     }
 
@@ -973,7 +1030,7 @@ impl Preprocessor {
                         if mac.is_predefined {
                             let expansion = match ident.as_str() {
                                 "__FILE__" => format!("\"{}\"", current_file.display()),
-                                "__LINE__" => format!("{}", logical_line),
+                                "__LINE__" => format!("{logical_line}"),
                                 "__DATE__" => self.date_str.clone(),
                                 "__TIME__" => self.time_str.clone(),
                                 _ => ident.clone(),
@@ -1003,7 +1060,7 @@ impl Preprocessor {
                                 let mut current_arg = String::new();
                                 let mut paren_depth = 1;
 
-                                while let Some(c) = chars.next() {
+                                for c in chars.by_ref() {
                                     match c {
                                         '(' => {
                                             paren_depth += 1;
@@ -1031,8 +1088,8 @@ impl Preprocessor {
                                 // Handle # (stringification)
                                 for (i, param) in params.iter().enumerate() {
                                     if let Some(arg) = args.get(i) {
-                                        let pattern = format!("#{}", param);
-                                        let stringified = format!("\"{}\"", arg);
+                                        let pattern = format!("#{param}");
+                                        let stringified = format!("\"{arg}\"");
                                         expanded = expanded.replace(&pattern, &stringified);
                                     }
                                 }
@@ -1041,14 +1098,14 @@ impl Preprocessor {
                                 for (i, param) in params.iter().enumerate() {
                                     if let Some(arg) = args.get(i) {
                                         // Pattern: identifier ## param
-                                        let pattern = format!(" ## {}", param);
+                                        let pattern = format!(" ## {param}");
                                         expanded = expanded.replace(&pattern, arg);
-                                        let pattern = format!("## {}", param);
+                                        let pattern = format!("## {param}");
                                         expanded = expanded.replace(&pattern, arg);
                                         // Pattern: param ## identifier
-                                        let pattern = format!("{} ##", param);
+                                        let pattern = format!("{param} ##");
                                         expanded = expanded.replace(&pattern, arg);
-                                        let pattern = format!("{}##", param);
+                                        let pattern = format!("{param}##");
                                         expanded = expanded.replace(&pattern, arg);
                                     }
                                 }
@@ -1111,7 +1168,7 @@ impl Preprocessor {
                     // Skip line comments
                     new_result.push(c);
                     let mut ended_with_newline = false;
-                    while let Some(c) = chars.next() {
+                    for c in chars.by_ref() {
                         new_result.push(c);
                         if c == '\n' {
                             logical_line += 1;
@@ -1148,7 +1205,11 @@ impl Preprocessor {
     }
 
     /// Parse an #include directive and return the included file contents
-    fn parse_include_directive(&mut self, line: &str, offset: usize) -> CompileResult<(String, PathBuf)> {
+    fn parse_include_directive(
+        &mut self,
+        line: &str,
+        offset: usize,
+    ) -> CompileResult<(String, PathBuf)> {
         // Extract the part after #include
         let rest = line.trim_start_matches("#include").trim();
 
@@ -1161,19 +1222,23 @@ impl Preprocessor {
         } else if rest.starts_with('"') {
             // Local include: #include "file"
             if let Some(end) = rest[1..].find('"') {
-                let filename = &rest[1..end + 1];
+                let filename = &rest[1..=end];
                 return self.include_local_file(filename, offset);
             }
         }
 
         Err(CompileError::parser(
-            format!("invalid #include directive: {}", line),
+            format!("invalid #include directive: {line}"),
             Span::new(offset, offset + line.len()),
         ))
     }
 
     /// Include a system file (search in include paths)
-    fn include_system_file(&mut self, filename: &str, offset: usize) -> CompileResult<(String, PathBuf)> {
+    fn include_system_file(
+        &mut self,
+        filename: &str,
+        offset: usize,
+    ) -> CompileResult<(String, PathBuf)> {
         // Search in include paths
         for path in &self.include_paths {
             let full_path = path.join(filename);
@@ -1184,13 +1249,17 @@ impl Preprocessor {
         }
 
         Err(CompileError::parser(
-            format!("cannot find include file: <{}>", filename),
+            format!("cannot find include file: <{filename}>"),
             Span::new(offset, offset + filename.len() + 10),
         ))
     }
 
     /// Include a local file (search relative to current file, then system paths)
-    fn include_local_file(&mut self, filename: &str, offset: usize) -> CompileResult<(String, PathBuf)> {
+    fn include_local_file(
+        &mut self,
+        filename: &str,
+        offset: usize,
+    ) -> CompileResult<(String, PathBuf)> {
         // First, try relative to current file
         let relative_path = self.current_dir.join(filename);
         if relative_path.exists() {
@@ -1239,8 +1308,7 @@ impl Preprocessor {
         self.current_file = path.to_path_buf();
         self.current_dir = path
             .parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| PathBuf::from("."));
+            .map_or_else(|| PathBuf::from("."), |p| p.to_path_buf());
 
         // Recursively expand includes in the included file
         let expanded = self.expand_includes(&content);
@@ -1262,7 +1330,9 @@ fn parse_line_directive(line: &str) -> Option<(usize, Option<PathBuf>)> {
     let rest = trimmed.trim_start_matches("#line").trim();
     let mut parts = rest.split_whitespace();
     let line_num = parts.next()?.parse::<usize>().ok()?;
-    let file = parts.next().map(|part| PathBuf::from(part.trim_matches('"')));
+    let file = parts
+        .next()
+        .map(|part| PathBuf::from(part.trim_matches('"')));
     Some((line_num, file))
 }
 
@@ -1419,11 +1489,13 @@ mod tests {
 
     #[test]
     fn test_reinclude_header() {
-        let temp_dir = std::env::temp_dir()
-            .join(format!(
-                "smdc_pp_{}",
-                SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
-            ));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "smdc_pp_{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         fs::create_dir_all(&temp_dir).unwrap();
 
         let header_path = temp_dir.join("a.h");
@@ -1441,11 +1513,13 @@ mod tests {
 
     #[test]
     fn test_circular_include_error() {
-        let temp_dir = std::env::temp_dir()
-            .join(format!(
-                "smdc_pp_{}",
-                SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
-            ));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "smdc_pp_{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         fs::create_dir_all(&temp_dir).unwrap();
 
         let a_path = temp_dir.join("a.h");
@@ -1463,11 +1537,13 @@ mod tests {
 
     #[test]
     fn test_file_and_line_in_include() {
-        let temp_dir = std::env::temp_dir()
-            .join(format!(
-                "smdc_pp_{}",
-                SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
-            ));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "smdc_pp_{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         fs::create_dir_all(&temp_dir).unwrap();
 
         let header_path = temp_dir.join("a.h");

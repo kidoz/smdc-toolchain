@@ -36,36 +36,24 @@ pub enum StmtKind {
     },
 
     /// While loop: while (cond) body
-    While {
-        condition: Expr,
-        body: Box<Stmt>,
-    },
+    While { condition: Expr, body: Box<Stmt> },
 
     /// Do-while loop: do body while (cond)
-    DoWhile {
-        body: Box<Stmt>,
-        condition: Expr,
-    },
+    DoWhile { body: Box<Stmt>, condition: Expr },
 
     /// For loop: for (init; cond; update) body
     For {
-        init: Option<ForInit>,
+        init: Option<Box<ForInit>>,
         condition: Option<Expr>,
         update: Option<Expr>,
         body: Box<Stmt>,
     },
 
     /// Switch statement: switch (expr) body
-    Switch {
-        expr: Expr,
-        body: Box<Stmt>,
-    },
+    Switch { expr: Expr, body: Box<Stmt> },
 
     /// Case label: case expr:
-    Case {
-        value: Expr,
-        stmt: Box<Stmt>,
-    },
+    Case { value: Expr, stmt: Box<Stmt> },
 
     /// Default label: default:
     Default(Box<Stmt>),
@@ -83,10 +71,7 @@ pub enum StmtKind {
     Goto(String),
 
     /// Labeled statement: label: stmt
-    Label {
-        name: String,
-        stmt: Box<Stmt>,
-    },
+    Label { name: String, stmt: Box<Stmt> },
 
     /// Declaration statement (for C99+ block-scope declarations)
     Declaration(Declaration),
@@ -108,7 +93,7 @@ impl Block {
 /// Item inside a block
 #[derive(Debug, Clone)]
 pub enum BlockItem {
-    Statement(Stmt),
+    Statement(Box<Stmt>),
     Declaration(Declaration),
 }
 

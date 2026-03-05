@@ -2,8 +2,8 @@
 //!
 //! This module performs type checking and semantic validation.
 
-mod scope;
 mod analyzer;
+mod scope;
 
-pub use scope::{Scope, Symbol, SymbolKind};
 pub use analyzer::SemanticAnalyzer;
+pub use scope::{Scope, Symbol, SymbolKind};

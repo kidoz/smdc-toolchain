@@ -20,9 +20,9 @@ pub enum AssemblyError {
 impl std::fmt::Display for AssemblyError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            AssemblyError::Encode(e) => write!(f, "encode error: {}", e),
-            AssemblyError::UnresolvedSymbol(s) => write!(f, "unresolved symbol: {}", s),
-            AssemblyError::DuplicateSymbol(s) => write!(f, "duplicate symbol: {}", s),
+            AssemblyError::Encode(e) => write!(f, "encode error: {e}"),
+            AssemblyError::UnresolvedSymbol(s) => write!(f, "unresolved symbol: {s}"),
+            AssemblyError::DuplicateSymbol(s) => write!(f, "duplicate symbol: {s}"),
         }
     }
 }
@@ -85,8 +85,8 @@ impl Assembler {
             let mut syms: Vec<_> = self.symbols.iter().collect();
             syms.sort_by_key(|(_, addr)| *addr);
             for (name, addr) in syms {
-                if !name.starts_with(".L") && !name.starts_with("_") {
-                    eprintln!("  {} = 0x{:04X}", name, addr);
+                if !name.starts_with(".L") && !name.starts_with('_') {
+                    eprintln!("  {name} = 0x{addr:04X}");
                 }
             }
         }
@@ -134,16 +134,16 @@ impl Assembler {
             }
 
             // Handle alignment directives
-            if let M68kInst::Directive(d) = inst {
-                if d.starts_with(".align ") {
-                    let align = d[7..].trim().parse::<u32>().unwrap_or(2);
-                    let mask = align - 1;
-                    if in_data_section {
-                        data_position = (data_position + mask) & !mask;
-                    }
-                    position = (position + mask) & !mask;
-                    continue;
+            if let M68kInst::Directive(d) = inst
+                && d.starts_with(".align ")
+            {
+                let align = d[7..].trim().parse::<u32>().unwrap_or(2);
+                let mask = align - 1;
+                if in_data_section {
+                    data_position = (data_position + mask) & !mask;
                 }
+                position = (position + mask) & !mask;
+                continue;
             }
 
             // Calculate instruction size
@@ -167,7 +167,7 @@ impl Assembler {
         encoder.set_base_address(self.base_address);
 
         // Copy symbol table to encoder
-        for (name, _addr) in &self.symbols {
+        for name in self.symbols.keys() {
             encoder.define_symbol(name);
             // We need to set the position manually for pre-defined symbols
         }
@@ -177,15 +177,15 @@ impl Assembler {
 
         for inst in instructions {
             // Handle alignment
-            if let M68kInst::Directive(d) = inst {
-                if d.starts_with(".align ") {
-                    let align = d[7..].trim().parse::<usize>().unwrap_or(2);
-                    while output.len() % align != 0 {
-                        output.push(0);
-                        encoder.position += 1;
-                    }
-                    continue;
+            if let M68kInst::Directive(d) = inst
+                && d.starts_with(".align ")
+            {
+                let align = d[7..].trim().parse::<usize>().unwrap_or(2);
+                while output.len() % align != 0 {
+                    output.push(0);
+                    encoder.position += 1;
                 }
+                continue;
             }
 
             let bytes = encoder.encode(inst)?;
@@ -214,9 +214,15 @@ impl Assembler {
         encoder
     }
 
-    fn apply_relocations(&self, output: &mut [u8], encoder: &InstructionEncoder) -> Result<(), AssemblyError> {
+    fn apply_relocations(
+        &self,
+        output: &mut [u8],
+        encoder: &InstructionEncoder,
+    ) -> Result<(), AssemblyError> {
         for (pos, symbol, is_relative) in encoder.relocations() {
-            let target = self.symbols.get(symbol)
+            let target = self
+                .symbols
+                .get(symbol)
                 .ok_or_else(|| AssemblyError::UnresolvedSymbol(symbol.clone()))?;
 
             let offset = (*pos - self.base_address) as usize;
@@ -226,10 +232,10 @@ impl Assembler {
                 let pc = *pos; // PC is at the extension word
                 let disp = (*target as i32) - (pc as i32);
 
-                if disp < -32768 || disp > 32767 {
-                    return Err(AssemblyError::Encode(EncodeError::OutOfRange(
-                        format!("branch displacement {} out of range", disp)
-                    )));
+                if !(-32768..=32767).contains(&disp) {
+                    return Err(AssemblyError::Encode(EncodeError::OutOfRange(format!(
+                        "branch displacement {disp} out of range"
+                    ))));
                 }
 
                 let disp_bytes = (disp as i16).to_be_bytes();
@@ -276,10 +282,7 @@ mod tests {
     #[test]
     fn test_assemble_simple() {
         let mut asm = Assembler::new(0x200);
-        let instructions = vec![
-            M68kInst::Nop,
-            M68kInst::Rts,
-        ];
+        let instructions = vec![M68kInst::Nop, M68kInst::Rts];
 
         let bytes = asm.assemble(&instructions).unwrap();
         assert_eq!(bytes, vec![0x4E, 0x71, 0x4E, 0x75]);
@@ -310,8 +313,16 @@ mod tests {
         let instructions = vec![
             M68kInst::Label("add".to_string()),
             M68kInst::Link(AddrReg::A6, -4),
-            M68kInst::Move(Size::Long, Operand::Disp(8, AddrReg::A6), Operand::DataReg(DataReg::D0)),
-            M68kInst::Add(Size::Long, Operand::Disp(12, AddrReg::A6), Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(8, AddrReg::A6),
+                Operand::DataReg(DataReg::D0),
+            ),
+            M68kInst::Add(
+                Size::Long,
+                Operand::Disp(12, AddrReg::A6),
+                Operand::DataReg(DataReg::D0),
+            ),
             M68kInst::Unlk(AddrReg::A6),
             M68kInst::Rts,
         ];
@@ -324,6 +335,6 @@ mod tests {
 
         // Verify RTS at the end
         let len = bytes.len();
-        assert_eq!(bytes[len-2..], [0x4E, 0x75]);
+        assert_eq!(bytes[len - 2..], [0x4E, 0x75]);
     }
 }

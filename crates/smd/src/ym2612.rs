@@ -318,9 +318,9 @@ pub fn set_stereo(ch: u8, left: bool, right: bool) {
 ///
 /// Disables LFO, timers, DAC, and keys off all channels.
 pub fn init() {
-    write_port0(reg::LFO, 0x00);       // LFO off
+    write_port0(reg::LFO, 0x00); // LFO off
     write_port0(reg::TIMER_CTRL, 0x00); // Timers off
-    write_port0(reg::DAC_EN, 0x00);     // DAC off
+    write_port0(reg::DAC_EN, 0x00); // DAC off
 
     // Key off all channels
     for ch in 0..6u8 {
@@ -345,9 +345,9 @@ pub mod patch {
         set_stereo(ch, true, true);
 
         // Op 0: Detuned modulator
-        write_op(ch, 0, reg::OP_DT_MUL, 0x71);  // DT=7, MUL=1
+        write_op(ch, 0, reg::OP_DT_MUL, 0x71); // DT=7, MUL=1
         write_op(ch, 0, reg::OP_TL, 0x1A);
-        write_op(ch, 0, reg::OP_RS_AR, 0x1F);   // AR=31
+        write_op(ch, 0, reg::OP_RS_AR, 0x1F); // AR=31
         write_op(ch, 0, reg::OP_AM_D1R, 0x0D);
         write_op(ch, 0, reg::OP_D2R, 0x02);
         write_op(ch, 0, reg::OP_D1L_RR, 0x2A);
@@ -361,7 +361,7 @@ pub mod patch {
         write_op(ch, 1, reg::OP_D1L_RR, 0x2A);
 
         // Op 2: Detuned carrier
-        write_op(ch, 2, reg::OP_DT_MUL, 0x32);  // DT=3, MUL=2
+        write_op(ch, 2, reg::OP_DT_MUL, 0x32); // DT=3, MUL=2
         write_op(ch, 2, reg::OP_TL, 0x1C);
         write_op(ch, 2, reg::OP_RS_AR, 0x1F);
         write_op(ch, 2, reg::OP_AM_D1R, 0x0A);
@@ -400,7 +400,7 @@ pub mod patch {
         write_op(ch, 1, reg::OP_D2R, 0x05);
         write_op(ch, 1, reg::OP_D1L_RR, 0x18);
 
-        write_op(ch, 2, reg::OP_TL, 0x7F);  // Off
+        write_op(ch, 2, reg::OP_TL, 0x7F); // Off
 
         // Carrier
         write_op(ch, 3, reg::OP_DT_MUL, 0x01);
@@ -421,7 +421,7 @@ pub mod patch {
 
         // All 4 operators output directly
         // Op 0: Fundamental
-        write_op(ch, 0, reg::OP_DT_MUL, 0x01);  // MUL=1
+        write_op(ch, 0, reg::OP_DT_MUL, 0x01); // MUL=1
         write_op(ch, 0, reg::OP_TL, 0x20);
         write_op(ch, 0, reg::OP_RS_AR, 0x1F);
         write_op(ch, 0, reg::OP_AM_D1R, 0x00);
@@ -429,7 +429,7 @@ pub mod patch {
         write_op(ch, 0, reg::OP_D1L_RR, 0x0F);
 
         // Op 1: Octave
-        write_op(ch, 1, reg::OP_DT_MUL, 0x02);  // MUL=2
+        write_op(ch, 1, reg::OP_DT_MUL, 0x02); // MUL=2
         write_op(ch, 1, reg::OP_TL, 0x24);
         write_op(ch, 1, reg::OP_RS_AR, 0x1F);
         write_op(ch, 1, reg::OP_AM_D1R, 0x00);
@@ -437,7 +437,7 @@ pub mod patch {
         write_op(ch, 1, reg::OP_D1L_RR, 0x0F);
 
         // Op 2: 12th
-        write_op(ch, 2, reg::OP_DT_MUL, 0x03);  // MUL=3
+        write_op(ch, 2, reg::OP_DT_MUL, 0x03); // MUL=3
         write_op(ch, 2, reg::OP_TL, 0x28);
         write_op(ch, 2, reg::OP_RS_AR, 0x1F);
         write_op(ch, 2, reg::OP_AM_D1R, 0x00);
@@ -445,7 +445,7 @@ pub mod patch {
         write_op(ch, 2, reg::OP_D1L_RR, 0x0F);
 
         // Op 3: 2 octaves
-        write_op(ch, 3, reg::OP_DT_MUL, 0x04);  // MUL=4
+        write_op(ch, 3, reg::OP_DT_MUL, 0x04); // MUL=4
         write_op(ch, 3, reg::OP_TL, 0x2C);
         write_op(ch, 3, reg::OP_RS_AR, 0x1F);
         write_op(ch, 3, reg::OP_AM_D1R, 0x00);
@@ -494,7 +494,7 @@ pub mod patch {
 
         write_op(ch, 0, reg::OP_DT_MUL, 0x01);
         write_op(ch, 0, reg::OP_TL, 0x22);
-        write_op(ch, 0, reg::OP_RS_AR, 0x10);  // Slow attack
+        write_op(ch, 0, reg::OP_RS_AR, 0x10); // Slow attack
         write_op(ch, 0, reg::OP_AM_D1R, 0x02);
         write_op(ch, 0, reg::OP_D2R, 0x01);
         write_op(ch, 0, reg::OP_D1L_RR, 0x14);

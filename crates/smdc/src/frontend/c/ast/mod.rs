@@ -1,14 +1,14 @@
 //! Abstract Syntax Tree definitions
 
-mod types;
+mod decl;
 mod expr;
 mod stmt;
-mod decl;
+mod types;
 
-pub use types::*;
+pub use decl::*;
 pub use expr::*;
 pub use stmt::*;
-pub use decl::*;
+pub use types::*;
 
 /// A complete translation unit (source file)
 #[derive(Debug, Clone)]

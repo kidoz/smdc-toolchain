@@ -59,17 +59,14 @@ impl Frontend for CFrontend {
         if config.verbose {
             eprintln!("Preprocessing...");
         }
-        let processed_source = match preprocessor::preprocess(
-            source,
-            source_path,
-            config.include_paths.clone(),
-        ) {
-            Ok(s) => s,
-            Err(e) => {
-                ctx.reporter.report_error(ctx.file_id, &e);
-                return Err(e);
-            }
-        };
+        let processed_source =
+            match preprocessor::preprocess(source, source_path, config.include_paths.clone()) {
+                Ok(s) => s,
+                Err(e) => {
+                    ctx.reporter.report_error(ctx.file_id, &e);
+                    return Err(e);
+                }
+            };
 
         let source = &processed_source;
 
@@ -80,7 +77,7 @@ impl Frontend for CFrontend {
                 Ok(tokens) => {
                     eprintln!("=== C Tokens ===");
                     for token in &tokens {
-                        eprintln!("{:?}", token);
+                        eprintln!("{token:?}");
                     }
                     eprintln!("=== End Tokens ===\n");
                 }
@@ -108,13 +105,16 @@ impl Frontend for CFrontend {
             Ok(ast) => ast,
             Err(e) => {
                 ctx.reporter.report_error(ctx.file_id, &e);
-                return Err(CompileError::parser("syntax error", crate::common::Span::default()));
+                return Err(CompileError::parser(
+                    "syntax error",
+                    crate::common::Span::default(),
+                ));
             }
         };
 
         if config.dump_ast {
             eprintln!("=== C AST ===");
-            eprintln!("{:#?}", ast);
+            eprintln!("{ast:#?}");
             eprintln!("=== End AST ===\n");
         }
 
@@ -151,7 +151,7 @@ impl Frontend for CFrontend {
         let tokens = lexer.tokenize_all()?;
         let mut output = String::new();
         for token in &tokens {
-            output.push_str(&format!("{:?}\n", token));
+            output.push_str(&format!("{token:?}\n"));
         }
         Ok(output)
     }
@@ -159,6 +159,6 @@ impl Frontend for CFrontend {
     fn dump_ast(&self, source: &str) -> CompileResult<String> {
         let mut parser = Parser::new(source)?;
         let ast = parser.parse()?;
-        Ok(format!("{:#?}", ast))
+        Ok(format!("{ast:#?}"))
     }
 }

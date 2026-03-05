@@ -1,9 +1,9 @@
 //! Rust semantic analyzer
 
-use crate::common::{CompileError, CompileResult};
-use crate::frontend::rust::ast::*;
 use super::scope::{RustScope, RustSymbol, RustSymbolKind};
 use super::types::TypeChecker;
+use crate::common::{CompileError, CompileResult};
+use crate::frontend::rust::ast::*;
 
 /// Rust semantic analyzer
 pub struct RustAnalyzer {
@@ -45,8 +45,11 @@ impl RustAnalyzer {
                     RustSymbolKind::Struct(Box::new(s.clone())),
                     ty.clone(),
                 );
-                self.scope.define(symbol).map_err(|e| CompileError::semantic(e, item.span))?;
-                self.scope.define_type(s.name.clone(), ty)
+                self.scope
+                    .define(symbol)
+                    .map_err(|e| CompileError::semantic(e, item.span))?;
+                self.scope
+                    .define_type(s.name.clone(), ty)
                     .map_err(|e| CompileError::semantic(e, item.span))?;
             }
             ItemKind::Enum(e) => {
@@ -56,8 +59,11 @@ impl RustAnalyzer {
                     RustSymbolKind::Enum(Box::new(e.clone())),
                     ty.clone(),
                 );
-                self.scope.define(symbol).map_err(|e| CompileError::semantic(e, item.span))?;
-                self.scope.define_type(e.name.clone(), ty)
+                self.scope
+                    .define(symbol)
+                    .map_err(|e| CompileError::semantic(e, item.span))?;
+                self.scope
+                    .define_type(e.name.clone(), ty)
                     .map_err(|e| CompileError::semantic(e, item.span))?;
 
                 // Register enum variants
@@ -79,7 +85,8 @@ impl RustAnalyzer {
                 }
             }
             ItemKind::TypeAlias(t) => {
-                self.scope.define_type(t.name.clone(), t.ty.clone())
+                self.scope
+                    .define_type(t.name.clone(), t.ty.clone())
                     .map_err(|e| CompileError::semantic(e, item.span))?;
             }
             ItemKind::Fn(f) => {
@@ -89,15 +96,15 @@ impl RustAnalyzer {
                     RustSymbolKind::Function(Box::new(f.clone())),
                     fn_type,
                 );
-                self.scope.define(symbol).map_err(|e| CompileError::semantic(e, item.span))?;
+                self.scope
+                    .define(symbol)
+                    .map_err(|e| CompileError::semantic(e, item.span))?;
             }
             ItemKind::Const(c) => {
-                let symbol = RustSymbol::new(
-                    c.name.clone(),
-                    RustSymbolKind::Const,
-                    c.ty.clone(),
-                );
-                self.scope.define(symbol).map_err(|e| CompileError::semantic(e, item.span))?;
+                let symbol = RustSymbol::new(c.name.clone(), RustSymbolKind::Const, c.ty.clone());
+                self.scope
+                    .define(symbol)
+                    .map_err(|e| CompileError::semantic(e, item.span))?;
             }
             ItemKind::Static(s) => {
                 let symbol = RustSymbol::new(
@@ -105,7 +112,9 @@ impl RustAnalyzer {
                     RustSymbolKind::Static { mutable: s.mutable },
                     s.ty.clone(),
                 );
-                self.scope.define(symbol).map_err(|e| CompileError::semantic(e, item.span))?;
+                self.scope
+                    .define(symbol)
+                    .map_err(|e| CompileError::semantic(e, item.span))?;
             }
             _ => {}
         }
@@ -129,8 +138,10 @@ impl RustAnalyzer {
     fn fn_to_type(&self, f: &FnDecl) -> RustType {
         // For simplicity, we store the function as a named type
         // In a full implementation, we'd have a proper function type
-        let return_type = f.return_type.clone().unwrap_or_else(|| RustType::unit(f.span));
-        return_type
+
+        f.return_type
+            .clone()
+            .unwrap_or_else(|| RustType::unit(f.span))
     }
 
     fn analyze_item(&mut self, item: &mut Item) -> CompileResult<()> {
@@ -154,12 +165,11 @@ impl RustAnalyzer {
                 let name = self.pattern_binding_name(&param.pattern);
                 if let Some(name) = name {
                     let mutable = self.pattern_is_mutable(&param.pattern);
-                    let symbol = RustSymbol::new(
-                        name,
-                        RustSymbolKind::Parameter,
-                        param.ty.clone(),
-                    ).with_mutability(mutable);
-                    self.scope.define(symbol).map_err(|e| CompileError::semantic(e, param.span))?;
+                    let symbol = RustSymbol::new(name, RustSymbolKind::Parameter, param.ty.clone())
+                        .with_mutability(mutable);
+                    self.scope
+                        .define(symbol)
+                        .map_err(|e| CompileError::semantic(e, param.span))?;
                 }
             }
 
@@ -243,33 +253,29 @@ impl RustAnalyzer {
                 };
 
                 let var_ty = if let Some(ty) = ty {
-                    if let Some(init_ty) = &init_ty {
-                        if !self.type_checker.is_assignable(ty, init_ty) {
-                            return Err(CompileError::type_error(
-                                format!("mismatched types: expected {}, found {}", ty, init_ty),
-                                stmt.span,
-                            ));
-                        }
+                    if let Some(init_ty) = &init_ty
+                        && !self.type_checker.is_assignable(ty, init_ty)
+                    {
+                        return Err(CompileError::type_error(
+                            format!("mismatched types: expected {ty}, found {init_ty}"),
+                            stmt.span,
+                        ));
                     }
                     ty.clone()
                 } else if let Some(init_ty) = init_ty {
                     init_ty
                 } else {
-                    return Err(CompileError::semantic(
-                        "type annotations needed",
-                        stmt.span,
-                    ));
+                    return Err(CompileError::semantic("type annotations needed", stmt.span));
                 };
 
                 let name = self.pattern_binding_name(pattern);
                 if let Some(name) = name {
                     let mutable = self.pattern_is_mutable(pattern);
-                    let symbol = RustSymbol::new(
-                        name,
-                        RustSymbolKind::Variable,
-                        var_ty,
-                    ).with_mutability(mutable);
-                    self.scope.define(symbol).map_err(|e| CompileError::semantic(e, stmt.span))?;
+                    let symbol = RustSymbol::new(name, RustSymbolKind::Variable, var_ty)
+                        .with_mutability(mutable);
+                    self.scope
+                        .define(symbol)
+                        .map_err(|e| CompileError::semantic(e, stmt.span))?;
                 }
             }
             StmtKind::Expr(expr) | StmtKind::ExprNoSemi(expr) => {
@@ -286,9 +292,9 @@ impl RustAnalyzer {
 
     fn analyze_expr(&mut self, expr: &mut Expr) -> CompileResult<RustType> {
         let ty = match &mut expr.kind {
-            ExprKind::IntLiteral(value) => {
-                self.type_checker.infer_int_literal_type(*value, None, expr.span)
-            }
+            ExprKind::IntLiteral(value) => self
+                .type_checker
+                .infer_int_literal_type(*value, None, expr.span),
             ExprKind::FloatLiteral(_) => {
                 self.type_checker.infer_float_literal_type(None, expr.span)
             }
@@ -299,7 +305,10 @@ impl RustAnalyzer {
             ExprKind::StringLiteral(_) => {
                 // &'static str
                 RustType::reference(
-                    RustType::new(RustTypeKind::Named(TypePath::simple("str".to_string())), expr.span),
+                    RustType::new(
+                        RustTypeKind::Named(TypePath::simple("str".to_string())),
+                        expr.span,
+                    ),
                     false,
                     expr.span,
                 )
@@ -328,14 +337,14 @@ impl RustAnalyzer {
                 if let Some(sym) = self.scope.lookup(name) {
                     if sym.moved && !sym.ty.is_copy() {
                         return Err(CompileError::semantic(
-                            format!("use of moved value '{}'", name),
+                            format!("use of moved value '{name}'"),
                             expr.span,
                         ));
                     }
                     sym.ty.clone()
                 } else {
                     return Err(CompileError::semantic(
-                        format!("undefined identifier '{}'", name),
+                        format!("undefined identifier '{name}'"),
                         expr.span,
                     ));
                 }
@@ -348,7 +357,7 @@ impl RustAnalyzer {
                     ty.clone()
                 } else {
                     return Err(CompileError::semantic(
-                        format!("undefined path '{}'", path),
+                        format!("undefined path '{path}'"),
                         expr.span,
                     ));
                 }
@@ -356,11 +365,13 @@ impl RustAnalyzer {
             ExprKind::Binary { op, left, right } => {
                 let left_ty = self.analyze_expr(left)?;
                 let right_ty = self.analyze_expr(right)?;
-                self.type_checker.binary_result_type(*op, &left_ty, &right_ty, expr.span)?
+                self.type_checker
+                    .binary_result_type(*op, &left_ty, &right_ty, expr.span)?
             }
             ExprKind::Unary { op, operand } => {
                 let operand_ty = self.analyze_expr(operand)?;
-                self.type_checker.unary_result_type(*op, &operand_ty, expr.span)?
+                self.type_checker
+                    .unary_result_type(*op, &operand_ty, expr.span)?
             }
             ExprKind::Assign { target, value, .. } => {
                 let target_ty = self.analyze_expr(target)?;
@@ -368,7 +379,7 @@ impl RustAnalyzer {
 
                 if !self.type_checker.is_assignable(&target_ty, &value_ty) {
                     return Err(CompileError::type_error(
-                        format!("mismatched types: expected {}, found {}", target_ty, value_ty),
+                        format!("mismatched types: expected {target_ty}, found {value_ty}"),
                         expr.span,
                     ));
                 }
@@ -404,7 +415,7 @@ impl RustAnalyzer {
                             types[*index].clone()
                         } else {
                             return Err(CompileError::type_error(
-                                format!("tuple index {} out of bounds", index),
+                                format!("tuple index {index} out of bounds"),
                                 expr.span,
                             ));
                         }
@@ -439,8 +450,9 @@ impl RustAnalyzer {
             ExprKind::Dereference(operand) => {
                 let operand_ty = self.analyze_expr(operand)?;
                 match &operand_ty.kind {
-                    RustTypeKind::Reference { inner, .. } |
-                    RustTypeKind::Pointer { inner, .. } => (**inner).clone(),
+                    RustTypeKind::Reference { inner, .. } | RustTypeKind::Pointer { inner, .. } => {
+                        (**inner).clone()
+                    }
                     _ => {
                         return Err(CompileError::type_error(
                             "cannot dereference non-pointer type",
@@ -459,7 +471,11 @@ impl RustAnalyzer {
                 self.scope.pop_to_parent();
                 ty.unwrap_or_else(|| RustType::unit(expr.span))
             }
-            ExprKind::If { condition, then_block, else_block } => {
+            ExprKind::If {
+                condition,
+                then_block,
+                else_block,
+            } => {
                 let cond_ty = self.analyze_expr(condition)?;
                 if !self.type_checker.is_bool(&cond_ty) {
                     return Err(CompileError::type_error(
@@ -477,7 +493,9 @@ impl RustAnalyzer {
                     if let Some(then_ty) = then_ty {
                         if !self.type_checker.types_match(&then_ty, &else_ty) {
                             return Err(CompileError::type_error(
-                                format!("if/else branches have incompatible types: {} vs {}", then_ty, else_ty),
+                                format!(
+                                    "if/else branches have incompatible types: {then_ty} vs {else_ty}"
+                                ),
                                 expr.span,
                             ));
                         }
@@ -498,7 +516,9 @@ impl RustAnalyzer {
                 // Loop without break value has type !
                 RustType::never(expr.span)
             }
-            ExprKind::While { condition, body, .. } => {
+            ExprKind::While {
+                condition, body, ..
+            } => {
                 let cond_ty = self.analyze_expr(condition)?;
                 if !self.type_checker.is_bool(&cond_ty) {
                     return Err(CompileError::type_error(
@@ -514,10 +534,17 @@ impl RustAnalyzer {
                 self.scope.pop_to_parent();
                 RustType::unit(expr.span)
             }
-            ExprKind::For { pattern, iter, body, .. } => {
+            ExprKind::For {
+                pattern,
+                iter,
+                body,
+                ..
+            } => {
                 let iter_ty = self.analyze_expr(iter)?;
                 // Simplified: assume iterator yields the element type
-                let elem_ty = self.type_checker.element_type(&iter_ty)
+                let elem_ty = self
+                    .type_checker
+                    .element_type(&iter_ty)
                     .unwrap_or_else(|| RustType::new(RustTypeKind::Infer, expr.span));
 
                 self.scope.push_child();
@@ -525,11 +552,7 @@ impl RustAnalyzer {
 
                 // Add pattern binding
                 if let Some(name) = self.pattern_binding_name(pattern) {
-                    let symbol = RustSymbol::new(
-                        name,
-                        RustSymbolKind::Variable,
-                        elem_ty,
-                    );
+                    let symbol = RustSymbol::new(name, RustSymbolKind::Variable, elem_ty);
                     let _ = self.scope.define(symbol);
                 }
 
@@ -570,10 +593,7 @@ impl RustAnalyzer {
             }
             ExprKind::Break { value, .. } => {
                 if !self.scope.in_loop() {
-                    return Err(CompileError::semantic(
-                        "break outside of loop",
-                        expr.span,
-                    ));
+                    return Err(CompileError::semantic("break outside of loop", expr.span));
                 }
                 if let Some(value) = value {
                     self.analyze_expr(value)?;
@@ -592,13 +612,15 @@ impl RustAnalyzer {
             ExprKind::Return(value) => {
                 if let Some(value) = value {
                     let value_ty = self.analyze_expr(value)?;
-                    if let Some(expected) = &self.current_fn_return_type {
-                        if !self.type_checker.is_assignable(expected, &value_ty) {
-                            return Err(CompileError::type_error(
-                                format!("mismatched return type: expected {}, found {}", expected, value_ty),
-                                expr.span,
-                            ));
-                        }
+                    if let Some(expected) = &self.current_fn_return_type
+                        && !self.type_checker.is_assignable(expected, &value_ty)
+                    {
+                        return Err(CompileError::type_error(
+                            format!(
+                                "mismatched return type: expected {expected}, found {value_ty}"
+                            ),
+                            expr.span,
+                        ));
                     }
                 }
                 RustType::never(expr.span)
@@ -611,10 +633,14 @@ impl RustAnalyzer {
                     self.analyze_expr(end)?;
                 }
                 // Range type - simplified
-                RustType::new(RustTypeKind::Named(TypePath::simple("Range".to_string())), expr.span)
+                RustType::new(
+                    RustTypeKind::Named(TypePath::simple("Range".to_string())),
+                    expr.span,
+                )
             }
             ExprKind::Tuple(exprs) => {
-                let types: Vec<_> = exprs.iter_mut()
+                let types: Vec<_> = exprs
+                    .iter_mut()
                     .map(|e| self.analyze_expr(e))
                     .collect::<CompileResult<_>>()?;
                 RustType::new(RustTypeKind::Tuple(types), expr.span)
@@ -675,7 +701,7 @@ impl RustAnalyzer {
                     ty.clone()
                 } else {
                     return Err(CompileError::type_error(
-                        format!("undefined struct '{}'", path),
+                        format!("undefined struct '{path}'"),
                         expr.span,
                     ));
                 };
@@ -687,22 +713,24 @@ impl RustAnalyzer {
                 }
 
                 if let Some(rest) = rest {
-                    self.analyze_expr(&mut *rest.clone())?;
+                    self.analyze_expr(&mut rest.clone())?;
                 }
 
                 struct_ty
             }
-            ExprKind::Closure { params, return_type: _, body } => {
+            ExprKind::Closure {
+                params,
+                return_type: _,
+                body,
+            } => {
                 self.scope.push_child();
 
                 for (pattern, ty) in params {
                     if let Some(name) = self.pattern_binding_name(pattern) {
-                        let param_ty = ty.clone().unwrap_or_else(|| RustType::new(RustTypeKind::Infer, expr.span));
-                        let symbol = RustSymbol::new(
-                            name,
-                            RustSymbolKind::Parameter,
-                            param_ty,
-                        );
+                        let param_ty = ty
+                            .clone()
+                            .unwrap_or_else(|| RustType::new(RustTypeKind::Infer, expr.span));
+                        let symbol = RustSymbol::new(name, RustSymbolKind::Parameter, param_ty);
                         let _ = self.scope.define(symbol);
                     }
                 }
@@ -721,9 +749,7 @@ impl RustAnalyzer {
                 self.scope.pop_to_parent();
                 ty.unwrap_or_else(|| RustType::unit(expr.span))
             }
-            ExprKind::Paren(inner) => {
-                self.analyze_expr(inner)?
-            }
+            ExprKind::Paren(inner) => self.analyze_expr(inner)?,
         };
 
         expr.ty = Some(ty.clone());

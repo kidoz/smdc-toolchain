@@ -1,11 +1,11 @@
 //! Error types and diagnostic reporting
 
+use super::Span;
 use codespan_reporting::diagnostic::{Diagnostic, Label};
 use codespan_reporting::files::SimpleFiles;
 use codespan_reporting::term;
 use codespan_reporting::term::termcolor::{ColorChoice, StandardStream};
 use thiserror::Error;
-use super::Span;
 
 /// Compile error with source location
 #[derive(Error, Debug)]
@@ -101,41 +101,44 @@ impl DiagnosticReporter {
             CompileError::Lexer { message, span } => Diagnostic::error()
                 .with_message("Lexer error")
                 .with_labels(vec![
-                    Label::primary(file_id, span.start..span.end).with_message(message)
+                    Label::primary(file_id, span.start..span.end).with_message(message),
                 ]),
 
             CompileError::Parser { message, span } => Diagnostic::error()
                 .with_message("Syntax error")
                 .with_labels(vec![
-                    Label::primary(file_id, span.start..span.end).with_message(message)
+                    Label::primary(file_id, span.start..span.end).with_message(message),
                 ]),
 
             CompileError::Semantic { message, span } => Diagnostic::error()
                 .with_message("Semantic error")
                 .with_labels(vec![
-                    Label::primary(file_id, span.start..span.end).with_message(message)
+                    Label::primary(file_id, span.start..span.end).with_message(message),
                 ]),
 
             CompileError::Type { message, span } => Diagnostic::error()
                 .with_message("Type error")
                 .with_labels(vec![
-                    Label::primary(file_id, span.start..span.end).with_message(message)
+                    Label::primary(file_id, span.start..span.end).with_message(message),
                 ]),
 
             CompileError::Codegen { message } => {
-                Diagnostic::error().with_message(format!("Code generation error: {}", message))
+                Diagnostic::error().with_message(format!("Code generation error: {message}"))
             }
 
             CompileError::Backend { message } => {
-                Diagnostic::error().with_message(format!("Backend error: {}", message))
+                Diagnostic::error().with_message(format!("Backend error: {message}"))
             }
 
-            CompileError::Io(err) => {
-                Diagnostic::error().with_message(format!("IO error: {}", err))
-            }
+            CompileError::Io(err) => Diagnostic::error().with_message(format!("IO error: {err}")),
         };
 
-        let _ = term::emit(&mut self.writer.lock(), &self.config, &self.files, &diagnostic);
+        let _ = term::emit(
+            &mut self.writer.lock(),
+            &self.config,
+            &self.files,
+            &diagnostic,
+        );
     }
 }
 

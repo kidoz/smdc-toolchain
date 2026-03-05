@@ -1,6 +1,6 @@
 //! Rust scope and symbol table
 
-use crate::frontend::rust::ast::{RustType, FnDecl, StructDecl, EnumDecl};
+use crate::frontend::rust::ast::{EnumDecl, FnDecl, RustType, StructDecl};
 use std::collections::HashMap;
 
 /// A symbol in the Rust symbol table
@@ -82,7 +82,10 @@ impl RustScope {
     /// Define a new symbol in the current scope
     pub fn define(&mut self, symbol: RustSymbol) -> Result<(), String> {
         if self.symbols.contains_key(&symbol.name) {
-            return Err(format!("symbol '{}' already defined in this scope", symbol.name));
+            return Err(format!(
+                "symbol '{}' already defined in this scope",
+                symbol.name
+            ));
         }
         self.symbols.insert(symbol.name.clone(), symbol);
         Ok(())
@@ -91,7 +94,7 @@ impl RustScope {
     /// Define a type in the current scope
     pub fn define_type(&mut self, name: String, ty: RustType) -> Result<(), String> {
         if self.types.contains_key(&name) {
-            return Err(format!("type '{}' already defined in this scope", name));
+            return Err(format!("type '{name}' already defined in this scope"));
         }
         self.types.insert(name, ty);
         Ok(())
@@ -132,7 +135,7 @@ impl RustScope {
 
     /// Push a new child scope
     pub fn push_child(&mut self) {
-        let old_scope = std::mem::replace(self, RustScope::new());
+        let old_scope = std::mem::take(self);
         self.parent = Some(Box::new(old_scope));
         if let Some(parent) = &self.parent {
             self.loop_depth = parent.loop_depth;
@@ -186,18 +189,18 @@ impl RustScope {
     pub fn mark_moved(&mut self, name: &str) -> Result<(), String> {
         if let Some(sym) = self.lookup_mut(name) {
             if sym.moved {
-                return Err(format!("use of moved value '{}'", name));
+                return Err(format!("use of moved value '{name}'"));
             }
             sym.moved = true;
             Ok(())
         } else {
-            Err(format!("undefined symbol '{}'", name))
+            Err(format!("undefined symbol '{name}'"))
         }
     }
 
     /// Check if a symbol has been moved
     pub fn is_moved(&self, name: &str) -> bool {
-        self.lookup(name).map(|s| s.moved).unwrap_or(false)
+        self.lookup(name).is_some_and(|s| s.moved)
     }
 }
 

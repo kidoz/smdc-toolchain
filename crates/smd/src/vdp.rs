@@ -115,14 +115,14 @@ pub mod tile {
 /// - Default plane addresses
 /// - Auto-increment of 2
 pub fn init() {
-    set_reg(0, 0x04);  // Mode register 1
-    set_reg(1, 0x44);  // Mode register 2: display on, Mode 5
-    set_reg(2, 0x30);  // Plane A address: 0xC000
-    set_reg(3, 0x00);  // Window address
-    set_reg(4, 0x07);  // Plane B address: 0xE000
-    set_reg(5, 0x78);  // Sprite table: 0xF000
-    set_reg(6, 0x00);  // Unused
-    set_reg(7, 0x00);  // Background color: palette 0, color 0
+    set_reg(0, 0x04); // Mode register 1
+    set_reg(1, 0x44); // Mode register 2: display on, Mode 5
+    set_reg(2, 0x30); // Plane A address: 0xC000
+    set_reg(3, 0x00); // Window address
+    set_reg(4, 0x07); // Plane B address: 0xE000
+    set_reg(5, 0x78); // Sprite table: 0xF000
+    set_reg(6, 0x00); // Unused
+    set_reg(7, 0x00); // Background color: palette 0, color 0
     set_reg(10, 0xFF); // H-interrupt counter
     set_reg(11, 0x00); // Mode register 3
     set_reg(12, 0x81); // Mode register 4: H40, no interlace

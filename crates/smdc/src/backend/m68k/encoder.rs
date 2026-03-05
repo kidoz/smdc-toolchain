@@ -21,10 +21,10 @@ pub enum EncodeError {
 impl std::fmt::Display for EncodeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            EncodeError::Unsupported(msg) => write!(f, "unsupported: {}", msg),
-            EncodeError::OutOfRange(msg) => write!(f, "out of range: {}", msg),
-            EncodeError::UnresolvedSymbol(msg) => write!(f, "unresolved symbol: {}", msg),
-            EncodeError::InvalidOperands(msg) => write!(f, "invalid operands: {}", msg),
+            EncodeError::Unsupported(msg) => write!(f, "unsupported: {msg}"),
+            EncodeError::OutOfRange(msg) => write!(f, "out of range: {msg}"),
+            EncodeError::UnresolvedSymbol(msg) => write!(f, "unresolved symbol: {msg}"),
+            EncodeError::InvalidOperands(msg) => write!(f, "invalid operands: {msg}"),
         }
     }
 }
@@ -85,37 +85,44 @@ impl InstructionEncoder {
 
             // Branch instructions
             M68kInst::Bra(_) | M68kInst::Bsr(_) | M68kInst::Bcc(_, _) => 4, // Use word displacement
-            M68kInst::Dbf(_, _) => 4, // DBF is 4 bytes
+            M68kInst::Dbf(_, _) => 4,                                       // DBF is 4 bytes
 
             // Variable length based on operands
-            M68kInst::Move(size, src, dst) => 2 + self.operand_extension_size(src, *size) + self.operand_extension_size(dst, *size),
+            M68kInst::Move(size, src, dst) => {
+                2 + self.operand_extension_size(src, *size)
+                    + self.operand_extension_size(dst, *size)
+            }
             M68kInst::Lea(src, _) => 2 + self.operand_extension_size(src, Size::Long),
             M68kInst::Pea(op) => 2 + self.operand_extension_size(op, Size::Long),
             M68kInst::Clr(size, op) => 2 + self.operand_extension_size(op, *size),
 
-            M68kInst::Add(size, src, dst) | M68kInst::Sub(size, src, dst) |
-            M68kInst::And(size, src, dst) | M68kInst::Or(size, src, dst) |
-            M68kInst::Cmp(size, src, dst) => {
-                2 + self.ea_operand_extension_size(src, dst, *size)
-            }
+            M68kInst::Add(size, src, dst)
+            | M68kInst::Sub(size, src, dst)
+            | M68kInst::And(size, src, dst)
+            | M68kInst::Or(size, src, dst)
+            | M68kInst::Cmp(size, src, dst) => 2 + self.ea_operand_extension_size(src, dst, *size),
 
-            M68kInst::Adda(size, src, _) | M68kInst::Suba(size, src, _) |
-            M68kInst::Cmpa(size, src, _) => 2 + self.operand_extension_size(src, *size),
+            M68kInst::Adda(size, src, _)
+            | M68kInst::Suba(size, src, _)
+            | M68kInst::Cmpa(size, src, _) => 2 + self.operand_extension_size(src, *size),
 
             M68kInst::Addq(size, _, op) | M68kInst::Subq(size, _, op) => {
                 2 + self.operand_extension_size(op, *size)
             }
 
-            M68kInst::Addi(size, _, op) | M68kInst::Subi(size, _, op) |
-            M68kInst::Andi(size, _, op) | M68kInst::Ori(size, _, op) |
-            M68kInst::Eori(size, _, op) | M68kInst::Cmpi(size, _, op) => {
+            M68kInst::Addi(size, _, op)
+            | M68kInst::Subi(size, _, op)
+            | M68kInst::Andi(size, _, op)
+            | M68kInst::Ori(size, _, op)
+            | M68kInst::Eori(size, _, op)
+            | M68kInst::Cmpi(size, _, op) => {
                 2 + self.immediate_size(*size) + self.operand_extension_size(op, *size)
             }
 
-            M68kInst::Muls(src, _) | M68kInst::Mulu(src, _) |
-            M68kInst::Divs(src, _) | M68kInst::Divu(src, _) => {
-                2 + self.operand_extension_size(src, Size::Word)
-            }
+            M68kInst::Muls(src, _)
+            | M68kInst::Mulu(src, _)
+            | M68kInst::Divs(src, _)
+            | M68kInst::Divu(src, _) => 2 + self.operand_extension_size(src, Size::Word),
 
             M68kInst::Neg(size, op) | M68kInst::Not(size, op) | M68kInst::Tst(size, op) => {
                 2 + self.operand_extension_size(op, *size)
@@ -125,21 +132,26 @@ impl InstructionEncoder {
 
             M68kInst::Eor(size, _, dst) => 2 + self.operand_extension_size(dst, *size),
 
-            M68kInst::Lsl(_, count, _) | M68kInst::Lsr(_, count, _) |
-            M68kInst::Asl(_, count, _) | M68kInst::Asr(_, count, _) |
-            M68kInst::Rol(_, count, _) | M68kInst::Ror(_, count, _) => {
+            M68kInst::Lsl(_, count, _)
+            | M68kInst::Lsr(_, count, _)
+            | M68kInst::Asl(_, count, _)
+            | M68kInst::Asr(_, count, _)
+            | M68kInst::Rol(_, count, _)
+            | M68kInst::Ror(_, count, _) => {
                 // Each shift instruction is 2 bytes, but shifts > 8 need multiple instructions
                 match count {
                     Operand::Imm(n) => {
-                        let num_shifts = ((*n as u32 + 7) / 8) as usize; // ceiling division
+                        let num_shifts = (*n as u32).div_ceil(8) as usize; // ceiling division
                         2 * num_shifts.max(1)
                     }
                     _ => 2,
                 }
             }
 
-            M68kInst::Btst(bit, op) | M68kInst::Bset(bit, op) |
-            M68kInst::Bclr(bit, op) | M68kInst::Bchg(bit, op) => {
+            M68kInst::Btst(bit, op)
+            | M68kInst::Bset(bit, op)
+            | M68kInst::Bclr(bit, op)
+            | M68kInst::Bchg(bit, op) => {
                 let bit_size = match bit {
                     Operand::Imm(_) => 2,
                     _ => 0,
@@ -147,7 +159,9 @@ impl InstructionEncoder {
                 2 + bit_size + self.operand_extension_size(op, Size::Byte)
             }
 
-            M68kInst::Jmp(op) | M68kInst::Jsr(op) => 2 + self.operand_extension_size(op, Size::Long),
+            M68kInst::Jmp(op) | M68kInst::Jsr(op) => {
+                2 + self.operand_extension_size(op, Size::Long)
+            }
 
             M68kInst::Exg(_, _) => 2,
 
@@ -170,9 +184,13 @@ impl InstructionEncoder {
             // Extract string and count characters
             let content = &directive[7..];
             if content.starts_with('"') && content.ends_with('"') {
-                let s = &content[1..content.len()-1];
+                let s = &content[1..content.len() - 1];
                 let len = s.len();
-                if directive.starts_with(".asciz") { len + 1 } else { len }
+                if directive.starts_with(".asciz") {
+                    len + 1
+                } else {
+                    len
+                }
             } else {
                 0
             }
@@ -190,9 +208,12 @@ impl InstructionEncoder {
 
     fn operand_extension_size(&self, op: &Operand, size: Size) -> usize {
         match op {
-            Operand::DataReg(_) | Operand::AddrReg(_) |
-            Operand::AddrInd(_) | Operand::PostInc(_) | Operand::PreDec(_) |
-            Operand::Sr => 0,
+            Operand::DataReg(_)
+            | Operand::AddrReg(_)
+            | Operand::AddrInd(_)
+            | Operand::PostInc(_)
+            | Operand::PreDec(_)
+            | Operand::Sr => 0,
             Operand::Disp(_, _) => 2,
             Operand::Indexed(_, _, _) => 2,
             Operand::AbsShort(_) => 2,
@@ -273,7 +294,9 @@ impl InstructionEncoder {
                 let opcode = match size {
                     Size::Word => 0x4880, // EXT.W
                     Size::Long => 0x48C0, // EXT.L
-                    Size::Byte => return Err(EncodeError::InvalidOperands("EXT.B not valid".to_string())),
+                    Size::Byte => {
+                        return Err(EncodeError::InvalidOperands("EXT.B not valid".to_string()));
+                    }
                 };
                 let opword = opcode | reg_num_data(reg) as u16;
                 bytes.extend_from_slice(&opword.to_be_bytes());
@@ -300,12 +323,15 @@ impl InstructionEncoder {
                 if let Some(target) = self.symbols.get(label) {
                     let current = self.position + 2; // After the opword
                     let disp = (*target as i32) - (current as i32);
-                    if disp < -32768 || disp > 32767 {
-                        return Err(EncodeError::OutOfRange(format!("DBF to {} out of range", label)));
+                    if !(-32768..=32767).contains(&disp) {
+                        return Err(EncodeError::OutOfRange(format!(
+                            "DBF to {label} out of range"
+                        )));
                     }
                     bytes.extend_from_slice(&(disp as i16 as u16).to_be_bytes());
                 } else {
-                    self.relocations.push((self.position + 2, label.to_string(), true));
+                    self.relocations
+                        .push((self.position + 2, label.clone(), true));
                     bytes.extend_from_slice(&0u16.to_be_bytes()); // Placeholder
                 }
             }
@@ -318,7 +344,10 @@ impl InstructionEncoder {
             // LEA
             M68kInst::Lea(src, dst) => {
                 let (src_mode, src_reg, src_ext) = self.encode_ea(src, Size::Long)?;
-                let opword = 0x41C0 | ((reg_num_addr(dst) as u16) << 9) | ((src_mode as u16) << 3) | (src_reg as u16);
+                let opword = 0x41C0
+                    | ((reg_num_addr(dst) as u16) << 9)
+                    | ((src_mode as u16) << 3)
+                    | (src_reg as u16);
                 bytes.extend_from_slice(&opword.to_be_bytes());
                 bytes.extend_from_slice(&src_ext);
             }
@@ -335,7 +364,8 @@ impl InstructionEncoder {
             M68kInst::Clr(size, op) => {
                 let (mode, reg, ext) = self.encode_ea(op, *size)?;
                 let size_bits = size_bits(*size);
-                let opword = 0x4200 | ((size_bits as u16) << 6) | ((mode as u16) << 3) | (reg as u16);
+                let opword =
+                    0x4200 | ((size_bits as u16) << 6) | ((mode as u16) << 3) | (reg as u16);
                 bytes.extend_from_slice(&opword.to_be_bytes());
                 bytes.extend_from_slice(&ext);
             }
@@ -409,7 +439,11 @@ impl InstructionEncoder {
             M68kInst::Eor(size, src, dst) => {
                 let (mode, reg, ext) = self.encode_ea(dst, *size)?;
                 let size_bits = size_bits(*size);
-                let opword = 0xB100 | ((reg_num_data(src) as u16) << 9) | ((size_bits as u16) << 6) | ((mode as u16) << 3) | (reg as u16);
+                let opword = 0xB100
+                    | ((reg_num_data(src) as u16) << 9)
+                    | ((size_bits as u16) << 6)
+                    | ((mode as u16) << 3)
+                    | (reg as u16);
                 bytes.extend_from_slice(&opword.to_be_bytes());
                 bytes.extend_from_slice(&ext);
             }
@@ -420,11 +454,17 @@ impl InstructionEncoder {
                 if let Operand::DataReg(dn) = dst {
                     let (mode, reg, ext) = self.encode_ea(src, *size)?;
                     let size_bits = size_bits(*size);
-                    let opword = 0xB000 | ((reg_num_data(dn) as u16) << 9) | ((size_bits as u16) << 6) | ((mode as u16) << 3) | (reg as u16);
+                    let opword = 0xB000
+                        | ((reg_num_data(dn) as u16) << 9)
+                        | ((size_bits as u16) << 6)
+                        | ((mode as u16) << 3)
+                        | (reg as u16);
                     bytes.extend_from_slice(&opword.to_be_bytes());
                     bytes.extend_from_slice(&ext);
                 } else {
-                    return Err(EncodeError::InvalidOperands("CMP destination must be Dn".to_string()));
+                    return Err(EncodeError::InvalidOperands(
+                        "CMP destination must be Dn".to_string(),
+                    ));
                 }
             }
 
@@ -434,9 +474,15 @@ impl InstructionEncoder {
                 let opmode = match size {
                     Size::Word => 3,
                     Size::Long => 7,
-                    Size::Byte => return Err(EncodeError::InvalidOperands("CMPA.B not valid".to_string())),
+                    Size::Byte => {
+                        return Err(EncodeError::InvalidOperands("CMPA.B not valid".to_string()));
+                    }
                 };
-                let opword = 0xB000 | ((reg_num_addr(dst) as u16) << 9) | (opmode << 6) | ((mode as u16) << 3) | (reg as u16);
+                let opword = 0xB000
+                    | ((reg_num_addr(dst) as u16) << 9)
+                    | (opmode << 6)
+                    | ((mode as u16) << 3)
+                    | (reg as u16);
                 bytes.extend_from_slice(&opword.to_be_bytes());
                 bytes.extend_from_slice(&ext);
             }
@@ -450,7 +496,8 @@ impl InstructionEncoder {
             M68kInst::Neg(size, op) => {
                 let (mode, reg, ext) = self.encode_ea(op, *size)?;
                 let size_bits = size_bits(*size);
-                let opword = 0x4400 | ((size_bits as u16) << 6) | ((mode as u16) << 3) | (reg as u16);
+                let opword =
+                    0x4400 | ((size_bits as u16) << 6) | ((mode as u16) << 3) | (reg as u16);
                 bytes.extend_from_slice(&opword.to_be_bytes());
                 bytes.extend_from_slice(&ext);
             }
@@ -459,7 +506,8 @@ impl InstructionEncoder {
             M68kInst::Not(size, op) => {
                 let (mode, reg, ext) = self.encode_ea(op, *size)?;
                 let size_bits = size_bits(*size);
-                let opword = 0x4600 | ((size_bits as u16) << 6) | ((mode as u16) << 3) | (reg as u16);
+                let opword =
+                    0x4600 | ((size_bits as u16) << 6) | ((mode as u16) << 3) | (reg as u16);
                 bytes.extend_from_slice(&opword.to_be_bytes());
                 bytes.extend_from_slice(&ext);
             }
@@ -468,7 +516,8 @@ impl InstructionEncoder {
             M68kInst::Tst(size, op) => {
                 let (mode, reg, ext) = self.encode_ea(op, *size)?;
                 let size_bits = size_bits(*size);
-                let opword = 0x4A00 | ((size_bits as u16) << 6) | ((mode as u16) << 3) | (reg as u16);
+                let opword =
+                    0x4A00 | ((size_bits as u16) << 6) | ((mode as u16) << 3) | (reg as u16);
                 bytes.extend_from_slice(&opword.to_be_bytes());
                 bytes.extend_from_slice(&ext);
             }
@@ -476,7 +525,10 @@ impl InstructionEncoder {
             // MULS
             M68kInst::Muls(src, dst) => {
                 let (mode, reg, ext) = self.encode_ea(src, Size::Word)?;
-                let opword = 0xC1C0 | ((reg_num_data(dst) as u16) << 9) | ((mode as u16) << 3) | (reg as u16);
+                let opword = 0xC1C0
+                    | ((reg_num_data(dst) as u16) << 9)
+                    | ((mode as u16) << 3)
+                    | (reg as u16);
                 bytes.extend_from_slice(&opword.to_be_bytes());
                 bytes.extend_from_slice(&ext);
             }
@@ -484,7 +536,10 @@ impl InstructionEncoder {
             // MULU
             M68kInst::Mulu(src, dst) => {
                 let (mode, reg, ext) = self.encode_ea(src, Size::Word)?;
-                let opword = 0xC0C0 | ((reg_num_data(dst) as u16) << 9) | ((mode as u16) << 3) | (reg as u16);
+                let opword = 0xC0C0
+                    | ((reg_num_data(dst) as u16) << 9)
+                    | ((mode as u16) << 3)
+                    | (reg as u16);
                 bytes.extend_from_slice(&opword.to_be_bytes());
                 bytes.extend_from_slice(&ext);
             }
@@ -492,7 +547,10 @@ impl InstructionEncoder {
             // DIVS
             M68kInst::Divs(src, dst) => {
                 let (mode, reg, ext) = self.encode_ea(src, Size::Word)?;
-                let opword = 0x81C0 | ((reg_num_data(dst) as u16) << 9) | ((mode as u16) << 3) | (reg as u16);
+                let opword = 0x81C0
+                    | ((reg_num_data(dst) as u16) << 9)
+                    | ((mode as u16) << 3)
+                    | (reg as u16);
                 bytes.extend_from_slice(&opword.to_be_bytes());
                 bytes.extend_from_slice(&ext);
             }
@@ -500,7 +558,10 @@ impl InstructionEncoder {
             // DIVU
             M68kInst::Divu(src, dst) => {
                 let (mode, reg, ext) = self.encode_ea(src, Size::Word)?;
-                let opword = 0x80C0 | ((reg_num_data(dst) as u16) << 9) | ((mode as u16) << 3) | (reg as u16);
+                let opword = 0x80C0
+                    | ((reg_num_data(dst) as u16) << 9)
+                    | ((mode as u16) << 3)
+                    | (reg as u16);
                 bytes.extend_from_slice(&opword.to_be_bytes());
                 bytes.extend_from_slice(&ext);
             }
@@ -579,7 +640,8 @@ impl InstructionEncoder {
             // Scc
             M68kInst::Scc(cond, op) => {
                 let (mode, reg, ext) = self.encode_ea(op, Size::Byte)?;
-                let opword = 0x50C0 | ((cond_code(cond) as u16) << 8) | ((mode as u16) << 3) | (reg as u16);
+                let opword =
+                    0x50C0 | ((cond_code(cond) as u16) << 8) | ((mode as u16) << 3) | (reg as u16);
                 bytes.extend_from_slice(&opword.to_be_bytes());
                 bytes.extend_from_slice(&ext);
             }
@@ -600,13 +662,15 @@ impl InstructionEncoder {
             let val = parse_number(&directive[6..])?;
             bytes.extend_from_slice(&(val as u32).to_be_bytes());
         } else if directive.starts_with(".space ") {
-            let size = directive[7..].trim().parse::<usize>()
+            let size = directive[7..]
+                .trim()
+                .parse::<usize>()
                 .map_err(|_| EncodeError::InvalidOperands("invalid .space size".to_string()))?;
-            bytes.extend(std::iter::repeat(0u8).take(size));
+            bytes.extend(std::iter::repeat_n(0u8, size));
         } else if directive.starts_with(".ascii ") || directive.starts_with(".asciz ") {
             let content = &directive[7..];
             if content.starts_with('"') && content.ends_with('"') {
-                let s = &content[1..content.len()-1];
+                let s = &content[1..content.len() - 1];
                 bytes.extend(s.bytes());
                 if directive.starts_with(".asciz") {
                     bytes.push(0);
@@ -617,7 +681,12 @@ impl InstructionEncoder {
         Ok(())
     }
 
-    fn encode_branch(&mut self, base: u16, label: &str, bytes: &mut Vec<u8>) -> Result<(), EncodeError> {
+    fn encode_branch(
+        &mut self,
+        base: u16,
+        label: &str,
+        bytes: &mut Vec<u8>,
+    ) -> Result<(), EncodeError> {
         // Always use word displacement for simplicity
         let opword = base; // Displacement 0 means word displacement follows
         bytes.extend_from_slice(&opword.to_be_bytes());
@@ -626,19 +695,28 @@ impl InstructionEncoder {
         if let Some(target) = self.symbols.get(label) {
             let current = self.position + 2; // After the opword
             let disp = (*target as i32) - (current as i32);
-            if disp < -32768 || disp > 32767 {
-                return Err(EncodeError::OutOfRange(format!("branch to {} out of range", label)));
+            if !(-32768..=32767).contains(&disp) {
+                return Err(EncodeError::OutOfRange(format!(
+                    "branch to {label} out of range"
+                )));
             }
             bytes.extend_from_slice(&(disp as i16 as u16).to_be_bytes());
         } else {
             // Mark for relocation
-            self.relocations.push((self.position + 2, label.to_string(), true));
+            self.relocations
+                .push((self.position + 2, label.to_string(), true));
             bytes.extend_from_slice(&0u16.to_be_bytes()); // Placeholder
         }
         Ok(())
     }
 
-    fn encode_move(&self, size: Size, src: &Operand, dst: &Operand, bytes: &mut Vec<u8>) -> Result<(), EncodeError> {
+    fn encode_move(
+        &self,
+        size: Size,
+        src: &Operand,
+        dst: &Operand,
+        bytes: &mut Vec<u8>,
+    ) -> Result<(), EncodeError> {
         // Special case: MOVE to SR (privileged instruction)
         if matches!(dst, Operand::Sr) {
             // MOVE to SR: 0100 0110 11 mmm rrr
@@ -669,60 +747,117 @@ impl InstructionEncoder {
         let (dst_mode, dst_reg, dst_ext) = self.encode_ea(dst, size)?;
 
         // MOVE encoding: 00 | size | dst_reg | dst_mode | src_mode | src_reg
-        let opword = (size_bits << 12) | ((dst_reg as u16) << 9) | ((dst_mode as u16) << 6) | ((src_mode as u16) << 3) | (src_reg as u16);
+        let opword = (size_bits << 12)
+            | ((dst_reg as u16) << 9)
+            | ((dst_mode as u16) << 6)
+            | ((src_mode as u16) << 3)
+            | (src_reg as u16);
         bytes.extend_from_slice(&opword.to_be_bytes());
         bytes.extend_from_slice(&src_ext);
         bytes.extend_from_slice(&dst_ext);
         Ok(())
     }
 
-    fn encode_add_sub(&self, base: u16, size: Size, src: &Operand, dst: &Operand, bytes: &mut Vec<u8>) -> Result<(), EncodeError> {
+    fn encode_add_sub(
+        &self,
+        base: u16,
+        size: Size,
+        src: &Operand,
+        dst: &Operand,
+        bytes: &mut Vec<u8>,
+    ) -> Result<(), EncodeError> {
         let size_bits = size_bits(size);
 
         match (src, dst) {
             // <ea> + Dn -> Dn
             (_, Operand::DataReg(dn)) => {
                 let (mode, reg, ext) = self.encode_ea(src, size)?;
-                let opword = base | ((reg_num_data(dn) as u16) << 9) | ((size_bits as u16) << 6) | ((mode as u16) << 3) | (reg as u16);
+                let opword = base
+                    | ((reg_num_data(dn) as u16) << 9)
+                    | ((size_bits as u16) << 6)
+                    | ((mode as u16) << 3)
+                    | (reg as u16);
                 bytes.extend_from_slice(&opword.to_be_bytes());
                 bytes.extend_from_slice(&ext);
             }
             // Dn + <ea> -> <ea>
             (Operand::DataReg(dn), _) => {
                 let (mode, reg, ext) = self.encode_ea(dst, size)?;
-                let opword = base | ((reg_num_data(dn) as u16) << 9) | (1 << 8) | ((size_bits as u16) << 6) | ((mode as u16) << 3) | (reg as u16);
+                let opword = base
+                    | ((reg_num_data(dn) as u16) << 9)
+                    | (1 << 8)
+                    | ((size_bits as u16) << 6)
+                    | ((mode as u16) << 3)
+                    | (reg as u16);
                 bytes.extend_from_slice(&opword.to_be_bytes());
                 bytes.extend_from_slice(&ext);
             }
-            _ => return Err(EncodeError::InvalidOperands("ADD/SUB requires at least one Dn".to_string())),
+            _ => {
+                return Err(EncodeError::InvalidOperands(
+                    "ADD/SUB requires at least one Dn".to_string(),
+                ));
+            }
         }
         Ok(())
     }
 
-    fn encode_adda_suba(&self, base: u16, size: Size, src: &Operand, dst: &AddrReg, bytes: &mut Vec<u8>) -> Result<(), EncodeError> {
+    fn encode_adda_suba(
+        &self,
+        base: u16,
+        size: Size,
+        src: &Operand,
+        dst: &AddrReg,
+        bytes: &mut Vec<u8>,
+    ) -> Result<(), EncodeError> {
         let (mode, reg, ext) = self.encode_ea(src, size)?;
         let opmode: u16 = match size {
             Size::Word => 0,
             Size::Long => 1,
-            Size::Byte => return Err(EncodeError::InvalidOperands("ADDA/SUBA.B not valid".to_string())),
+            Size::Byte => {
+                return Err(EncodeError::InvalidOperands(
+                    "ADDA/SUBA.B not valid".to_string(),
+                ));
+            }
         };
-        let opword = base | ((reg_num_addr(dst) as u16) << 9) | (opmode << 8) | ((mode as u16) << 3) | (reg as u16);
+        let opword = base
+            | ((reg_num_addr(dst) as u16) << 9)
+            | (opmode << 8)
+            | ((mode as u16) << 3)
+            | (reg as u16);
         bytes.extend_from_slice(&opword.to_be_bytes());
         bytes.extend_from_slice(&ext);
         Ok(())
     }
 
-    fn encode_addq_subq(&self, base: u16, size: Size, data: u8, op: &Operand, bytes: &mut Vec<u8>) -> Result<(), EncodeError> {
+    fn encode_addq_subq(
+        &self,
+        base: u16,
+        size: Size,
+        data: u8,
+        op: &Operand,
+        bytes: &mut Vec<u8>,
+    ) -> Result<(), EncodeError> {
         let (mode, reg, ext) = self.encode_ea(op, size)?;
         let size_bits = size_bits(size);
         let data_bits = if data == 8 { 0 } else { data as u16 };
-        let opword = base | (data_bits << 9) | ((size_bits as u16) << 6) | ((mode as u16) << 3) | (reg as u16);
+        let opword = base
+            | (data_bits << 9)
+            | ((size_bits as u16) << 6)
+            | ((mode as u16) << 3)
+            | (reg as u16);
         bytes.extend_from_slice(&opword.to_be_bytes());
         bytes.extend_from_slice(&ext);
         Ok(())
     }
 
-    fn encode_imm_op(&self, base: u16, size: Size, imm: i32, op: &Operand, bytes: &mut Vec<u8>) -> Result<(), EncodeError> {
+    fn encode_imm_op(
+        &self,
+        base: u16,
+        size: Size,
+        imm: i32,
+        op: &Operand,
+        bytes: &mut Vec<u8>,
+    ) -> Result<(), EncodeError> {
         let (mode, reg, ext) = self.encode_ea(op, size)?;
         let size_bits = size_bits(size);
         let opword = base | ((size_bits as u16) << 6) | ((mode as u16) << 3) | (reg as u16);
@@ -737,28 +872,55 @@ impl InstructionEncoder {
         Ok(())
     }
 
-    fn encode_and_or(&self, base: u16, size: Size, src: &Operand, dst: &Operand, bytes: &mut Vec<u8>) -> Result<(), EncodeError> {
+    fn encode_and_or(
+        &self,
+        base: u16,
+        size: Size,
+        src: &Operand,
+        dst: &Operand,
+        bytes: &mut Vec<u8>,
+    ) -> Result<(), EncodeError> {
         let size_bits = size_bits(size);
 
         match (src, dst) {
             (_, Operand::DataReg(dn)) => {
                 let (mode, reg, ext) = self.encode_ea(src, size)?;
-                let opword = base | ((reg_num_data(dn) as u16) << 9) | ((size_bits as u16) << 6) | ((mode as u16) << 3) | (reg as u16);
+                let opword = base
+                    | ((reg_num_data(dn) as u16) << 9)
+                    | ((size_bits as u16) << 6)
+                    | ((mode as u16) << 3)
+                    | (reg as u16);
                 bytes.extend_from_slice(&opword.to_be_bytes());
                 bytes.extend_from_slice(&ext);
             }
             (Operand::DataReg(dn), _) => {
                 let (mode, reg, ext) = self.encode_ea(dst, size)?;
-                let opword = base | ((reg_num_data(dn) as u16) << 9) | (1 << 8) | ((size_bits as u16) << 6) | ((mode as u16) << 3) | (reg as u16);
+                let opword = base
+                    | ((reg_num_data(dn) as u16) << 9)
+                    | (1 << 8)
+                    | ((size_bits as u16) << 6)
+                    | ((mode as u16) << 3)
+                    | (reg as u16);
                 bytes.extend_from_slice(&opword.to_be_bytes());
                 bytes.extend_from_slice(&ext);
             }
-            _ => return Err(EncodeError::InvalidOperands("AND/OR requires at least one Dn".to_string())),
+            _ => {
+                return Err(EncodeError::InvalidOperands(
+                    "AND/OR requires at least one Dn".to_string(),
+                ));
+            }
         }
         Ok(())
     }
 
-    fn encode_shift(&self, base: u16, size: Size, count: &Operand, reg: &DataReg, bytes: &mut Vec<u8>) -> Result<(), EncodeError> {
+    fn encode_shift(
+        &self,
+        base: u16,
+        size: Size,
+        count: &Operand,
+        reg: &DataReg,
+        bytes: &mut Vec<u8>,
+    ) -> Result<(), EncodeError> {
         let size_bits = size_bits(size);
 
         match count {
@@ -771,25 +933,46 @@ impl InstructionEncoder {
                     remaining -= cnt;
                     // Shift by 8 is encoded as 0, shifts 1-7 as-is
                     let encoded_cnt = if cnt == 8 { 0 } else { cnt };
-                    let opword = base | (encoded_cnt << 9) | ((size_bits as u16) << 6) | reg_num_data(reg) as u16;
+                    let opword = base
+                        | (encoded_cnt << 9)
+                        | ((size_bits as u16) << 6)
+                        | reg_num_data(reg) as u16;
                     bytes.extend_from_slice(&opword.to_be_bytes());
                 }
             }
             Operand::DataReg(cnt_reg) => {
-                let opword = base | ((reg_num_data(cnt_reg) as u16) << 9) | (1 << 5) | ((size_bits as u16) << 6) | reg_num_data(reg) as u16;
+                let opword = base
+                    | ((reg_num_data(cnt_reg) as u16) << 9)
+                    | (1 << 5)
+                    | ((size_bits as u16) << 6)
+                    | reg_num_data(reg) as u16;
                 bytes.extend_from_slice(&opword.to_be_bytes());
             }
-            _ => return Err(EncodeError::InvalidOperands("shift count must be immediate or Dn".to_string())),
-        };
+            _ => {
+                return Err(EncodeError::InvalidOperands(
+                    "shift count must be immediate or Dn".to_string(),
+                ));
+            }
+        }
         Ok(())
     }
 
-    fn encode_bit_op(&self, reg_base: u16, imm_base: u16, bit: &Operand, op: &Operand, bytes: &mut Vec<u8>) -> Result<(), EncodeError> {
+    fn encode_bit_op(
+        &self,
+        reg_base: u16,
+        imm_base: u16,
+        bit: &Operand,
+        op: &Operand,
+        bytes: &mut Vec<u8>,
+    ) -> Result<(), EncodeError> {
         let (mode, reg, ext) = self.encode_ea(op, Size::Byte)?;
 
         match bit {
             Operand::DataReg(dn) => {
-                let opword = reg_base | ((reg_num_data(dn) as u16) << 9) | ((mode as u16) << 3) | (reg as u16);
+                let opword = reg_base
+                    | ((reg_num_data(dn) as u16) << 9)
+                    | ((mode as u16) << 3)
+                    | (reg as u16);
                 bytes.extend_from_slice(&opword.to_be_bytes());
                 bytes.extend_from_slice(&ext);
             }
@@ -799,21 +982,37 @@ impl InstructionEncoder {
                 bytes.extend_from_slice(&(*n as u16).to_be_bytes());
                 bytes.extend_from_slice(&ext);
             }
-            _ => return Err(EncodeError::InvalidOperands("bit number must be immediate or Dn".to_string())),
+            _ => {
+                return Err(EncodeError::InvalidOperands(
+                    "bit number must be immediate or Dn".to_string(),
+                ));
+            }
         }
         Ok(())
     }
 
-    fn encode_movem(&self, size: Size, regs: &[Reg], op: &Operand, to_mem: bool, bytes: &mut Vec<u8>) -> Result<(), EncodeError> {
+    fn encode_movem(
+        &self,
+        size: Size,
+        regs: &[Reg],
+        op: &Operand,
+        to_mem: bool,
+        bytes: &mut Vec<u8>,
+    ) -> Result<(), EncodeError> {
         let (mode, reg, ext) = self.encode_ea(op, size)?;
         let size_bit: u16 = match size {
             Size::Word => 0,
             Size::Long => 1,
-            Size::Byte => return Err(EncodeError::InvalidOperands("MOVEM.B not valid".to_string())),
+            Size::Byte => {
+                return Err(EncodeError::InvalidOperands(
+                    "MOVEM.B not valid".to_string(),
+                ));
+            }
         };
-        let dir_bit: u16 = if to_mem { 0 } else { 1 };
+        let dir_bit: u16 = u16::from(!to_mem);
 
-        let opword = 0x4880 | (dir_bit << 10) | (size_bit << 6) | ((mode as u16) << 3) | (reg as u16);
+        let opword =
+            0x4880 | (dir_bit << 10) | (size_bit << 6) | ((mode as u16) << 3) | (reg as u16);
         bytes.extend_from_slice(&opword.to_be_bytes());
 
         // Register list mask
@@ -886,18 +1085,21 @@ impl InstructionEncoder {
                 // Treat as absolute long
                 if let Some(addr) = self.symbols.get(label) {
                     if std::env::var("DEBUG_ASM").is_ok() {
-                        eprintln!("  Label '{}' resolved to 0x{:08X}", label, addr);
+                        eprintln!("  Label '{label}' resolved to 0x{addr:08X}");
                     }
                     ext.extend_from_slice(&addr.to_be_bytes());
                 } else {
-                    eprintln!("WARNING: Label '{}' not found in symbol table, using 0!", label);
-                    ext.extend_from_slice(&0u32.to_be_bytes()); // Placeholder for relocation
+                    return Err(EncodeError::InvalidOperands(format!(
+                        "Label '{label}' not found in symbol table"
+                    )));
                 }
                 (0b111, 0b001)
             }
             Operand::Sr => {
                 // SR is not a standard EA mode, it's handled specially in MOVE to/from SR
-                return Err(EncodeError::InvalidOperands("SR cannot be encoded as EA".to_string()));
+                return Err(EncodeError::InvalidOperands(
+                    "SR cannot be encoded as EA".to_string(),
+                ));
             }
         };
 
@@ -920,15 +1122,27 @@ impl Default for InstructionEncoder {
 
 fn reg_num_data(r: &DataReg) -> u8 {
     match r {
-        DataReg::D0 => 0, DataReg::D1 => 1, DataReg::D2 => 2, DataReg::D3 => 3,
-        DataReg::D4 => 4, DataReg::D5 => 5, DataReg::D6 => 6, DataReg::D7 => 7,
+        DataReg::D0 => 0,
+        DataReg::D1 => 1,
+        DataReg::D2 => 2,
+        DataReg::D3 => 3,
+        DataReg::D4 => 4,
+        DataReg::D5 => 5,
+        DataReg::D6 => 6,
+        DataReg::D7 => 7,
     }
 }
 
 fn reg_num_addr(r: &AddrReg) -> u8 {
     match r {
-        AddrReg::A0 => 0, AddrReg::A1 => 1, AddrReg::A2 => 2, AddrReg::A3 => 3,
-        AddrReg::A4 => 4, AddrReg::A5 => 5, AddrReg::A6 => 6, AddrReg::A7 => 7,
+        AddrReg::A0 => 0,
+        AddrReg::A1 => 1,
+        AddrReg::A2 => 2,
+        AddrReg::A3 => 3,
+        AddrReg::A4 => 4,
+        AddrReg::A5 => 5,
+        AddrReg::A6 => 6,
+        AddrReg::A7 => 7,
     }
 }
 
@@ -942,10 +1156,22 @@ fn size_bits(size: Size) -> u8 {
 
 fn cond_code(cond: &Cond) -> u8 {
     match cond {
-        Cond::True => 0,  Cond::False => 1, Cond::Hi => 2,  Cond::Ls => 3,
-        Cond::Cc => 4,    Cond::Cs => 5,    Cond::Ne => 6,  Cond::Eq => 7,
-        Cond::Vc => 8,    Cond::Vs => 9,    Cond::Pl => 10, Cond::Mi => 11,
-        Cond::Ge => 12,   Cond::Lt => 13,   Cond::Gt => 14, Cond::Le => 15,
+        Cond::True => 0,
+        Cond::False => 1,
+        Cond::Hi => 2,
+        Cond::Ls => 3,
+        Cond::Cc => 4,
+        Cond::Cs => 5,
+        Cond::Ne => 6,
+        Cond::Eq => 7,
+        Cond::Vc => 8,
+        Cond::Vs => 9,
+        Cond::Pl => 10,
+        Cond::Mi => 11,
+        Cond::Ge => 12,
+        Cond::Lt => 13,
+        Cond::Gt => 14,
+        Cond::Le => 15,
     }
 }
 
@@ -955,14 +1181,14 @@ fn parse_number(s: &str) -> Result<i32, EncodeError> {
         // Parse as u32 first to handle full 32-bit range, then cast to i32
         u32::from_str_radix(&s[2..], 16)
             .map(|v| v as i32)
-            .map_err(|_| EncodeError::InvalidOperands(format!("invalid hex number: {}", s)))
+            .map_err(|_| EncodeError::InvalidOperands(format!("invalid hex number: {s}")))
     } else if s.starts_with('$') {
         u32::from_str_radix(&s[1..], 16)
             .map(|v| v as i32)
-            .map_err(|_| EncodeError::InvalidOperands(format!("invalid hex number: {}", s)))
+            .map_err(|_| EncodeError::InvalidOperands(format!("invalid hex number: {s}")))
     } else {
         s.parse::<i32>()
-            .map_err(|_| EncodeError::InvalidOperands(format!("invalid number: {}", s)))
+            .map_err(|_| EncodeError::InvalidOperands(format!("invalid number: {s}")))
     }
 }
 
@@ -1001,22 +1227,26 @@ mod tests {
     #[test]
     fn test_encode_move_reg_to_reg() {
         let mut encoder = InstructionEncoder::new();
-        let bytes = encoder.encode(&M68kInst::Move(
-            Size::Long,
-            Operand::DataReg(DataReg::D0),
-            Operand::DataReg(DataReg::D1),
-        )).unwrap();
+        let bytes = encoder
+            .encode(&M68kInst::Move(
+                Size::Long,
+                Operand::DataReg(DataReg::D0),
+                Operand::DataReg(DataReg::D1),
+            ))
+            .unwrap();
         assert_eq!(bytes, vec![0x22, 0x00]); // MOVE.L D0, D1
     }
 
     #[test]
     fn test_encode_add_imm() {
         let mut encoder = InstructionEncoder::new();
-        let bytes = encoder.encode(&M68kInst::Addi(
-            Size::Long,
-            100,
-            Operand::DataReg(DataReg::D0),
-        )).unwrap();
+        let bytes = encoder
+            .encode(&M68kInst::Addi(
+                Size::Long,
+                100,
+                Operand::DataReg(DataReg::D0),
+            ))
+            .unwrap();
         // ADDI.L #100, D0
         assert_eq!(bytes, vec![0x06, 0x80, 0x00, 0x00, 0x00, 0x64]);
     }

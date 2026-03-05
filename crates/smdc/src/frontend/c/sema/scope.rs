@@ -68,7 +68,10 @@ impl Scope {
 
     pub fn define(&mut self, symbol: Symbol) -> Result<(), String> {
         if self.symbols.contains_key(&symbol.name) {
-            return Err(format!("symbol '{}' already defined in this scope", symbol.name));
+            return Err(format!(
+                "symbol '{}' already defined in this scope",
+                symbol.name
+            ));
         }
         self.symbols.insert(symbol.name.clone(), symbol);
         Ok(())
@@ -91,7 +94,10 @@ impl Scope {
     /// Define a struct type in the current scope
     pub fn define_struct(&mut self, def: StructDef) -> Result<(), String> {
         if self.structs.contains_key(&def.name) {
-            return Err(format!("struct '{}' already defined in this scope", def.name));
+            return Err(format!(
+                "struct '{}' already defined in this scope",
+                def.name
+            ));
         }
         self.structs.insert(def.name.clone(), def);
         Ok(())
@@ -111,7 +117,10 @@ impl Scope {
     /// Define a union type in the current scope
     pub fn define_union(&mut self, def: UnionDef) -> Result<(), String> {
         if self.unions.contains_key(&def.name) {
-            return Err(format!("union '{}' already defined in this scope", def.name));
+            return Err(format!(
+                "union '{}' already defined in this scope",
+                def.name
+            ));
         }
         self.unions.insert(def.name.clone(), def);
         Ok(())
@@ -130,10 +139,10 @@ impl Scope {
 
     /// Define a label in the current function scope
     pub fn define_label(&mut self, name: &str) -> Result<(), String> {
-        if let Some(defined) = self.labels.get(name) {
-            if *defined {
-                return Err(format!("label '{}' already defined", name));
-            }
+        if let Some(defined) = self.labels.get(name)
+            && *defined
+        {
+            return Err(format!("label '{name}' already defined"));
         }
         self.labels.insert(name.to_string(), true);
         Ok(())
@@ -148,7 +157,8 @@ impl Scope {
 
     /// Check if all referenced labels are defined
     pub fn check_labels(&self) -> Result<(), Vec<String>> {
-        let undefined: Vec<String> = self.labels
+        let undefined: Vec<String> = self
+            .labels
             .iter()
             .filter(|(_, defined)| !**defined)
             .map(|(name, _)| name.clone())
@@ -177,7 +187,7 @@ impl Scope {
 
     /// Push a new child scope
     pub fn push_child(&mut self) {
-        let old_scope = std::mem::replace(self, Scope::new());
+        let old_scope = std::mem::take(self);
         self.parent = Some(Box::new(old_scope));
     }
 }

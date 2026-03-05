@@ -3,8 +3,8 @@
 //! This module provides built-in implementations for SDK functions,
 //! eliminating the need for separate SDK source files.
 
-use std::collections::{HashMap, HashSet};
 use super::m68k::*;
+use std::collections::{HashMap, HashSet};
 
 // ============================================================================
 // Hardware Addresses
@@ -96,156 +96,1030 @@ impl SdkRegistry {
     }
 
     fn register_vdp_functions(map: &mut HashMap<&'static str, SdkFunction>) {
-        use SdkFunctionKind::*;
         use SdkCategory::Vdp;
+        use SdkFunctionKind::{Inline, Library};
 
         // Inline VDP functions
-        map.insert("vdp_set_reg", SdkFunction { name: "vdp_set_reg", kind: Inline, category: Vdp, param_count: 2, has_return: false });
-        map.insert("vdp_get_status", SdkFunction { name: "vdp_get_status", kind: Inline, category: Vdp, param_count: 0, has_return: true });
-        map.insert("vdp_set_write_addr", SdkFunction { name: "vdp_set_write_addr", kind: Inline, category: Vdp, param_count: 1, has_return: false });
-        map.insert("vdp_set_cram_addr", SdkFunction { name: "vdp_set_cram_addr", kind: Inline, category: Vdp, param_count: 1, has_return: false });
-        map.insert("vdp_set_color", SdkFunction { name: "vdp_set_color", kind: Inline, category: Vdp, param_count: 2, has_return: false });
-        map.insert("vdp_set_background", SdkFunction { name: "vdp_set_background", kind: Inline, category: Vdp, param_count: 2, has_return: false });
-        map.insert("vdp_in_vblank", SdkFunction { name: "vdp_in_vblank", kind: Inline, category: Vdp, param_count: 0, has_return: true });
+        map.insert(
+            "vdp_set_reg",
+            SdkFunction {
+                name: "vdp_set_reg",
+                kind: Inline,
+                category: Vdp,
+                param_count: 2,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "vdp_get_status",
+            SdkFunction {
+                name: "vdp_get_status",
+                kind: Inline,
+                category: Vdp,
+                param_count: 0,
+                has_return: true,
+            },
+        );
+        map.insert(
+            "vdp_set_write_addr",
+            SdkFunction {
+                name: "vdp_set_write_addr",
+                kind: Inline,
+                category: Vdp,
+                param_count: 1,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "vdp_set_cram_addr",
+            SdkFunction {
+                name: "vdp_set_cram_addr",
+                kind: Inline,
+                category: Vdp,
+                param_count: 1,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "vdp_set_color",
+            SdkFunction {
+                name: "vdp_set_color",
+                kind: Inline,
+                category: Vdp,
+                param_count: 2,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "vdp_set_background",
+            SdkFunction {
+                name: "vdp_set_background",
+                kind: Inline,
+                category: Vdp,
+                param_count: 2,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "vdp_in_vblank",
+            SdkFunction {
+                name: "vdp_in_vblank",
+                kind: Inline,
+                category: Vdp,
+                param_count: 0,
+                has_return: true,
+            },
+        );
 
         // Library VDP functions
-        map.insert("vdp_init", SdkFunction { name: "vdp_init", kind: Library, category: Vdp, param_count: 0, has_return: false });
-        map.insert("vdp_vsync", SdkFunction { name: "vdp_vsync", kind: Library, category: Vdp, param_count: 0, has_return: false });
-        map.insert("vdp_wait_vblank_start", SdkFunction { name: "vdp_wait_vblank_start", kind: Library, category: Vdp, param_count: 0, has_return: false });
-        map.insert("vdp_wait_vblank_end", SdkFunction { name: "vdp_wait_vblank_end", kind: Library, category: Vdp, param_count: 0, has_return: false });
-        map.insert("vdp_wait_frame", SdkFunction { name: "vdp_wait_frame", kind: Library, category: Vdp, param_count: 0, has_return: false });
-        map.insert("vdp_load_palette", SdkFunction { name: "vdp_load_palette", kind: Library, category: Vdp, param_count: 3, has_return: false });
-        map.insert("vdp_load_tiles", SdkFunction { name: "vdp_load_tiles", kind: Library, category: Vdp, param_count: 3, has_return: false });
-        map.insert("vdp_set_tile_a", SdkFunction { name: "vdp_set_tile_a", kind: Library, category: Vdp, param_count: 3, has_return: false });
-        map.insert("vdp_set_tile_b", SdkFunction { name: "vdp_set_tile_b", kind: Library, category: Vdp, param_count: 3, has_return: false });
-        map.insert("vdp_clear_plane_a", SdkFunction { name: "vdp_clear_plane_a", kind: Library, category: Vdp, param_count: 0, has_return: false });
-        map.insert("vdp_clear_plane_b", SdkFunction { name: "vdp_clear_plane_b", kind: Library, category: Vdp, param_count: 0, has_return: false });
-        map.insert("vdp_set_hscroll_a", SdkFunction { name: "vdp_set_hscroll_a", kind: Library, category: Vdp, param_count: 1, has_return: false });
-        map.insert("vdp_set_hscroll_b", SdkFunction { name: "vdp_set_hscroll_b", kind: Library, category: Vdp, param_count: 1, has_return: false });
-        map.insert("vdp_set_vscroll_a", SdkFunction { name: "vdp_set_vscroll_a", kind: Library, category: Vdp, param_count: 1, has_return: false });
-        map.insert("vdp_set_vscroll_b", SdkFunction { name: "vdp_set_vscroll_b", kind: Library, category: Vdp, param_count: 1, has_return: false });
-        map.insert("vdp_get_frame_count", SdkFunction { name: "vdp_get_frame_count", kind: Library, category: Vdp, param_count: 0, has_return: true });
-        map.insert("vdp_reset_frame_count", SdkFunction { name: "vdp_reset_frame_count", kind: Library, category: Vdp, param_count: 0, has_return: false });
+        map.insert(
+            "vdp_init",
+            SdkFunction {
+                name: "vdp_init",
+                kind: Library,
+                category: Vdp,
+                param_count: 0,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "vdp_vsync",
+            SdkFunction {
+                name: "vdp_vsync",
+                kind: Library,
+                category: Vdp,
+                param_count: 0,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "vdp_wait_vblank_start",
+            SdkFunction {
+                name: "vdp_wait_vblank_start",
+                kind: Library,
+                category: Vdp,
+                param_count: 0,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "vdp_wait_vblank_end",
+            SdkFunction {
+                name: "vdp_wait_vblank_end",
+                kind: Library,
+                category: Vdp,
+                param_count: 0,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "vdp_wait_frame",
+            SdkFunction {
+                name: "vdp_wait_frame",
+                kind: Library,
+                category: Vdp,
+                param_count: 0,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "vdp_load_palette",
+            SdkFunction {
+                name: "vdp_load_palette",
+                kind: Library,
+                category: Vdp,
+                param_count: 3,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "vdp_load_tiles",
+            SdkFunction {
+                name: "vdp_load_tiles",
+                kind: Library,
+                category: Vdp,
+                param_count: 3,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "vdp_set_tile_a",
+            SdkFunction {
+                name: "vdp_set_tile_a",
+                kind: Library,
+                category: Vdp,
+                param_count: 3,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "vdp_set_tile_b",
+            SdkFunction {
+                name: "vdp_set_tile_b",
+                kind: Library,
+                category: Vdp,
+                param_count: 3,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "vdp_clear_plane_a",
+            SdkFunction {
+                name: "vdp_clear_plane_a",
+                kind: Library,
+                category: Vdp,
+                param_count: 0,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "vdp_clear_plane_b",
+            SdkFunction {
+                name: "vdp_clear_plane_b",
+                kind: Library,
+                category: Vdp,
+                param_count: 0,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "vdp_set_hscroll_a",
+            SdkFunction {
+                name: "vdp_set_hscroll_a",
+                kind: Library,
+                category: Vdp,
+                param_count: 1,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "vdp_set_hscroll_b",
+            SdkFunction {
+                name: "vdp_set_hscroll_b",
+                kind: Library,
+                category: Vdp,
+                param_count: 1,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "vdp_set_vscroll_a",
+            SdkFunction {
+                name: "vdp_set_vscroll_a",
+                kind: Library,
+                category: Vdp,
+                param_count: 1,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "vdp_set_vscroll_b",
+            SdkFunction {
+                name: "vdp_set_vscroll_b",
+                kind: Library,
+                category: Vdp,
+                param_count: 1,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "vdp_get_frame_count",
+            SdkFunction {
+                name: "vdp_get_frame_count",
+                kind: Library,
+                category: Vdp,
+                param_count: 0,
+                has_return: true,
+            },
+        );
+        map.insert(
+            "vdp_reset_frame_count",
+            SdkFunction {
+                name: "vdp_reset_frame_count",
+                kind: Library,
+                category: Vdp,
+                param_count: 0,
+                has_return: false,
+            },
+        );
     }
 
     fn register_sprite_functions(map: &mut HashMap<&'static str, SdkFunction>) {
-        use SdkFunctionKind::*;
         use SdkCategory::Sprite;
+        use SdkFunctionKind::{Inline, Library};
 
         // Inline Sprite functions
-        map.insert("sprite_attr", SdkFunction { name: "sprite_attr", kind: Inline, category: Sprite, param_count: 5, has_return: true });
-        map.insert("sprite_get_width", SdkFunction { name: "sprite_get_width", kind: Inline, category: Sprite, param_count: 1, has_return: true });
-        map.insert("sprite_get_height", SdkFunction { name: "sprite_get_height", kind: Inline, category: Sprite, param_count: 1, has_return: true });
+        map.insert(
+            "sprite_attr",
+            SdkFunction {
+                name: "sprite_attr",
+                kind: Inline,
+                category: Sprite,
+                param_count: 5,
+                has_return: true,
+            },
+        );
+        map.insert(
+            "sprite_get_width",
+            SdkFunction {
+                name: "sprite_get_width",
+                kind: Inline,
+                category: Sprite,
+                param_count: 1,
+                has_return: true,
+            },
+        );
+        map.insert(
+            "sprite_get_height",
+            SdkFunction {
+                name: "sprite_get_height",
+                kind: Inline,
+                category: Sprite,
+                param_count: 1,
+                has_return: true,
+            },
+        );
 
         // Library Sprite functions
-        map.insert("sprite_init", SdkFunction { name: "sprite_init", kind: Library, category: Sprite, param_count: 0, has_return: false });
-        map.insert("sprite_set", SdkFunction { name: "sprite_set", kind: Library, category: Sprite, param_count: 5, has_return: false });
-        map.insert("sprite_set_pos", SdkFunction { name: "sprite_set_pos", kind: Library, category: Sprite, param_count: 3, has_return: false });
-        map.insert("sprite_hide", SdkFunction { name: "sprite_hide", kind: Library, category: Sprite, param_count: 1, has_return: false });
-        map.insert("sprite_clear", SdkFunction { name: "sprite_clear", kind: Library, category: Sprite, param_count: 1, has_return: false });
-        map.insert("sprite_clear_all", SdkFunction { name: "sprite_clear_all", kind: Library, category: Sprite, param_count: 0, has_return: false });
-        map.insert("sprite_set_link", SdkFunction { name: "sprite_set_link", kind: Library, category: Sprite, param_count: 2, has_return: false });
+        map.insert(
+            "sprite_init",
+            SdkFunction {
+                name: "sprite_init",
+                kind: Library,
+                category: Sprite,
+                param_count: 0,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "sprite_set",
+            SdkFunction {
+                name: "sprite_set",
+                kind: Library,
+                category: Sprite,
+                param_count: 5,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "sprite_set_pos",
+            SdkFunction {
+                name: "sprite_set_pos",
+                kind: Library,
+                category: Sprite,
+                param_count: 3,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "sprite_hide",
+            SdkFunction {
+                name: "sprite_hide",
+                kind: Library,
+                category: Sprite,
+                param_count: 1,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "sprite_clear",
+            SdkFunction {
+                name: "sprite_clear",
+                kind: Library,
+                category: Sprite,
+                param_count: 1,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "sprite_clear_all",
+            SdkFunction {
+                name: "sprite_clear_all",
+                kind: Library,
+                category: Sprite,
+                param_count: 0,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "sprite_set_link",
+            SdkFunction {
+                name: "sprite_set_link",
+                kind: Library,
+                category: Sprite,
+                param_count: 2,
+                has_return: false,
+            },
+        );
     }
 
     fn register_input_functions(map: &mut HashMap<&'static str, SdkFunction>) {
-        use SdkFunctionKind::*;
         use SdkCategory::Input;
+        use SdkFunctionKind::{Inline, Library};
 
         // Inline Input functions
-        map.insert("joy1_read", SdkFunction { name: "joy1_read", kind: Inline, category: Input, param_count: 0, has_return: true });
-        map.insert("joy2_read", SdkFunction { name: "joy2_read", kind: Inline, category: Input, param_count: 0, has_return: true });
+        map.insert(
+            "joy1_read",
+            SdkFunction {
+                name: "joy1_read",
+                kind: Inline,
+                category: Input,
+                param_count: 0,
+                has_return: true,
+            },
+        );
+        map.insert(
+            "joy2_read",
+            SdkFunction {
+                name: "joy2_read",
+                kind: Inline,
+                category: Input,
+                param_count: 0,
+                has_return: true,
+            },
+        );
 
         // Library Input functions
-        map.insert("input_init", SdkFunction { name: "input_init", kind: Library, category: Input, param_count: 0, has_return: false });
-        map.insert("input_read", SdkFunction { name: "input_read", kind: Library, category: Input, param_count: 1, has_return: true });
-        map.insert("input_update", SdkFunction { name: "input_update", kind: Library, category: Input, param_count: 0, has_return: false });
-        map.insert("input_held", SdkFunction { name: "input_held", kind: Library, category: Input, param_count: 1, has_return: true });
-        map.insert("input_pressed", SdkFunction { name: "input_pressed", kind: Library, category: Input, param_count: 1, has_return: true });
-        map.insert("input_released", SdkFunction { name: "input_released", kind: Library, category: Input, param_count: 1, has_return: true });
-        map.insert("input_is_6button", SdkFunction { name: "input_is_6button", kind: Library, category: Input, param_count: 1, has_return: true });
+        map.insert(
+            "input_init",
+            SdkFunction {
+                name: "input_init",
+                kind: Library,
+                category: Input,
+                param_count: 0,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "input_read",
+            SdkFunction {
+                name: "input_read",
+                kind: Library,
+                category: Input,
+                param_count: 1,
+                has_return: true,
+            },
+        );
+        map.insert(
+            "input_update",
+            SdkFunction {
+                name: "input_update",
+                kind: Library,
+                category: Input,
+                param_count: 0,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "input_held",
+            SdkFunction {
+                name: "input_held",
+                kind: Library,
+                category: Input,
+                param_count: 1,
+                has_return: true,
+            },
+        );
+        map.insert(
+            "input_pressed",
+            SdkFunction {
+                name: "input_pressed",
+                kind: Library,
+                category: Input,
+                param_count: 1,
+                has_return: true,
+            },
+        );
+        map.insert(
+            "input_released",
+            SdkFunction {
+                name: "input_released",
+                kind: Library,
+                category: Input,
+                param_count: 1,
+                has_return: true,
+            },
+        );
+        map.insert(
+            "input_is_6button",
+            SdkFunction {
+                name: "input_is_6button",
+                kind: Library,
+                category: Input,
+                param_count: 1,
+                has_return: true,
+            },
+        );
     }
 
     fn register_ym2612_functions(map: &mut HashMap<&'static str, SdkFunction>) {
-        use SdkFunctionKind::*;
         use SdkCategory::Ym2612;
+        use SdkFunctionKind::{Inline, Library};
 
         // Inline YM2612 functions
-        map.insert("ym_read_status", SdkFunction { name: "ym_read_status", kind: Inline, category: Ym2612, param_count: 0, has_return: true });
-        map.insert("ym_write0", SdkFunction { name: "ym_write0", kind: Inline, category: Ym2612, param_count: 2, has_return: false });
-        map.insert("ym_write1", SdkFunction { name: "ym_write1", kind: Inline, category: Ym2612, param_count: 2, has_return: false });
-        map.insert("ym_dac_enable", SdkFunction { name: "ym_dac_enable", kind: Inline, category: Ym2612, param_count: 0, has_return: false });
-        map.insert("ym_dac_disable", SdkFunction { name: "ym_dac_disable", kind: Inline, category: Ym2612, param_count: 0, has_return: false });
-        map.insert("ym_dac_write", SdkFunction { name: "ym_dac_write", kind: Inline, category: Ym2612, param_count: 1, has_return: false });
+        map.insert(
+            "ym_read_status",
+            SdkFunction {
+                name: "ym_read_status",
+                kind: Inline,
+                category: Ym2612,
+                param_count: 0,
+                has_return: true,
+            },
+        );
+        map.insert(
+            "ym_write0",
+            SdkFunction {
+                name: "ym_write0",
+                kind: Inline,
+                category: Ym2612,
+                param_count: 2,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "ym_write1",
+            SdkFunction {
+                name: "ym_write1",
+                kind: Inline,
+                category: Ym2612,
+                param_count: 2,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "ym_dac_enable",
+            SdkFunction {
+                name: "ym_dac_enable",
+                kind: Inline,
+                category: Ym2612,
+                param_count: 0,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "ym_dac_disable",
+            SdkFunction {
+                name: "ym_dac_disable",
+                kind: Inline,
+                category: Ym2612,
+                param_count: 0,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "ym_dac_write",
+            SdkFunction {
+                name: "ym_dac_write",
+                kind: Inline,
+                category: Ym2612,
+                param_count: 1,
+                has_return: false,
+            },
+        );
 
         // Library YM2612 functions
-        map.insert("ym_init", SdkFunction { name: "ym_init", kind: Library, category: Ym2612, param_count: 0, has_return: false });
-        map.insert("ym_reset", SdkFunction { name: "ym_reset", kind: Library, category: Ym2612, param_count: 0, has_return: false });
-        map.insert("ym_wait", SdkFunction { name: "ym_wait", kind: Library, category: Ym2612, param_count: 0, has_return: false });
-        map.insert("ym_write_ch", SdkFunction { name: "ym_write_ch", kind: Library, category: Ym2612, param_count: 3, has_return: false });
-        map.insert("ym_write_op", SdkFunction { name: "ym_write_op", kind: Library, category: Ym2612, param_count: 4, has_return: false });
-        map.insert("ym_key_on", SdkFunction { name: "ym_key_on", kind: Library, category: Ym2612, param_count: 1, has_return: false });
-        map.insert("ym_key_off", SdkFunction { name: "ym_key_off", kind: Library, category: Ym2612, param_count: 1, has_return: false });
-        map.insert("ym_key_on_ops", SdkFunction { name: "ym_key_on_ops", kind: Library, category: Ym2612, param_count: 2, has_return: false });
-        map.insert("ym_set_freq", SdkFunction { name: "ym_set_freq", kind: Library, category: Ym2612, param_count: 3, has_return: false });
-        map.insert("ym_set_freq_detune", SdkFunction { name: "ym_set_freq_detune", kind: Library, category: Ym2612, param_count: 4, has_return: false });
-        map.insert("ym_set_algo", SdkFunction { name: "ym_set_algo", kind: Library, category: Ym2612, param_count: 3, has_return: false });
-        map.insert("ym_set_pan", SdkFunction { name: "ym_set_pan", kind: Library, category: Ym2612, param_count: 2, has_return: false });
-        map.insert("ym_set_volume", SdkFunction { name: "ym_set_volume", kind: Library, category: Ym2612, param_count: 2, has_return: false });
-        map.insert("ym_set_lfo", SdkFunction { name: "ym_set_lfo", kind: Library, category: Ym2612, param_count: 1, has_return: false });
-        map.insert("ym_set_lfo_sensitivity", SdkFunction { name: "ym_set_lfo_sensitivity", kind: Library, category: Ym2612, param_count: 3, has_return: false });
-        map.insert("ym_load_patch", SdkFunction { name: "ym_load_patch", kind: Library, category: Ym2612, param_count: 2, has_return: false });
-        map.insert("ym_load_operator", SdkFunction { name: "ym_load_operator", kind: Library, category: Ym2612, param_count: 3, has_return: false });
-        map.insert("ym_dac_play", SdkFunction { name: "ym_dac_play", kind: Library, category: Ym2612, param_count: 3, has_return: false });
-        map.insert("ym_set_timer_a", SdkFunction { name: "ym_set_timer_a", kind: Library, category: Ym2612, param_count: 1, has_return: false });
-        map.insert("ym_set_timer_b", SdkFunction { name: "ym_set_timer_b", kind: Library, category: Ym2612, param_count: 1, has_return: false });
-        map.insert("ym_start_timers", SdkFunction { name: "ym_start_timers", kind: Library, category: Ym2612, param_count: 1, has_return: false });
-        map.insert("ym_stop_timers", SdkFunction { name: "ym_stop_timers", kind: Library, category: Ym2612, param_count: 0, has_return: false });
-        map.insert("ym_timer_a_overflow", SdkFunction { name: "ym_timer_a_overflow", kind: Library, category: Ym2612, param_count: 0, has_return: true });
-        map.insert("ym_timer_b_overflow", SdkFunction { name: "ym_timer_b_overflow", kind: Library, category: Ym2612, param_count: 0, has_return: true });
+        map.insert(
+            "ym_init",
+            SdkFunction {
+                name: "ym_init",
+                kind: Library,
+                category: Ym2612,
+                param_count: 0,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "ym_reset",
+            SdkFunction {
+                name: "ym_reset",
+                kind: Library,
+                category: Ym2612,
+                param_count: 0,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "ym_wait",
+            SdkFunction {
+                name: "ym_wait",
+                kind: Library,
+                category: Ym2612,
+                param_count: 0,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "ym_write_ch",
+            SdkFunction {
+                name: "ym_write_ch",
+                kind: Library,
+                category: Ym2612,
+                param_count: 3,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "ym_write_op",
+            SdkFunction {
+                name: "ym_write_op",
+                kind: Library,
+                category: Ym2612,
+                param_count: 4,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "ym_key_on",
+            SdkFunction {
+                name: "ym_key_on",
+                kind: Library,
+                category: Ym2612,
+                param_count: 1,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "ym_key_off",
+            SdkFunction {
+                name: "ym_key_off",
+                kind: Library,
+                category: Ym2612,
+                param_count: 1,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "ym_key_on_ops",
+            SdkFunction {
+                name: "ym_key_on_ops",
+                kind: Library,
+                category: Ym2612,
+                param_count: 2,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "ym_set_freq",
+            SdkFunction {
+                name: "ym_set_freq",
+                kind: Library,
+                category: Ym2612,
+                param_count: 3,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "ym_set_freq_detune",
+            SdkFunction {
+                name: "ym_set_freq_detune",
+                kind: Library,
+                category: Ym2612,
+                param_count: 4,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "ym_set_algo",
+            SdkFunction {
+                name: "ym_set_algo",
+                kind: Library,
+                category: Ym2612,
+                param_count: 3,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "ym_set_pan",
+            SdkFunction {
+                name: "ym_set_pan",
+                kind: Library,
+                category: Ym2612,
+                param_count: 2,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "ym_set_volume",
+            SdkFunction {
+                name: "ym_set_volume",
+                kind: Library,
+                category: Ym2612,
+                param_count: 2,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "ym_set_lfo",
+            SdkFunction {
+                name: "ym_set_lfo",
+                kind: Library,
+                category: Ym2612,
+                param_count: 1,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "ym_set_lfo_sensitivity",
+            SdkFunction {
+                name: "ym_set_lfo_sensitivity",
+                kind: Library,
+                category: Ym2612,
+                param_count: 3,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "ym_load_patch",
+            SdkFunction {
+                name: "ym_load_patch",
+                kind: Library,
+                category: Ym2612,
+                param_count: 2,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "ym_load_operator",
+            SdkFunction {
+                name: "ym_load_operator",
+                kind: Library,
+                category: Ym2612,
+                param_count: 3,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "ym_dac_play",
+            SdkFunction {
+                name: "ym_dac_play",
+                kind: Library,
+                category: Ym2612,
+                param_count: 3,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "ym_set_timer_a",
+            SdkFunction {
+                name: "ym_set_timer_a",
+                kind: Library,
+                category: Ym2612,
+                param_count: 1,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "ym_set_timer_b",
+            SdkFunction {
+                name: "ym_set_timer_b",
+                kind: Library,
+                category: Ym2612,
+                param_count: 1,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "ym_start_timers",
+            SdkFunction {
+                name: "ym_start_timers",
+                kind: Library,
+                category: Ym2612,
+                param_count: 1,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "ym_stop_timers",
+            SdkFunction {
+                name: "ym_stop_timers",
+                kind: Library,
+                category: Ym2612,
+                param_count: 0,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "ym_timer_a_overflow",
+            SdkFunction {
+                name: "ym_timer_a_overflow",
+                kind: Library,
+                category: Ym2612,
+                param_count: 0,
+                has_return: true,
+            },
+        );
+        map.insert(
+            "ym_timer_b_overflow",
+            SdkFunction {
+                name: "ym_timer_b_overflow",
+                kind: Library,
+                category: Ym2612,
+                param_count: 0,
+                has_return: true,
+            },
+        );
 
         // YM2612 Patch functions
         for patch in &[
-            "ym_patch_dist_guitar", "ym_patch_palm_mute", "ym_patch_clean_guitar",
-            "ym_patch_lead_guitar", "ym_patch_synth_bass", "ym_patch_elec_bass",
-            "ym_patch_epiano", "ym_patch_strings", "ym_patch_brass", "ym_patch_organ",
-            "ym_patch_synth_lead", "ym_patch_kick", "ym_patch_snare", "ym_patch_tom",
-            "ym_patch_hihat"
+            "ym_patch_dist_guitar",
+            "ym_patch_palm_mute",
+            "ym_patch_clean_guitar",
+            "ym_patch_lead_guitar",
+            "ym_patch_synth_bass",
+            "ym_patch_elec_bass",
+            "ym_patch_epiano",
+            "ym_patch_strings",
+            "ym_patch_brass",
+            "ym_patch_organ",
+            "ym_patch_synth_lead",
+            "ym_patch_kick",
+            "ym_patch_snare",
+            "ym_patch_tom",
+            "ym_patch_hihat",
         ] {
-            map.insert(patch, SdkFunction { name: patch, kind: Library, category: Ym2612, param_count: 1, has_return: false });
+            map.insert(
+                patch,
+                SdkFunction {
+                    name: patch,
+                    kind: Library,
+                    category: Ym2612,
+                    param_count: 1,
+                    has_return: false,
+                },
+            );
         }
 
         // Vibrato functions
-        map.insert("ym_vibrato_init", SdkFunction { name: "ym_vibrato_init", kind: Library, category: Ym2612, param_count: 5, has_return: false });
-        map.insert("ym_vibrato_update", SdkFunction { name: "ym_vibrato_update", kind: Library, category: Ym2612, param_count: 2, has_return: false });
-        map.insert("ym_pitch_bend", SdkFunction { name: "ym_pitch_bend", kind: Library, category: Ym2612, param_count: 4, has_return: true });
+        map.insert(
+            "ym_vibrato_init",
+            SdkFunction {
+                name: "ym_vibrato_init",
+                kind: Library,
+                category: Ym2612,
+                param_count: 5,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "ym_vibrato_update",
+            SdkFunction {
+                name: "ym_vibrato_update",
+                kind: Library,
+                category: Ym2612,
+                param_count: 2,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "ym_pitch_bend",
+            SdkFunction {
+                name: "ym_pitch_bend",
+                kind: Library,
+                category: Ym2612,
+                param_count: 4,
+                has_return: true,
+            },
+        );
     }
 
     fn register_psg_functions(map: &mut HashMap<&'static str, SdkFunction>) {
-        use SdkFunctionKind::*;
         use SdkCategory::Psg;
+        use SdkFunctionKind::{Inline, Library};
 
         // Inline PSG functions
-        map.insert("psg_write", SdkFunction { name: "psg_write", kind: Inline, category: Psg, param_count: 1, has_return: false });
-        map.insert("psg_set_volume", SdkFunction { name: "psg_set_volume", kind: Inline, category: Psg, param_count: 2, has_return: false });
-        map.insert("psg_set_noise", SdkFunction { name: "psg_set_noise", kind: Inline, category: Psg, param_count: 1, has_return: false });
-        map.insert("psg_stop_channel", SdkFunction { name: "psg_stop_channel", kind: Inline, category: Psg, param_count: 1, has_return: false });
-        map.insert("psg_note_off", SdkFunction { name: "psg_note_off", kind: Inline, category: Psg, param_count: 1, has_return: false });
+        map.insert(
+            "psg_write",
+            SdkFunction {
+                name: "psg_write",
+                kind: Inline,
+                category: Psg,
+                param_count: 1,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "psg_set_volume",
+            SdkFunction {
+                name: "psg_set_volume",
+                kind: Inline,
+                category: Psg,
+                param_count: 2,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "psg_set_noise",
+            SdkFunction {
+                name: "psg_set_noise",
+                kind: Inline,
+                category: Psg,
+                param_count: 1,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "psg_stop_channel",
+            SdkFunction {
+                name: "psg_stop_channel",
+                kind: Inline,
+                category: Psg,
+                param_count: 1,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "psg_note_off",
+            SdkFunction {
+                name: "psg_note_off",
+                kind: Inline,
+                category: Psg,
+                param_count: 1,
+                has_return: false,
+            },
+        );
 
         // Library PSG functions
-        map.insert("psg_init", SdkFunction { name: "psg_init", kind: Library, category: Psg, param_count: 0, has_return: false });
-        map.insert("psg_set_tone", SdkFunction { name: "psg_set_tone", kind: Library, category: Psg, param_count: 2, has_return: false });
-        map.insert("psg_set_freq", SdkFunction { name: "psg_set_freq", kind: Library, category: Psg, param_count: 2, has_return: false });
-        map.insert("psg_stop", SdkFunction { name: "psg_stop", kind: Library, category: Psg, param_count: 0, has_return: false });
-        map.insert("psg_beep", SdkFunction { name: "psg_beep", kind: Library, category: Psg, param_count: 3, has_return: false });
-        map.insert("psg_note_on", SdkFunction { name: "psg_note_on", kind: Library, category: Psg, param_count: 3, has_return: false });
-        map.insert("psg_hihat", SdkFunction { name: "psg_hihat", kind: Library, category: Psg, param_count: 1, has_return: false });
-        map.insert("psg_snare_noise", SdkFunction { name: "psg_snare_noise", kind: Library, category: Psg, param_count: 1, has_return: false });
-        map.insert("psg_kick", SdkFunction { name: "psg_kick", kind: Library, category: Psg, param_count: 1, has_return: false });
-        map.insert("psg_cymbal", SdkFunction { name: "psg_cymbal", kind: Library, category: Psg, param_count: 1, has_return: false });
-        map.insert("psg_env_init", SdkFunction { name: "psg_env_init", kind: Library, category: Psg, param_count: 2, has_return: false });
-        map.insert("psg_env_attack", SdkFunction { name: "psg_env_attack", kind: Library, category: Psg, param_count: 3, has_return: false });
-        map.insert("psg_env_release", SdkFunction { name: "psg_env_release", kind: Library, category: Psg, param_count: 2, has_return: false });
-        map.insert("psg_env_update", SdkFunction { name: "psg_env_update", kind: Library, category: Psg, param_count: 1, has_return: true });
+        map.insert(
+            "psg_init",
+            SdkFunction {
+                name: "psg_init",
+                kind: Library,
+                category: Psg,
+                param_count: 0,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "psg_set_tone",
+            SdkFunction {
+                name: "psg_set_tone",
+                kind: Library,
+                category: Psg,
+                param_count: 2,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "psg_set_freq",
+            SdkFunction {
+                name: "psg_set_freq",
+                kind: Library,
+                category: Psg,
+                param_count: 2,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "psg_stop",
+            SdkFunction {
+                name: "psg_stop",
+                kind: Library,
+                category: Psg,
+                param_count: 0,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "psg_beep",
+            SdkFunction {
+                name: "psg_beep",
+                kind: Library,
+                category: Psg,
+                param_count: 3,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "psg_note_on",
+            SdkFunction {
+                name: "psg_note_on",
+                kind: Library,
+                category: Psg,
+                param_count: 3,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "psg_hihat",
+            SdkFunction {
+                name: "psg_hihat",
+                kind: Library,
+                category: Psg,
+                param_count: 1,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "psg_snare_noise",
+            SdkFunction {
+                name: "psg_snare_noise",
+                kind: Library,
+                category: Psg,
+                param_count: 1,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "psg_kick",
+            SdkFunction {
+                name: "psg_kick",
+                kind: Library,
+                category: Psg,
+                param_count: 1,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "psg_cymbal",
+            SdkFunction {
+                name: "psg_cymbal",
+                kind: Library,
+                category: Psg,
+                param_count: 1,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "psg_env_init",
+            SdkFunction {
+                name: "psg_env_init",
+                kind: Library,
+                category: Psg,
+                param_count: 2,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "psg_env_attack",
+            SdkFunction {
+                name: "psg_env_attack",
+                kind: Library,
+                category: Psg,
+                param_count: 3,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "psg_env_release",
+            SdkFunction {
+                name: "psg_env_release",
+                kind: Library,
+                category: Psg,
+                param_count: 2,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "psg_env_update",
+            SdkFunction {
+                name: "psg_env_update",
+                kind: Library,
+                category: Psg,
+                param_count: 1,
+                has_return: true,
+            },
+        );
     }
 }
 
@@ -265,8 +1139,8 @@ pub struct SdkInlineGenerator;
 impl SdkInlineGenerator {
     /// Generate inline code for a function call
     /// Arguments are expected to be loaded in D0, D1, D2, D3 in order
-    pub fn generate(func_name: &str) -> Vec<M68kInst> {
-        match func_name {
+    pub fn generate(func_name: &str) -> crate::common::CompileResult<Vec<M68kInst>> {
+        let insts = match func_name {
             // VDP inline functions
             "vdp_set_reg" => Self::gen_vdp_set_reg(),
             "vdp_get_status" => Self::gen_vdp_get_status(),
@@ -300,8 +1174,13 @@ impl SdkInlineGenerator {
             "joy1_read" => Self::gen_joy1_read(),
             "joy2_read" => Self::gen_joy2_read(),
 
-            _ => panic!("Not an inline function: {}", func_name),
-        }
+            _ => {
+                return Err(crate::common::CompileError::codegen(format!(
+                    "Not an inline function: {func_name}"
+                )));
+            }
+        };
+        Ok(insts)
     }
 
     // -------------------------------------------------------------------------
@@ -315,19 +1194,29 @@ impl SdkInlineGenerator {
             // reg << 8
             M68kInst::Lsl(Size::Word, Operand::Imm(8), DataReg::D0),
             // reg | value
-            M68kInst::Or(Size::Word, Operand::DataReg(DataReg::D1), Operand::DataReg(DataReg::D0)),
+            M68kInst::Or(
+                Size::Word,
+                Operand::DataReg(DataReg::D1),
+                Operand::DataReg(DataReg::D0),
+            ),
             // | 0x8000
             M68kInst::Ori(Size::Word, 0x8000, Operand::DataReg(DataReg::D0)),
             // Write to VDP control port
-            M68kInst::Move(Size::Word, Operand::DataReg(DataReg::D0), Operand::AbsLong(VDP_CTRL)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::DataReg(DataReg::D0),
+                Operand::AbsLong(VDP_CTRL),
+            ),
         ]
     }
 
     /// vdp_get_status() -> return *VDP_CTRL
     fn gen_vdp_get_status() -> Vec<M68kInst> {
-        vec![
-            M68kInst::Move(Size::Word, Operand::AbsLong(VDP_CTRL), Operand::DataReg(DataReg::D0)),
-        ]
+        vec![M68kInst::Move(
+            Size::Word,
+            Operand::AbsLong(VDP_CTRL),
+            Operand::DataReg(DataReg::D0),
+        )]
     }
 
     /// vdp_set_write_addr(addr) -> write address command to VDP_CTRL
@@ -335,14 +1224,26 @@ impl SdkInlineGenerator {
     fn gen_vdp_set_write_addr() -> Vec<M68kInst> {
         vec![
             // First word: 0x4000 | (addr & 0x3FFF)
-            M68kInst::Move(Size::Long, Operand::DataReg(DataReg::D0), Operand::DataReg(DataReg::D1)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::DataReg(DataReg::D0),
+                Operand::DataReg(DataReg::D1),
+            ),
             M68kInst::Andi(Size::Word, 0x3FFF, Operand::DataReg(DataReg::D1)),
             M68kInst::Ori(Size::Word, 0x4000, Operand::DataReg(DataReg::D1)),
-            M68kInst::Move(Size::Word, Operand::DataReg(DataReg::D1), Operand::AbsLong(VDP_CTRL)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::DataReg(DataReg::D1),
+                Operand::AbsLong(VDP_CTRL),
+            ),
             // Second word: (addr >> 14) & 0x03
             M68kInst::Lsr(Size::Long, Operand::Imm(14), DataReg::D0),
             M68kInst::Andi(Size::Word, 0x03, Operand::DataReg(DataReg::D0)),
-            M68kInst::Move(Size::Word, Operand::DataReg(DataReg::D0), Operand::AbsLong(VDP_CTRL)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::DataReg(DataReg::D0),
+                Operand::AbsLong(VDP_CTRL),
+            ),
         ]
     }
 
@@ -351,16 +1252,32 @@ impl SdkInlineGenerator {
     fn gen_vdp_set_cram_addr() -> Vec<M68kInst> {
         vec![
             // addr = index * 2
-            M68kInst::Add(Size::Long, Operand::DataReg(DataReg::D0), Operand::DataReg(DataReg::D0)),
+            M68kInst::Add(
+                Size::Long,
+                Operand::DataReg(DataReg::D0),
+                Operand::DataReg(DataReg::D0),
+            ),
             // First word: 0xC000 | (addr & 0x3FFF)
-            M68kInst::Move(Size::Long, Operand::DataReg(DataReg::D0), Operand::DataReg(DataReg::D1)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::DataReg(DataReg::D0),
+                Operand::DataReg(DataReg::D1),
+            ),
             M68kInst::Andi(Size::Word, 0x3FFF, Operand::DataReg(DataReg::D1)),
             M68kInst::Ori(Size::Word, 0xC000_u16 as i32, Operand::DataReg(DataReg::D1)),
-            M68kInst::Move(Size::Word, Operand::DataReg(DataReg::D1), Operand::AbsLong(VDP_CTRL)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::DataReg(DataReg::D1),
+                Operand::AbsLong(VDP_CTRL),
+            ),
             // Second word: (addr >> 14) & 0x03
             M68kInst::Lsr(Size::Long, Operand::Imm(14), DataReg::D0),
             M68kInst::Andi(Size::Word, 0x03, Operand::DataReg(DataReg::D0)),
-            M68kInst::Move(Size::Word, Operand::DataReg(DataReg::D0), Operand::AbsLong(VDP_CTRL)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::DataReg(DataReg::D0),
+                Operand::AbsLong(VDP_CTRL),
+            ),
         ]
     }
 
@@ -369,12 +1286,20 @@ impl SdkInlineGenerator {
     fn gen_vdp_set_color() -> Vec<M68kInst> {
         let mut insts = vec![
             // Save color
-            M68kInst::Move(Size::Long, Operand::DataReg(DataReg::D1), Operand::DataReg(DataReg::D2)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::DataReg(DataReg::D1),
+                Operand::DataReg(DataReg::D2),
+            ),
         ];
         // Set CRAM address
         insts.extend(Self::gen_vdp_set_cram_addr());
         // Write color
-        insts.push(M68kInst::Move(Size::Word, Operand::DataReg(DataReg::D2), Operand::AbsLong(VDP_DATA)));
+        insts.push(M68kInst::Move(
+            Size::Word,
+            Operand::DataReg(DataReg::D2),
+            Operand::AbsLong(VDP_DATA),
+        ));
         insts
     }
 
@@ -386,17 +1311,29 @@ impl SdkInlineGenerator {
             M68kInst::Andi(Size::Word, 0x03, Operand::DataReg(DataReg::D0)),
             M68kInst::Lsl(Size::Word, Operand::Imm(4), DataReg::D0),
             M68kInst::Andi(Size::Word, 0x0F, Operand::DataReg(DataReg::D1)),
-            M68kInst::Or(Size::Word, Operand::DataReg(DataReg::D1), Operand::DataReg(DataReg::D0)),
+            M68kInst::Or(
+                Size::Word,
+                Operand::DataReg(DataReg::D1),
+                Operand::DataReg(DataReg::D0),
+            ),
             // Set as register 7 value
             M68kInst::Ori(Size::Word, 0x8700, Operand::DataReg(DataReg::D0)),
-            M68kInst::Move(Size::Word, Operand::DataReg(DataReg::D0), Operand::AbsLong(VDP_CTRL)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::DataReg(DataReg::D0),
+                Operand::AbsLong(VDP_CTRL),
+            ),
         ]
     }
 
     /// vdp_in_vblank() -> return (*VDP_CTRL & 0x0008) != 0
     fn gen_vdp_in_vblank() -> Vec<M68kInst> {
         vec![
-            M68kInst::Move(Size::Word, Operand::AbsLong(VDP_CTRL), Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::AbsLong(VDP_CTRL),
+                Operand::DataReg(DataReg::D0),
+            ),
             M68kInst::Andi(Size::Word, 0x0008, Operand::DataReg(DataReg::D0)),
             // Convert to 0 or 1
             M68kInst::Scc(Cond::Ne, Operand::DataReg(DataReg::D0)),
@@ -411,7 +1348,11 @@ impl SdkInlineGenerator {
     /// ym_read_status() -> return *YM_ADDR0
     fn gen_ym_read_status() -> Vec<M68kInst> {
         vec![
-            M68kInst::Move(Size::Byte, Operand::AbsLong(YM_ADDR0), Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(
+                Size::Byte,
+                Operand::AbsLong(YM_ADDR0),
+                Operand::DataReg(DataReg::D0),
+            ),
             M68kInst::Andi(Size::Long, 0xFF, Operand::DataReg(DataReg::D0)),
         ]
     }
@@ -419,20 +1360,35 @@ impl SdkInlineGenerator {
     /// Helper to emit YM timing delay (12 NOPs for ~83 cycles)
     fn emit_ym_delay() -> Vec<M68kInst> {
         vec![
-            M68kInst::Nop, M68kInst::Nop, M68kInst::Nop, M68kInst::Nop,
-            M68kInst::Nop, M68kInst::Nop, M68kInst::Nop, M68kInst::Nop,
-            M68kInst::Nop, M68kInst::Nop, M68kInst::Nop, M68kInst::Nop,
+            M68kInst::Nop,
+            M68kInst::Nop,
+            M68kInst::Nop,
+            M68kInst::Nop,
+            M68kInst::Nop,
+            M68kInst::Nop,
+            M68kInst::Nop,
+            M68kInst::Nop,
+            M68kInst::Nop,
+            M68kInst::Nop,
+            M68kInst::Nop,
+            M68kInst::Nop,
         ]
     }
 
     /// ym_write0(reg, val) -> write to YM port 0 with timing
     /// Args: D0 = reg, D1 = val
     fn gen_ym_write0() -> Vec<M68kInst> {
-        let mut insts = vec![
-            M68kInst::Move(Size::Byte, Operand::DataReg(DataReg::D0), Operand::AbsLong(YM_ADDR0)),
-        ];
+        let mut insts = vec![M68kInst::Move(
+            Size::Byte,
+            Operand::DataReg(DataReg::D0),
+            Operand::AbsLong(YM_ADDR0),
+        )];
         insts.extend(Self::emit_ym_delay());
-        insts.push(M68kInst::Move(Size::Byte, Operand::DataReg(DataReg::D1), Operand::AbsLong(YM_DATA0)));
+        insts.push(M68kInst::Move(
+            Size::Byte,
+            Operand::DataReg(DataReg::D1),
+            Operand::AbsLong(YM_DATA0),
+        ));
         insts.extend(Self::emit_ym_delay());
         insts
     }
@@ -440,11 +1396,17 @@ impl SdkInlineGenerator {
     /// ym_write1(reg, val) -> write to YM port 1 with timing
     /// Args: D0 = reg, D1 = val
     fn gen_ym_write1() -> Vec<M68kInst> {
-        let mut insts = vec![
-            M68kInst::Move(Size::Byte, Operand::DataReg(DataReg::D0), Operand::AbsLong(YM_ADDR1)),
-        ];
+        let mut insts = vec![M68kInst::Move(
+            Size::Byte,
+            Operand::DataReg(DataReg::D0),
+            Operand::AbsLong(YM_ADDR1),
+        )];
         insts.extend(Self::emit_ym_delay());
-        insts.push(M68kInst::Move(Size::Byte, Operand::DataReg(DataReg::D1), Operand::AbsLong(YM_DATA1)));
+        insts.push(M68kInst::Move(
+            Size::Byte,
+            Operand::DataReg(DataReg::D1),
+            Operand::AbsLong(YM_DATA1),
+        ));
         insts.extend(Self::emit_ym_delay());
         insts
     }
@@ -453,10 +1415,18 @@ impl SdkInlineGenerator {
     fn gen_ym_dac_enable() -> Vec<M68kInst> {
         let mut insts = vec![
             M68kInst::Moveq(0x2B, DataReg::D0),
-            M68kInst::Move(Size::Byte, Operand::DataReg(DataReg::D0), Operand::AbsLong(YM_ADDR0)),
+            M68kInst::Move(
+                Size::Byte,
+                Operand::DataReg(DataReg::D0),
+                Operand::AbsLong(YM_ADDR0),
+            ),
         ];
         insts.extend(Self::emit_ym_delay());
-        insts.push(M68kInst::Move(Size::Byte, Operand::Imm(0x80), Operand::AbsLong(YM_DATA0)));
+        insts.push(M68kInst::Move(
+            Size::Byte,
+            Operand::Imm(0x80),
+            Operand::AbsLong(YM_DATA0),
+        ));
         insts.extend(Self::emit_ym_delay());
         insts
     }
@@ -465,7 +1435,11 @@ impl SdkInlineGenerator {
     fn gen_ym_dac_disable() -> Vec<M68kInst> {
         let mut insts = vec![
             M68kInst::Moveq(0x2B, DataReg::D0),
-            M68kInst::Move(Size::Byte, Operand::DataReg(DataReg::D0), Operand::AbsLong(YM_ADDR0)),
+            M68kInst::Move(
+                Size::Byte,
+                Operand::DataReg(DataReg::D0),
+                Operand::AbsLong(YM_ADDR0),
+            ),
         ];
         insts.extend(Self::emit_ym_delay());
         insts.push(M68kInst::Clr(Size::Byte, Operand::AbsLong(YM_DATA0)));
@@ -477,12 +1451,24 @@ impl SdkInlineGenerator {
     /// Args: D0 = sample
     fn gen_ym_dac_write() -> Vec<M68kInst> {
         let mut insts = vec![
-            M68kInst::Move(Size::Long, Operand::DataReg(DataReg::D0), Operand::DataReg(DataReg::D1)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::DataReg(DataReg::D0),
+                Operand::DataReg(DataReg::D1),
+            ),
             M68kInst::Moveq(0x2A, DataReg::D0),
-            M68kInst::Move(Size::Byte, Operand::DataReg(DataReg::D0), Operand::AbsLong(YM_ADDR0)),
+            M68kInst::Move(
+                Size::Byte,
+                Operand::DataReg(DataReg::D0),
+                Operand::AbsLong(YM_ADDR0),
+            ),
         ];
         insts.extend(Self::emit_ym_delay());
-        insts.push(M68kInst::Move(Size::Byte, Operand::DataReg(DataReg::D1), Operand::AbsLong(YM_DATA0)));
+        insts.push(M68kInst::Move(
+            Size::Byte,
+            Operand::DataReg(DataReg::D1),
+            Operand::AbsLong(YM_DATA0),
+        ));
         insts
     }
 
@@ -493,9 +1479,11 @@ impl SdkInlineGenerator {
     /// psg_write(value) -> *PSG_PORT = value
     /// Args: D0 = value
     fn gen_psg_write() -> Vec<M68kInst> {
-        vec![
-            M68kInst::Move(Size::Byte, Operand::DataReg(DataReg::D0), Operand::AbsLong(PSG_PORT)),
-        ]
+        vec![M68kInst::Move(
+            Size::Byte,
+            Operand::DataReg(DataReg::D0),
+            Operand::AbsLong(PSG_PORT),
+        )]
     }
 
     /// psg_set_volume(channel, volume)
@@ -507,9 +1495,17 @@ impl SdkInlineGenerator {
             // Build latch byte: 0x90 | (channel << 5) | volume
             M68kInst::Andi(Size::Word, 0x03, Operand::DataReg(DataReg::D0)),
             M68kInst::Lsl(Size::Word, Operand::Imm(5), DataReg::D0),
-            M68kInst::Or(Size::Word, Operand::DataReg(DataReg::D1), Operand::DataReg(DataReg::D0)),
+            M68kInst::Or(
+                Size::Word,
+                Operand::DataReg(DataReg::D1),
+                Operand::DataReg(DataReg::D0),
+            ),
             M68kInst::Ori(Size::Word, 0x90, Operand::DataReg(DataReg::D0)),
-            M68kInst::Move(Size::Byte, Operand::DataReg(DataReg::D0), Operand::AbsLong(PSG_PORT)),
+            M68kInst::Move(
+                Size::Byte,
+                Operand::DataReg(DataReg::D0),
+                Operand::AbsLong(PSG_PORT),
+            ),
         ]
     }
 
@@ -520,7 +1516,11 @@ impl SdkInlineGenerator {
             // Build latch byte: 0xE0 | (mode & 0x07)
             M68kInst::Andi(Size::Word, 0x07, Operand::DataReg(DataReg::D0)),
             M68kInst::Ori(Size::Word, 0xE0, Operand::DataReg(DataReg::D0)),
-            M68kInst::Move(Size::Byte, Operand::DataReg(DataReg::D0), Operand::AbsLong(PSG_PORT)),
+            M68kInst::Move(
+                Size::Byte,
+                Operand::DataReg(DataReg::D0),
+                Operand::AbsLong(PSG_PORT),
+            ),
         ]
     }
 
@@ -532,7 +1532,11 @@ impl SdkInlineGenerator {
             M68kInst::Andi(Size::Word, 0x03, Operand::DataReg(DataReg::D0)),
             M68kInst::Lsl(Size::Word, Operand::Imm(5), DataReg::D0),
             M68kInst::Ori(Size::Word, 0x9F, Operand::DataReg(DataReg::D0)),
-            M68kInst::Move(Size::Byte, Operand::DataReg(DataReg::D0), Operand::AbsLong(PSG_PORT)),
+            M68kInst::Move(
+                Size::Byte,
+                Operand::DataReg(DataReg::D0),
+                Operand::AbsLong(PSG_PORT),
+            ),
         ]
     }
 
@@ -556,15 +1560,27 @@ impl SdkInlineGenerator {
             // Add palette: (pal & 3) << 13
             M68kInst::Andi(Size::Word, 0x03, Operand::DataReg(DataReg::D1)),
             M68kInst::Lsl(Size::Word, Operand::Imm(13), DataReg::D1),
-            M68kInst::Or(Size::Word, Operand::DataReg(DataReg::D1), Operand::DataReg(DataReg::D0)),
+            M68kInst::Or(
+                Size::Word,
+                Operand::DataReg(DataReg::D1),
+                Operand::DataReg(DataReg::D0),
+            ),
             // Add priority: (priority & 1) << 15
             M68kInst::Andi(Size::Word, 0x01, Operand::DataReg(DataReg::D2)),
             M68kInst::Lsl(Size::Word, Operand::Imm(15), DataReg::D2),
-            M68kInst::Or(Size::Word, Operand::DataReg(DataReg::D2), Operand::DataReg(DataReg::D0)),
+            M68kInst::Or(
+                Size::Word,
+                Operand::DataReg(DataReg::D2),
+                Operand::DataReg(DataReg::D0),
+            ),
             // Add hflip: (hflip & 1) << 11
             M68kInst::Andi(Size::Word, 0x01, Operand::DataReg(DataReg::D3)),
             M68kInst::Lsl(Size::Word, Operand::Imm(11), DataReg::D3),
-            M68kInst::Or(Size::Word, Operand::DataReg(DataReg::D3), Operand::DataReg(DataReg::D0)),
+            M68kInst::Or(
+                Size::Word,
+                Operand::DataReg(DataReg::D3),
+                Operand::DataReg(DataReg::D0),
+            ),
             // Note: vflip is on stack, we'll skip it for 4-arg inline version
             // For 5th arg, caller should handle separately or use library version
         ]
@@ -600,7 +1616,11 @@ impl SdkInlineGenerator {
     fn gen_joy1_read() -> Vec<M68kInst> {
         vec![
             // Read from joystick 1 data port
-            M68kInst::Move(Size::Byte, Operand::AbsLong(0xA10003), Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(
+                Size::Byte,
+                Operand::AbsLong(0xA10003),
+                Operand::DataReg(DataReg::D0),
+            ),
             // Invert bits (active low -> active high)
             M68kInst::Not(Size::Byte, Operand::DataReg(DataReg::D0)),
             M68kInst::Andi(Size::Long, 0xFF, Operand::DataReg(DataReg::D0)),
@@ -611,7 +1631,11 @@ impl SdkInlineGenerator {
     fn gen_joy2_read() -> Vec<M68kInst> {
         vec![
             // Read from joystick 2 data port
-            M68kInst::Move(Size::Byte, Operand::AbsLong(0xA10005), Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(
+                Size::Byte,
+                Operand::AbsLong(0xA10005),
+                Operand::DataReg(DataReg::D0),
+            ),
             // Invert bits (active low -> active high)
             M68kInst::Not(Size::Byte, Operand::DataReg(DataReg::D0)),
             M68kInst::Andi(Size::Long, 0xFF, Operand::DataReg(DataReg::D0)),
@@ -706,7 +1730,7 @@ impl SdkLibraryGenerator {
                 // For unimplemented functions, generate a stub
                 vec![
                     M68kInst::Label(func_name.to_string()),
-                    M68kInst::Comment(format!("TODO: implement {}", func_name)),
+                    M68kInst::Comment(format!("TODO: implement {func_name}")),
                     M68kInst::Rts,
                 ]
             }
@@ -727,10 +1751,21 @@ impl SdkLibraryGenerator {
         // Note: VRAM is already cleared by startup code, so we just set registers
         // and enable display immediately
         let regs: [(i32, i32); 15] = [
-            (0x00, 0x04), (0x01, 0x44), (0x02, 0x30), (0x03, 0x3C), // 0x01=0x44: display ON
-            (0x04, 0x07), (0x05, 0x78), (0x07, 0x00), (0x0A, 0x00),
-            (0x0B, 0x00), (0x0C, 0x81), (0x0D, 0x3F), (0x0F, 0x02),
-            (0x10, 0x11), (0x11, 0x00), (0x12, 0x00), // 0x10: H64xV32 scroll size
+            (0x00, 0x04),
+            (0x01, 0x44),
+            (0x02, 0x30),
+            (0x03, 0x3C), // 0x01=0x44: display ON
+            (0x04, 0x07),
+            (0x05, 0x78),
+            (0x07, 0x00),
+            (0x0A, 0x00),
+            (0x0B, 0x00),
+            (0x0C, 0x81),
+            (0x0D, 0x3F),
+            (0x0F, 0x02),
+            (0x10, 0x11),
+            (0x11, 0x00),
+            (0x12, 0x00), // 0x10: H64xV32 scroll size
         ];
 
         for (reg, val) in regs {
@@ -738,7 +1773,7 @@ impl SdkLibraryGenerator {
             insts.push(M68kInst::Move(
                 Size::Word,
                 Operand::Imm(cmd),
-                Operand::AddrInd(AddrReg::A0)
+                Operand::AddrInd(AddrReg::A0),
             ));
         }
 
@@ -771,12 +1806,20 @@ impl SdkLibraryGenerator {
             M68kInst::Lea(Operand::AbsLong(VDP_CTRL), AddrReg::A0),
             // Wait until NOT in VBlank
             M68kInst::Label(wait_not.clone()),
-            M68kInst::Move(Size::Word, Operand::AddrInd(AddrReg::A0), Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::AddrInd(AddrReg::A0),
+                Operand::DataReg(DataReg::D0),
+            ),
             M68kInst::Btst(Operand::Imm(3), Operand::DataReg(DataReg::D0)),
             M68kInst::Bcc(Cond::Ne, wait_not),
             // Wait until IN VBlank
             M68kInst::Label(wait_in.clone()),
-            M68kInst::Move(Size::Word, Operand::AddrInd(AddrReg::A0), Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::AddrInd(AddrReg::A0),
+                Operand::DataReg(DataReg::D0),
+            ),
             M68kInst::Btst(Operand::Imm(3), Operand::DataReg(DataReg::D0)),
             M68kInst::Bcc(Cond::Eq, wait_in),
             // Increment frame counter
@@ -798,12 +1841,20 @@ impl SdkLibraryGenerator {
             M68kInst::Lea(Operand::AbsLong(VDP_CTRL), AddrReg::A0),
             // Wait until IN VBlank
             M68kInst::Label(wait_in.clone()),
-            M68kInst::Move(Size::Word, Operand::AddrInd(AddrReg::A0), Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::AddrInd(AddrReg::A0),
+                Operand::DataReg(DataReg::D0),
+            ),
             M68kInst::Btst(Operand::Imm(3), Operand::DataReg(DataReg::D0)),
             M68kInst::Bcc(Cond::Eq, wait_in),
             // Wait until out of VBlank
             M68kInst::Label(wait_out.clone()),
-            M68kInst::Move(Size::Word, Operand::AddrInd(AddrReg::A0), Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::AddrInd(AddrReg::A0),
+                Operand::DataReg(DataReg::D0),
+            ),
             M68kInst::Btst(Operand::Imm(3), Operand::DataReg(DataReg::D0)),
             M68kInst::Bcc(Cond::Ne, wait_out),
             M68kInst::Rts,
@@ -826,20 +1877,44 @@ impl SdkLibraryGenerator {
             M68kInst::Label("vdp_load_palette".to_string()),
             M68kInst::Link(AddrReg::A6, 0),
             // Set CRAM address
-            M68kInst::Move(Size::Long, Operand::Disp(8, AddrReg::A6), Operand::DataReg(DataReg::D0)),
-            M68kInst::Add(Size::Long, Operand::DataReg(DataReg::D0), Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(8, AddrReg::A6),
+                Operand::DataReg(DataReg::D0),
+            ),
+            M68kInst::Add(
+                Size::Long,
+                Operand::DataReg(DataReg::D0),
+                Operand::DataReg(DataReg::D0),
+            ),
             M68kInst::Andi(Size::Word, 0x3FFF, Operand::DataReg(DataReg::D0)),
             M68kInst::Ori(Size::Word, 0xC000_u16 as i32, Operand::DataReg(DataReg::D0)),
-            M68kInst::Move(Size::Word, Operand::DataReg(DataReg::D0), Operand::AbsLong(VDP_CTRL)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::DataReg(DataReg::D0),
+                Operand::AbsLong(VDP_CTRL),
+            ),
             M68kInst::Clr(Size::Word, Operand::AbsLong(VDP_CTRL)),
             // Load colors pointer and count
-            M68kInst::Move(Size::Long, Operand::Disp(12, AddrReg::A6), Operand::AddrReg(AddrReg::A0)),
-            M68kInst::Move(Size::Long, Operand::Disp(16, AddrReg::A6), Operand::DataReg(DataReg::D1)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(12, AddrReg::A6),
+                Operand::AddrReg(AddrReg::A0),
+            ),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(16, AddrReg::A6),
+                Operand::DataReg(DataReg::D1),
+            ),
             M68kInst::Subq(Size::Long, 1, Operand::DataReg(DataReg::D1)),
             M68kInst::Bcc(Cond::Mi, ".vlp_done".to_string()),
             // Loop
             M68kInst::Label(loop_label.clone()),
-            M68kInst::Move(Size::Word, Operand::PostInc(AddrReg::A0), Operand::AbsLong(VDP_DATA)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::PostInc(AddrReg::A0),
+                Operand::AbsLong(VDP_DATA),
+            ),
             M68kInst::Dbf(DataReg::D1, loop_label),
             M68kInst::Label(".vlp_done".to_string()),
             M68kInst::Unlk(AddrReg::A6),
@@ -855,26 +1930,54 @@ impl SdkLibraryGenerator {
             M68kInst::Label("vdp_load_tiles".to_string()),
             M68kInst::Link(AddrReg::A6, 0),
             // Calculate VRAM address: index * 32
-            M68kInst::Move(Size::Long, Operand::Disp(12, AddrReg::A6), Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(12, AddrReg::A6),
+                Operand::DataReg(DataReg::D0),
+            ),
             M68kInst::Lsl(Size::Long, Operand::Imm(5), DataReg::D0),
             // Set write address
-            M68kInst::Move(Size::Long, Operand::DataReg(DataReg::D0), Operand::DataReg(DataReg::D1)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::DataReg(DataReg::D0),
+                Operand::DataReg(DataReg::D1),
+            ),
             M68kInst::Andi(Size::Word, 0x3FFF, Operand::DataReg(DataReg::D1)),
             M68kInst::Ori(Size::Word, 0x4000, Operand::DataReg(DataReg::D1)),
-            M68kInst::Move(Size::Word, Operand::DataReg(DataReg::D1), Operand::AbsLong(VDP_CTRL)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::DataReg(DataReg::D1),
+                Operand::AbsLong(VDP_CTRL),
+            ),
             M68kInst::Lsr(Size::Long, Operand::Imm(14), DataReg::D0),
             M68kInst::Andi(Size::Word, 0x03, Operand::DataReg(DataReg::D0)),
-            M68kInst::Move(Size::Word, Operand::DataReg(DataReg::D0), Operand::AbsLong(VDP_CTRL)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::DataReg(DataReg::D0),
+                Operand::AbsLong(VDP_CTRL),
+            ),
             // Load tiles pointer
-            M68kInst::Move(Size::Long, Operand::Disp(8, AddrReg::A6), Operand::AddrReg(AddrReg::A0)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(8, AddrReg::A6),
+                Operand::AddrReg(AddrReg::A0),
+            ),
             // count * 16 words per tile
-            M68kInst::Move(Size::Long, Operand::Disp(16, AddrReg::A6), Operand::DataReg(DataReg::D1)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(16, AddrReg::A6),
+                Operand::DataReg(DataReg::D1),
+            ),
             M68kInst::Lsl(Size::Long, Operand::Imm(4), DataReg::D1),
             M68kInst::Subq(Size::Long, 1, Operand::DataReg(DataReg::D1)),
             M68kInst::Bcc(Cond::Mi, ".vlt_done".to_string()),
             // Loop
             M68kInst::Label(loop_label.clone()),
-            M68kInst::Move(Size::Word, Operand::PostInc(AddrReg::A0), Operand::AbsLong(VDP_DATA)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::PostInc(AddrReg::A0),
+                Operand::AbsLong(VDP_DATA),
+            ),
             M68kInst::Dbf(DataReg::D1, loop_label),
             M68kInst::Label(".vlt_done".to_string()),
             M68kInst::Unlk(AddrReg::A6),
@@ -889,23 +1992,59 @@ impl SdkLibraryGenerator {
             M68kInst::Link(AddrReg::A6, 0),
             // addr = VRAM_PLANE_A + (y * 128) + (x * 2)
             // VRAM_PLANE_A = 0xC000
-            M68kInst::Move(Size::Long, Operand::Disp(12, AddrReg::A6), Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(12, AddrReg::A6),
+                Operand::DataReg(DataReg::D0),
+            ),
             M68kInst::Lsl(Size::Long, Operand::Imm(7), DataReg::D0),
-            M68kInst::Move(Size::Long, Operand::Disp(8, AddrReg::A6), Operand::DataReg(DataReg::D1)),
-            M68kInst::Add(Size::Long, Operand::DataReg(DataReg::D1), Operand::DataReg(DataReg::D0)),
-            M68kInst::Add(Size::Long, Operand::DataReg(DataReg::D1), Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(8, AddrReg::A6),
+                Operand::DataReg(DataReg::D1),
+            ),
+            M68kInst::Add(
+                Size::Long,
+                Operand::DataReg(DataReg::D1),
+                Operand::DataReg(DataReg::D0),
+            ),
+            M68kInst::Add(
+                Size::Long,
+                Operand::DataReg(DataReg::D1),
+                Operand::DataReg(DataReg::D0),
+            ),
             M68kInst::Addi(Size::Long, 0xC000, Operand::DataReg(DataReg::D0)),
             // Set write address
-            M68kInst::Move(Size::Long, Operand::DataReg(DataReg::D0), Operand::DataReg(DataReg::D1)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::DataReg(DataReg::D0),
+                Operand::DataReg(DataReg::D1),
+            ),
             M68kInst::Andi(Size::Word, 0x3FFF, Operand::DataReg(DataReg::D1)),
             M68kInst::Ori(Size::Word, 0x4000, Operand::DataReg(DataReg::D1)),
-            M68kInst::Move(Size::Word, Operand::DataReg(DataReg::D1), Operand::AbsLong(VDP_CTRL)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::DataReg(DataReg::D1),
+                Operand::AbsLong(VDP_CTRL),
+            ),
             M68kInst::Lsr(Size::Long, Operand::Imm(14), DataReg::D0),
             M68kInst::Andi(Size::Word, 0x03, Operand::DataReg(DataReg::D0)),
-            M68kInst::Move(Size::Word, Operand::DataReg(DataReg::D0), Operand::AbsLong(VDP_CTRL)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::DataReg(DataReg::D0),
+                Operand::AbsLong(VDP_CTRL),
+            ),
             // Write tile (use low word of 32-bit argument)
-            M68kInst::Move(Size::Long, Operand::Disp(16, AddrReg::A6), Operand::DataReg(DataReg::D1)),
-            M68kInst::Move(Size::Word, Operand::DataReg(DataReg::D1), Operand::AbsLong(VDP_DATA)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(16, AddrReg::A6),
+                Operand::DataReg(DataReg::D1),
+            ),
+            M68kInst::Move(
+                Size::Word,
+                Operand::DataReg(DataReg::D1),
+                Operand::AbsLong(VDP_DATA),
+            ),
             M68kInst::Unlk(AddrReg::A6),
             M68kInst::Rts,
         ]
@@ -916,22 +2055,58 @@ impl SdkLibraryGenerator {
         vec![
             M68kInst::Label("vdp_set_tile_b".to_string()),
             M68kInst::Link(AddrReg::A6, 0),
-            M68kInst::Move(Size::Long, Operand::Disp(12, AddrReg::A6), Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(12, AddrReg::A6),
+                Operand::DataReg(DataReg::D0),
+            ),
             M68kInst::Lsl(Size::Long, Operand::Imm(7), DataReg::D0),
-            M68kInst::Move(Size::Long, Operand::Disp(8, AddrReg::A6), Operand::DataReg(DataReg::D1)),
-            M68kInst::Add(Size::Long, Operand::DataReg(DataReg::D1), Operand::DataReg(DataReg::D0)),
-            M68kInst::Add(Size::Long, Operand::DataReg(DataReg::D1), Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(8, AddrReg::A6),
+                Operand::DataReg(DataReg::D1),
+            ),
+            M68kInst::Add(
+                Size::Long,
+                Operand::DataReg(DataReg::D1),
+                Operand::DataReg(DataReg::D0),
+            ),
+            M68kInst::Add(
+                Size::Long,
+                Operand::DataReg(DataReg::D1),
+                Operand::DataReg(DataReg::D0),
+            ),
             M68kInst::Addi(Size::Long, 0xE000, Operand::DataReg(DataReg::D0)),
-            M68kInst::Move(Size::Long, Operand::DataReg(DataReg::D0), Operand::DataReg(DataReg::D1)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::DataReg(DataReg::D0),
+                Operand::DataReg(DataReg::D1),
+            ),
             M68kInst::Andi(Size::Word, 0x3FFF, Operand::DataReg(DataReg::D1)),
             M68kInst::Ori(Size::Word, 0x4000, Operand::DataReg(DataReg::D1)),
-            M68kInst::Move(Size::Word, Operand::DataReg(DataReg::D1), Operand::AbsLong(VDP_CTRL)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::DataReg(DataReg::D1),
+                Operand::AbsLong(VDP_CTRL),
+            ),
             M68kInst::Lsr(Size::Long, Operand::Imm(14), DataReg::D0),
             M68kInst::Andi(Size::Word, 0x03, Operand::DataReg(DataReg::D0)),
-            M68kInst::Move(Size::Word, Operand::DataReg(DataReg::D0), Operand::AbsLong(VDP_CTRL)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::DataReg(DataReg::D0),
+                Operand::AbsLong(VDP_CTRL),
+            ),
             // Write tile (use low word of 32-bit argument)
-            M68kInst::Move(Size::Long, Operand::Disp(16, AddrReg::A6), Operand::DataReg(DataReg::D1)),
-            M68kInst::Move(Size::Word, Operand::DataReg(DataReg::D1), Operand::AbsLong(VDP_DATA)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(16, AddrReg::A6),
+                Operand::DataReg(DataReg::D1),
+            ),
+            M68kInst::Move(
+                Size::Word,
+                Operand::DataReg(DataReg::D1),
+                Operand::AbsLong(VDP_DATA),
+            ),
             M68kInst::Unlk(AddrReg::A6),
             M68kInst::Rts,
         ]
@@ -946,7 +2121,11 @@ impl SdkLibraryGenerator {
             M68kInst::Move(Size::Word, Operand::Imm(0x4000), Operand::AbsLong(VDP_CTRL)),
             M68kInst::Move(Size::Word, Operand::Imm(0x0003), Operand::AbsLong(VDP_CTRL)),
             // Clear 2048 words
-            M68kInst::Move(Size::Word, Operand::Imm(2047), Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::Imm(2047),
+                Operand::DataReg(DataReg::D0),
+            ),
             M68kInst::Label(loop_label.clone()),
             M68kInst::Clr(Size::Word, Operand::AbsLong(VDP_DATA)),
             M68kInst::Dbf(DataReg::D0, loop_label),
@@ -963,7 +2142,11 @@ impl SdkLibraryGenerator {
             M68kInst::Move(Size::Word, Operand::Imm(0x6000), Operand::AbsLong(VDP_CTRL)),
             M68kInst::Move(Size::Word, Operand::Imm(0x0003), Operand::AbsLong(VDP_CTRL)),
             // Clear 2048 words
-            M68kInst::Move(Size::Word, Operand::Imm(2047), Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::Imm(2047),
+                Operand::DataReg(DataReg::D0),
+            ),
             M68kInst::Label(loop_label.clone()),
             M68kInst::Clr(Size::Word, Operand::AbsLong(VDP_DATA)),
             M68kInst::Dbf(DataReg::D0, loop_label),
@@ -978,7 +2161,11 @@ impl SdkLibraryGenerator {
             M68kInst::Label("vdp_set_hscroll_a".to_string()),
             M68kInst::Move(Size::Word, Operand::Imm(0x7C00), Operand::AbsLong(VDP_CTRL)),
             M68kInst::Move(Size::Word, Operand::Imm(0x0003), Operand::AbsLong(VDP_CTRL)),
-            M68kInst::Move(Size::Word, Operand::Disp(6, AddrReg::A7), Operand::AbsLong(VDP_DATA)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::Disp(6, AddrReg::A7),
+                Operand::AbsLong(VDP_DATA),
+            ),
             M68kInst::Rts,
         ]
     }
@@ -989,7 +2176,11 @@ impl SdkLibraryGenerator {
             M68kInst::Label("vdp_set_hscroll_b".to_string()),
             M68kInst::Move(Size::Word, Operand::Imm(0x7C02), Operand::AbsLong(VDP_CTRL)),
             M68kInst::Move(Size::Word, Operand::Imm(0x0003), Operand::AbsLong(VDP_CTRL)),
-            M68kInst::Move(Size::Word, Operand::Disp(6, AddrReg::A7), Operand::AbsLong(VDP_DATA)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::Disp(6, AddrReg::A7),
+                Operand::AbsLong(VDP_DATA),
+            ),
             M68kInst::Rts,
         ]
     }
@@ -1000,7 +2191,11 @@ impl SdkLibraryGenerator {
             M68kInst::Label("vdp_set_vscroll_a".to_string()),
             M68kInst::Move(Size::Word, Operand::Imm(0x4000), Operand::AbsLong(VDP_CTRL)),
             M68kInst::Move(Size::Word, Operand::Imm(0x0010), Operand::AbsLong(VDP_CTRL)),
-            M68kInst::Move(Size::Word, Operand::Disp(6, AddrReg::A7), Operand::AbsLong(VDP_DATA)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::Disp(6, AddrReg::A7),
+                Operand::AbsLong(VDP_DATA),
+            ),
             M68kInst::Rts,
         ]
     }
@@ -1011,7 +2206,11 @@ impl SdkLibraryGenerator {
             M68kInst::Label("vdp_set_vscroll_b".to_string()),
             M68kInst::Move(Size::Word, Operand::Imm(0x4002), Operand::AbsLong(VDP_CTRL)),
             M68kInst::Move(Size::Word, Operand::Imm(0x0010), Operand::AbsLong(VDP_CTRL)),
-            M68kInst::Move(Size::Word, Operand::Disp(6, AddrReg::A7), Operand::AbsLong(VDP_DATA)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::Disp(6, AddrReg::A7),
+                Operand::AbsLong(VDP_DATA),
+            ),
             M68kInst::Rts,
         ]
     }
@@ -1019,7 +2218,11 @@ impl SdkLibraryGenerator {
     fn gen_vdp_get_frame_count(&mut self) -> Vec<M68kInst> {
         vec![
             M68kInst::Label("vdp_get_frame_count".to_string()),
-            M68kInst::Move(Size::Long, Operand::Label("__sdk_frame_count".to_string()), Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Label("__sdk_frame_count".to_string()),
+                Operand::DataReg(DataReg::D0),
+            ),
             M68kInst::Rts,
         ]
     }
@@ -1059,7 +2262,11 @@ impl SdkLibraryGenerator {
             // Key off all channels
             M68kInst::Clr(Size::Long, Operand::DataReg(DataReg::D7)),
             M68kInst::Label(keyoff_loop.clone()),
-            M68kInst::Move(Size::Long, Operand::DataReg(DataReg::D7), Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::DataReg(DataReg::D7),
+                Operand::DataReg(DataReg::D0),
+            ),
             M68kInst::Bsr("ym_key_off".to_string()),
             M68kInst::Addq(Size::Long, 1, Operand::DataReg(DataReg::D7)),
             M68kInst::Cmpi(Size::Long, 6, Operand::DataReg(DataReg::D7)),
@@ -1069,8 +2276,16 @@ impl SdkLibraryGenerator {
             M68kInst::Label(tl_loop_ch.clone()),
             M68kInst::Clr(Size::Long, Operand::DataReg(DataReg::D6)), // operator
             M68kInst::Label(tl_loop_op.clone()),
-            M68kInst::Move(Size::Long, Operand::DataReg(DataReg::D7), Operand::DataReg(DataReg::D0)),
-            M68kInst::Move(Size::Long, Operand::DataReg(DataReg::D6), Operand::DataReg(DataReg::D1)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::DataReg(DataReg::D7),
+                Operand::DataReg(DataReg::D0),
+            ),
+            M68kInst::Move(
+                Size::Long,
+                Operand::DataReg(DataReg::D6),
+                Operand::DataReg(DataReg::D1),
+            ),
             M68kInst::Moveq(0x40, DataReg::D2), // TL register base
             M68kInst::Moveq(0x7F, DataReg::D3), // max attenuation
             M68kInst::Bsr("ym_write_op".to_string()),
@@ -1111,24 +2326,60 @@ impl SdkLibraryGenerator {
         vec![
             M68kInst::Label("ym_write_ch".to_string()),
             M68kInst::Link(AddrReg::A6, 0),
-            M68kInst::Move(Size::Long, Operand::Disp(8, AddrReg::A6), Operand::DataReg(DataReg::D0)),
-            M68kInst::Move(Size::Long, Operand::Disp(12, AddrReg::A6), Operand::DataReg(DataReg::D2)),
-            M68kInst::Move(Size::Long, Operand::Disp(16, AddrReg::A6), Operand::DataReg(DataReg::D3)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(8, AddrReg::A6),
+                Operand::DataReg(DataReg::D0),
+            ),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(12, AddrReg::A6),
+                Operand::DataReg(DataReg::D2),
+            ),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(16, AddrReg::A6),
+                Operand::DataReg(DataReg::D3),
+            ),
             // Check if ch >= 3
             M68kInst::Cmpi(Size::Long, 3, Operand::DataReg(DataReg::D0)),
             M68kInst::Bcc(Cond::Ge, use_port1.clone()),
             // Port 0: reg + ch
-            M68kInst::Add(Size::Long, Operand::DataReg(DataReg::D0), Operand::DataReg(DataReg::D2)),
-            M68kInst::Move(Size::Long, Operand::DataReg(DataReg::D2), Operand::DataReg(DataReg::D0)),
-            M68kInst::Move(Size::Long, Operand::DataReg(DataReg::D3), Operand::DataReg(DataReg::D1)),
+            M68kInst::Add(
+                Size::Long,
+                Operand::DataReg(DataReg::D0),
+                Operand::DataReg(DataReg::D2),
+            ),
+            M68kInst::Move(
+                Size::Long,
+                Operand::DataReg(DataReg::D2),
+                Operand::DataReg(DataReg::D0),
+            ),
+            M68kInst::Move(
+                Size::Long,
+                Operand::DataReg(DataReg::D3),
+                Operand::DataReg(DataReg::D1),
+            ),
             M68kInst::Unlk(AddrReg::A6),
             M68kInst::Bra("ym_write0".to_string()),
             // Port 1: reg + (ch - 3)
             M68kInst::Label(use_port1),
             M68kInst::Subq(Size::Long, 3, Operand::DataReg(DataReg::D0)),
-            M68kInst::Add(Size::Long, Operand::DataReg(DataReg::D0), Operand::DataReg(DataReg::D2)),
-            M68kInst::Move(Size::Long, Operand::DataReg(DataReg::D2), Operand::DataReg(DataReg::D0)),
-            M68kInst::Move(Size::Long, Operand::DataReg(DataReg::D3), Operand::DataReg(DataReg::D1)),
+            M68kInst::Add(
+                Size::Long,
+                Operand::DataReg(DataReg::D0),
+                Operand::DataReg(DataReg::D2),
+            ),
+            M68kInst::Move(
+                Size::Long,
+                Operand::DataReg(DataReg::D2),
+                Operand::DataReg(DataReg::D0),
+            ),
+            M68kInst::Move(
+                Size::Long,
+                Operand::DataReg(DataReg::D3),
+                Operand::DataReg(DataReg::D1),
+            ),
             M68kInst::Unlk(AddrReg::A6),
             M68kInst::Bra("ym_write1".to_string()),
         ]
@@ -1142,31 +2393,79 @@ impl SdkLibraryGenerator {
             M68kInst::Label("ym_write_op".to_string()),
             M68kInst::Link(AddrReg::A6, 0),
             // Get operator offset: [0, 8, 4, 12]
-            M68kInst::Move(Size::Long, Operand::Disp(12, AddrReg::A6), Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(12, AddrReg::A6),
+                Operand::DataReg(DataReg::D0),
+            ),
             M68kInst::Lea(Operand::Label("__sdk_op_offsets".to_string()), AddrReg::A0),
             M68kInst::Lsl(Size::Long, Operand::Imm(2), DataReg::D0),
-            M68kInst::Move(Size::Long, Operand::Indexed(0, AddrReg::A0, DataReg::D0), Operand::DataReg(DataReg::D4)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Indexed(0, AddrReg::A0, DataReg::D0),
+                Operand::DataReg(DataReg::D4),
+            ),
             // Get channel
-            M68kInst::Move(Size::Long, Operand::Disp(8, AddrReg::A6), Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(8, AddrReg::A6),
+                Operand::DataReg(DataReg::D0),
+            ),
             // Calculate final register
-            M68kInst::Move(Size::Long, Operand::Disp(16, AddrReg::A6), Operand::DataReg(DataReg::D2)),
-            M68kInst::Add(Size::Long, Operand::DataReg(DataReg::D4), Operand::DataReg(DataReg::D2)),
-            M68kInst::Move(Size::Long, Operand::Disp(20, AddrReg::A6), Operand::DataReg(DataReg::D3)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(16, AddrReg::A6),
+                Operand::DataReg(DataReg::D2),
+            ),
+            M68kInst::Add(
+                Size::Long,
+                Operand::DataReg(DataReg::D4),
+                Operand::DataReg(DataReg::D2),
+            ),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(20, AddrReg::A6),
+                Operand::DataReg(DataReg::D3),
+            ),
             // Check port
             M68kInst::Cmpi(Size::Long, 3, Operand::DataReg(DataReg::D0)),
             M68kInst::Bcc(Cond::Ge, use_port1.clone()),
             // Port 0
-            M68kInst::Add(Size::Long, Operand::DataReg(DataReg::D0), Operand::DataReg(DataReg::D2)),
-            M68kInst::Move(Size::Long, Operand::DataReg(DataReg::D2), Operand::DataReg(DataReg::D0)),
-            M68kInst::Move(Size::Long, Operand::DataReg(DataReg::D3), Operand::DataReg(DataReg::D1)),
+            M68kInst::Add(
+                Size::Long,
+                Operand::DataReg(DataReg::D0),
+                Operand::DataReg(DataReg::D2),
+            ),
+            M68kInst::Move(
+                Size::Long,
+                Operand::DataReg(DataReg::D2),
+                Operand::DataReg(DataReg::D0),
+            ),
+            M68kInst::Move(
+                Size::Long,
+                Operand::DataReg(DataReg::D3),
+                Operand::DataReg(DataReg::D1),
+            ),
             M68kInst::Unlk(AddrReg::A6),
             M68kInst::Bra("ym_write0".to_string()),
             // Port 1
             M68kInst::Label(use_port1),
             M68kInst::Subq(Size::Long, 3, Operand::DataReg(DataReg::D0)),
-            M68kInst::Add(Size::Long, Operand::DataReg(DataReg::D0), Operand::DataReg(DataReg::D2)),
-            M68kInst::Move(Size::Long, Operand::DataReg(DataReg::D2), Operand::DataReg(DataReg::D0)),
-            M68kInst::Move(Size::Long, Operand::DataReg(DataReg::D3), Operand::DataReg(DataReg::D1)),
+            M68kInst::Add(
+                Size::Long,
+                Operand::DataReg(DataReg::D0),
+                Operand::DataReg(DataReg::D2),
+            ),
+            M68kInst::Move(
+                Size::Long,
+                Operand::DataReg(DataReg::D2),
+                Operand::DataReg(DataReg::D0),
+            ),
+            M68kInst::Move(
+                Size::Long,
+                Operand::DataReg(DataReg::D3),
+                Operand::DataReg(DataReg::D1),
+            ),
             M68kInst::Unlk(AddrReg::A6),
             M68kInst::Bra("ym_write1".to_string()),
         ]
@@ -1179,7 +2478,11 @@ impl SdkLibraryGenerator {
         vec![
             M68kInst::Label("ym_key_on".to_string()),
             // Calculate slot: ch < 3 ? ch : (ch - 3) | 4
-            M68kInst::Move(Size::Long, Operand::Disp(4, AddrReg::A7), Operand::DataReg(DataReg::D1)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(4, AddrReg::A7),
+                Operand::DataReg(DataReg::D1),
+            ),
             M68kInst::Cmpi(Size::Long, 3, Operand::DataReg(DataReg::D1)),
             M68kInst::Bcc(Cond::Ge, ch_hi.clone()),
             M68kInst::Bra(".ykon_write".to_string()),
@@ -1199,7 +2502,11 @@ impl SdkLibraryGenerator {
 
         vec![
             M68kInst::Label("ym_key_off".to_string()),
-            M68kInst::Move(Size::Long, Operand::Disp(4, AddrReg::A7), Operand::DataReg(DataReg::D1)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(4, AddrReg::A7),
+                Operand::DataReg(DataReg::D1),
+            ),
             M68kInst::Cmpi(Size::Long, 3, Operand::DataReg(DataReg::D1)),
             M68kInst::Bcc(Cond::Ge, ch_hi.clone()),
             M68kInst::Bra(".ykof_write".to_string()),
@@ -1219,7 +2526,11 @@ impl SdkLibraryGenerator {
         vec![
             M68kInst::Label("ym_key_on_ops".to_string()),
             // Args: 4(a7)=ch, 8(a7)=ops
-            M68kInst::Move(Size::Long, Operand::Disp(4, AddrReg::A7), Operand::DataReg(DataReg::D1)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(4, AddrReg::A7),
+                Operand::DataReg(DataReg::D1),
+            ),
             M68kInst::Cmpi(Size::Long, 3, Operand::DataReg(DataReg::D1)),
             M68kInst::Bcc(Cond::Ge, ch_hi.clone()),
             M68kInst::Bra(".ykoo_write".to_string()),
@@ -1228,9 +2539,17 @@ impl SdkLibraryGenerator {
             M68kInst::Ori(Size::Long, 4, Operand::DataReg(DataReg::D1)),
             M68kInst::Label(".ykoo_write".to_string()),
             // Combine ops << 4 with slot
-            M68kInst::Move(Size::Long, Operand::Disp(8, AddrReg::A7), Operand::DataReg(DataReg::D2)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(8, AddrReg::A7),
+                Operand::DataReg(DataReg::D2),
+            ),
             M68kInst::Lsl(Size::Long, Operand::Imm(4), DataReg::D2),
-            M68kInst::Or(Size::Long, Operand::DataReg(DataReg::D2), Operand::DataReg(DataReg::D1)),
+            M68kInst::Or(
+                Size::Long,
+                Operand::DataReg(DataReg::D2),
+                Operand::DataReg(DataReg::D1),
+            ),
             M68kInst::Moveq(0x28, DataReg::D0),
             M68kInst::Bra("ym_write0".to_string()),
         ]
@@ -1242,27 +2561,71 @@ impl SdkLibraryGenerator {
             M68kInst::Label("ym_set_freq".to_string()),
             M68kInst::Link(AddrReg::A6, 0),
             // Build freq_hi: (block << 3) | (fnum >> 8)
-            M68kInst::Move(Size::Long, Operand::Disp(12, AddrReg::A6), Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(12, AddrReg::A6),
+                Operand::DataReg(DataReg::D0),
+            ),
             M68kInst::Lsl(Size::Long, Operand::Imm(3), DataReg::D0),
-            M68kInst::Move(Size::Long, Operand::Disp(16, AddrReg::A6), Operand::DataReg(DataReg::D1)),
-            M68kInst::Move(Size::Long, Operand::DataReg(DataReg::D1), Operand::DataReg(DataReg::D2)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(16, AddrReg::A6),
+                Operand::DataReg(DataReg::D1),
+            ),
+            M68kInst::Move(
+                Size::Long,
+                Operand::DataReg(DataReg::D1),
+                Operand::DataReg(DataReg::D2),
+            ),
             M68kInst::Lsr(Size::Long, Operand::Imm(8), DataReg::D2),
-            M68kInst::Or(Size::Long, Operand::DataReg(DataReg::D2), Operand::DataReg(DataReg::D0)),
+            M68kInst::Or(
+                Size::Long,
+                Operand::DataReg(DataReg::D2),
+                Operand::DataReg(DataReg::D0),
+            ),
             // Save for later
-            M68kInst::Move(Size::Long, Operand::DataReg(DataReg::D0), Operand::DataReg(DataReg::D3)),
-            M68kInst::Move(Size::Long, Operand::DataReg(DataReg::D1), Operand::DataReg(DataReg::D4)),
-            M68kInst::Move(Size::Long, Operand::Disp(8, AddrReg::A6), Operand::DataReg(DataReg::D5)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::DataReg(DataReg::D0),
+                Operand::DataReg(DataReg::D3),
+            ),
+            M68kInst::Move(
+                Size::Long,
+                Operand::DataReg(DataReg::D1),
+                Operand::DataReg(DataReg::D4),
+            ),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(8, AddrReg::A6),
+                Operand::DataReg(DataReg::D5),
+            ),
             // Write freq_hi first (reg 0xA4)
-            M68kInst::Move(Size::Long, Operand::DataReg(DataReg::D5), Operand::PreDec(AddrReg::A7)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::DataReg(DataReg::D5),
+                Operand::PreDec(AddrReg::A7),
+            ),
             M68kInst::Move(Size::Long, Operand::Imm(0xA4), Operand::PreDec(AddrReg::A7)),
-            M68kInst::Move(Size::Long, Operand::DataReg(DataReg::D3), Operand::PreDec(AddrReg::A7)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::DataReg(DataReg::D3),
+                Operand::PreDec(AddrReg::A7),
+            ),
             M68kInst::Bsr("ym_write_ch".to_string()),
             M68kInst::Adda(Size::Long, Operand::Imm(12), AddrReg::A7),
             // Write freq_lo (reg 0xA0)
-            M68kInst::Move(Size::Long, Operand::DataReg(DataReg::D5), Operand::PreDec(AddrReg::A7)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::DataReg(DataReg::D5),
+                Operand::PreDec(AddrReg::A7),
+            ),
             M68kInst::Move(Size::Long, Operand::Imm(0xA0), Operand::PreDec(AddrReg::A7)),
             M68kInst::Andi(Size::Long, 0xFF, Operand::DataReg(DataReg::D4)),
-            M68kInst::Move(Size::Long, Operand::DataReg(DataReg::D4), Operand::PreDec(AddrReg::A7)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::DataReg(DataReg::D4),
+                Operand::PreDec(AddrReg::A7),
+            ),
             M68kInst::Bsr("ym_write_ch".to_string()),
             M68kInst::Adda(Size::Long, Operand::Imm(12), AddrReg::A7),
             M68kInst::Unlk(AddrReg::A6),
@@ -1276,14 +2639,34 @@ impl SdkLibraryGenerator {
             M68kInst::Label("ym_set_algo".to_string()),
             M68kInst::Link(AddrReg::A6, 0),
             // val = (feedback << 3) | algo
-            M68kInst::Move(Size::Long, Operand::Disp(16, AddrReg::A6), Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(16, AddrReg::A6),
+                Operand::DataReg(DataReg::D0),
+            ),
             M68kInst::Lsl(Size::Long, Operand::Imm(3), DataReg::D0),
-            M68kInst::Move(Size::Long, Operand::Disp(12, AddrReg::A6), Operand::DataReg(DataReg::D1)),
-            M68kInst::Or(Size::Long, Operand::DataReg(DataReg::D1), Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(12, AddrReg::A6),
+                Operand::DataReg(DataReg::D1),
+            ),
+            M68kInst::Or(
+                Size::Long,
+                Operand::DataReg(DataReg::D1),
+                Operand::DataReg(DataReg::D0),
+            ),
             // ym_write_ch(ch, 0xB0, val)
-            M68kInst::Move(Size::Long, Operand::Disp(8, AddrReg::A6), Operand::PreDec(AddrReg::A7)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(8, AddrReg::A6),
+                Operand::PreDec(AddrReg::A7),
+            ),
             M68kInst::Move(Size::Long, Operand::Imm(0xB0), Operand::PreDec(AddrReg::A7)),
-            M68kInst::Move(Size::Long, Operand::DataReg(DataReg::D0), Operand::PreDec(AddrReg::A7)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::DataReg(DataReg::D0),
+                Operand::PreDec(AddrReg::A7),
+            ),
             M68kInst::Bsr("ym_write_ch".to_string()),
             M68kInst::Adda(Size::Long, Operand::Imm(12), AddrReg::A7),
             M68kInst::Unlk(AddrReg::A6),
@@ -1297,9 +2680,17 @@ impl SdkLibraryGenerator {
             M68kInst::Label("ym_set_pan".to_string()),
             M68kInst::Link(AddrReg::A6, 0),
             // ym_write_ch(ch, 0xB4, pan)
-            M68kInst::Move(Size::Long, Operand::Disp(8, AddrReg::A6), Operand::PreDec(AddrReg::A7)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(8, AddrReg::A6),
+                Operand::PreDec(AddrReg::A7),
+            ),
             M68kInst::Move(Size::Long, Operand::Imm(0xB4), Operand::PreDec(AddrReg::A7)),
-            M68kInst::Move(Size::Long, Operand::Disp(12, AddrReg::A6), Operand::PreDec(AddrReg::A7)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(12, AddrReg::A6),
+                Operand::PreDec(AddrReg::A7),
+            ),
             M68kInst::Bsr("ym_write_ch".to_string()),
             M68kInst::Adda(Size::Long, Operand::Imm(12), AddrReg::A7),
             M68kInst::Unlk(AddrReg::A6),
@@ -1313,10 +2704,18 @@ impl SdkLibraryGenerator {
             M68kInst::Label("ym_set_volume".to_string()),
             M68kInst::Link(AddrReg::A6, 0),
             // ym_write_op(ch, 3, 0x40, vol)
-            M68kInst::Move(Size::Long, Operand::Disp(8, AddrReg::A6), Operand::PreDec(AddrReg::A7)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(8, AddrReg::A6),
+                Operand::PreDec(AddrReg::A7),
+            ),
             M68kInst::Move(Size::Long, Operand::Imm(3), Operand::PreDec(AddrReg::A7)),
             M68kInst::Move(Size::Long, Operand::Imm(0x40), Operand::PreDec(AddrReg::A7)),
-            M68kInst::Move(Size::Long, Operand::Disp(12, AddrReg::A6), Operand::PreDec(AddrReg::A7)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(12, AddrReg::A6),
+                Operand::PreDec(AddrReg::A7),
+            ),
             M68kInst::Bsr("ym_write_op".to_string()),
             M68kInst::Adda(Size::Long, Operand::Imm(16), AddrReg::A7),
             M68kInst::Unlk(AddrReg::A6),
@@ -1329,7 +2728,11 @@ impl SdkLibraryGenerator {
         vec![
             M68kInst::Label("ym_set_lfo".to_string()),
             M68kInst::Moveq(0x22, DataReg::D0),
-            M68kInst::Move(Size::Long, Operand::Disp(4, AddrReg::A7), Operand::DataReg(DataReg::D1)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(4, AddrReg::A7),
+                Operand::DataReg(DataReg::D1),
+            ),
             M68kInst::Bra("ym_write0".to_string()),
         ]
     }
@@ -1350,19 +2753,43 @@ impl SdkLibraryGenerator {
         vec![
             M68kInst::Label("psg_set_tone".to_string()),
             // Latch byte: 0x80 | (channel << 5) | (divider & 0x0F)
-            M68kInst::Move(Size::Long, Operand::Disp(4, AddrReg::A7), Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(4, AddrReg::A7),
+                Operand::DataReg(DataReg::D0),
+            ),
             M68kInst::Andi(Size::Word, 0x03, Operand::DataReg(DataReg::D0)),
             M68kInst::Lsl(Size::Word, Operand::Imm(5), DataReg::D0),
-            M68kInst::Move(Size::Long, Operand::Disp(8, AddrReg::A7), Operand::DataReg(DataReg::D1)),
-            M68kInst::Move(Size::Long, Operand::DataReg(DataReg::D1), Operand::DataReg(DataReg::D2)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(8, AddrReg::A7),
+                Operand::DataReg(DataReg::D1),
+            ),
+            M68kInst::Move(
+                Size::Long,
+                Operand::DataReg(DataReg::D1),
+                Operand::DataReg(DataReg::D2),
+            ),
             M68kInst::Andi(Size::Word, 0x0F, Operand::DataReg(DataReg::D2)),
-            M68kInst::Or(Size::Word, Operand::DataReg(DataReg::D2), Operand::DataReg(DataReg::D0)),
+            M68kInst::Or(
+                Size::Word,
+                Operand::DataReg(DataReg::D2),
+                Operand::DataReg(DataReg::D0),
+            ),
             M68kInst::Ori(Size::Word, 0x80, Operand::DataReg(DataReg::D0)),
-            M68kInst::Move(Size::Byte, Operand::DataReg(DataReg::D0), Operand::AbsLong(PSG_PORT)),
+            M68kInst::Move(
+                Size::Byte,
+                Operand::DataReg(DataReg::D0),
+                Operand::AbsLong(PSG_PORT),
+            ),
             // Data byte: (divider >> 4) & 0x3F
             M68kInst::Lsr(Size::Word, Operand::Imm(4), DataReg::D1),
             M68kInst::Andi(Size::Word, 0x3F, Operand::DataReg(DataReg::D1)),
-            M68kInst::Move(Size::Byte, Operand::DataReg(DataReg::D1), Operand::AbsLong(PSG_PORT)),
+            M68kInst::Move(
+                Size::Byte,
+                Operand::DataReg(DataReg::D1),
+                Operand::AbsLong(PSG_PORT),
+            ),
             M68kInst::Rts,
         ]
     }
@@ -1374,7 +2801,11 @@ impl SdkLibraryGenerator {
             M68kInst::Label("psg_set_freq".to_string()),
             M68kInst::Link(AddrReg::A6, 0),
             // freq in D1
-            M68kInst::Move(Size::Long, Operand::Disp(12, AddrReg::A6), Operand::DataReg(DataReg::D1)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(12, AddrReg::A6),
+                Operand::DataReg(DataReg::D1),
+            ),
             // Clamp freq >= 1
             M68kInst::Tst(Size::Long, Operand::DataReg(DataReg::D1)),
             M68kInst::Bcc(Cond::Gt, ".psf_calc".to_string()),
@@ -1383,17 +2814,33 @@ impl SdkLibraryGenerator {
             // 32 * freq
             M68kInst::Lsl(Size::Long, Operand::Imm(5), DataReg::D1),
             // 3579545 / (32 * freq)
-            M68kInst::Move(Size::Long, Operand::Imm(3579545), Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Imm(3579545),
+                Operand::DataReg(DataReg::D0),
+            ),
             M68kInst::Divu(Operand::DataReg(DataReg::D1), DataReg::D0),
             M68kInst::Andi(Size::Long, 0xFFFF, Operand::DataReg(DataReg::D0)),
             // Clamp to 1023
             M68kInst::Cmpi(Size::Long, 1023, Operand::DataReg(DataReg::D0)),
             M68kInst::Bcc(Cond::Le, ".psf_ok".to_string()),
-            M68kInst::Move(Size::Long, Operand::Imm(1023), Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Imm(1023),
+                Operand::DataReg(DataReg::D0),
+            ),
             M68kInst::Label(".psf_ok".to_string()),
             // Call psg_set_tone(channel, divider)
-            M68kInst::Move(Size::Long, Operand::Disp(8, AddrReg::A6), Operand::PreDec(AddrReg::A7)),
-            M68kInst::Move(Size::Long, Operand::DataReg(DataReg::D0), Operand::PreDec(AddrReg::A7)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(8, AddrReg::A6),
+                Operand::PreDec(AddrReg::A7),
+            ),
+            M68kInst::Move(
+                Size::Long,
+                Operand::DataReg(DataReg::D0),
+                Operand::PreDec(AddrReg::A7),
+            ),
             M68kInst::Bsr("psg_set_tone".to_string()),
             M68kInst::Addq(Size::Long, 8, Operand::AddrReg(AddrReg::A7)),
             M68kInst::Unlk(AddrReg::A6),
@@ -1419,19 +2866,43 @@ impl SdkLibraryGenerator {
             M68kInst::Label("psg_beep".to_string()),
             M68kInst::Link(AddrReg::A6, 0),
             // psg_set_tone(channel, divider)
-            M68kInst::Move(Size::Long, Operand::Disp(8, AddrReg::A6), Operand::PreDec(AddrReg::A7)),
-            M68kInst::Move(Size::Long, Operand::Disp(12, AddrReg::A6), Operand::PreDec(AddrReg::A7)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(8, AddrReg::A6),
+                Operand::PreDec(AddrReg::A7),
+            ),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(12, AddrReg::A6),
+                Operand::PreDec(AddrReg::A7),
+            ),
             M68kInst::Bsr("psg_set_tone".to_string()),
             M68kInst::Addq(Size::Long, 8, Operand::AddrReg(AddrReg::A7)),
             // psg_set_volume(channel, volume) - inline
-            M68kInst::Move(Size::Long, Operand::Disp(8, AddrReg::A6), Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(8, AddrReg::A6),
+                Operand::DataReg(DataReg::D0),
+            ),
             M68kInst::Andi(Size::Word, 0x03, Operand::DataReg(DataReg::D0)),
             M68kInst::Lsl(Size::Word, Operand::Imm(5), DataReg::D0),
-            M68kInst::Move(Size::Long, Operand::Disp(16, AddrReg::A6), Operand::DataReg(DataReg::D1)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(16, AddrReg::A6),
+                Operand::DataReg(DataReg::D1),
+            ),
             M68kInst::Andi(Size::Word, 0x0F, Operand::DataReg(DataReg::D1)),
-            M68kInst::Or(Size::Word, Operand::DataReg(DataReg::D1), Operand::DataReg(DataReg::D0)),
+            M68kInst::Or(
+                Size::Word,
+                Operand::DataReg(DataReg::D1),
+                Operand::DataReg(DataReg::D0),
+            ),
             M68kInst::Ori(Size::Word, 0x90, Operand::DataReg(DataReg::D0)),
-            M68kInst::Move(Size::Byte, Operand::DataReg(DataReg::D0), Operand::AbsLong(PSG_PORT)),
+            M68kInst::Move(
+                Size::Byte,
+                Operand::DataReg(DataReg::D0),
+                Operand::AbsLong(PSG_PORT),
+            ),
             M68kInst::Unlk(AddrReg::A6),
             M68kInst::Rts,
         ]
@@ -1458,13 +2929,29 @@ impl SdkLibraryGenerator {
         vec![
             M68kInst::Label("sprite_init".to_string()),
             // Set up VRAM write address to sprite table
-            M68kInst::Move(Size::Long, Operand::Imm(Self::SPRITE_TABLE as i32), Operand::DataReg(DataReg::D0)),
-            M68kInst::Move(Size::Long, Operand::DataReg(DataReg::D0), Operand::DataReg(DataReg::D1)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Imm(Self::SPRITE_TABLE as i32),
+                Operand::DataReg(DataReg::D0),
+            ),
+            M68kInst::Move(
+                Size::Long,
+                Operand::DataReg(DataReg::D0),
+                Operand::DataReg(DataReg::D1),
+            ),
             M68kInst::Andi(Size::Word, 0x3FFF, Operand::DataReg(DataReg::D1)),
             M68kInst::Ori(Size::Word, 0x4000, Operand::DataReg(DataReg::D1)),
-            M68kInst::Move(Size::Word, Operand::DataReg(DataReg::D1), Operand::AbsLong(VDP_CTRL)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::DataReg(DataReg::D1),
+                Operand::AbsLong(VDP_CTRL),
+            ),
             M68kInst::Lsr(Size::Long, Operand::Imm(14), DataReg::D0),
-            M68kInst::Move(Size::Word, Operand::DataReg(DataReg::D0), Operand::AbsLong(VDP_CTRL)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::DataReg(DataReg::D0),
+                Operand::AbsLong(VDP_CTRL),
+            ),
             // Clear 80 sprites (80 * 8 = 640 bytes)
             M68kInst::Moveq(79, DataReg::D0),
             M68kInst::Label(loop_label.clone()),
@@ -1483,34 +2970,90 @@ impl SdkLibraryGenerator {
         vec![
             M68kInst::Label("sprite_set".to_string()),
             // Calculate sprite table address: SPRITE_TABLE + index * 8
-            M68kInst::Move(Size::Long, Operand::Disp(4, AddrReg::A7), Operand::DataReg(DataReg::D0)),
-            M68kInst::Lsl(Size::Long, Operand::Imm(3), DataReg::D0),  // index * 8
-            M68kInst::Addi(Size::Long, Self::SPRITE_TABLE as i32, Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(4, AddrReg::A7),
+                Operand::DataReg(DataReg::D0),
+            ),
+            M68kInst::Lsl(Size::Long, Operand::Imm(3), DataReg::D0), // index * 8
+            M68kInst::Addi(
+                Size::Long,
+                Self::SPRITE_TABLE as i32,
+                Operand::DataReg(DataReg::D0),
+            ),
             // Set VRAM write address
-            M68kInst::Move(Size::Long, Operand::DataReg(DataReg::D0), Operand::DataReg(DataReg::D1)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::DataReg(DataReg::D0),
+                Operand::DataReg(DataReg::D1),
+            ),
             M68kInst::Andi(Size::Word, 0x3FFF, Operand::DataReg(DataReg::D1)),
             M68kInst::Ori(Size::Word, 0x4000, Operand::DataReg(DataReg::D1)),
-            M68kInst::Move(Size::Word, Operand::DataReg(DataReg::D1), Operand::AbsLong(VDP_CTRL)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::DataReg(DataReg::D1),
+                Operand::AbsLong(VDP_CTRL),
+            ),
             M68kInst::Lsr(Size::Long, Operand::Imm(14), DataReg::D0),
-            M68kInst::Move(Size::Word, Operand::DataReg(DataReg::D0), Operand::AbsLong(VDP_CTRL)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::DataReg(DataReg::D0),
+                Operand::AbsLong(VDP_CTRL),
+            ),
             // Write Y position (y + 128) - y is at 12(SP), low word at 14(SP)
-            M68kInst::Move(Size::Word, Operand::Disp(14, AddrReg::A7), Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::Disp(14, AddrReg::A7),
+                Operand::DataReg(DataReg::D0),
+            ),
             M68kInst::Addi(Size::Word, 128, Operand::DataReg(DataReg::D0)),
-            M68kInst::Move(Size::Word, Operand::DataReg(DataReg::D0), Operand::AbsLong(VDP_DATA)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::DataReg(DataReg::D0),
+                Operand::AbsLong(VDP_DATA),
+            ),
             // Write size/link (size in upper nibble, link = index+1)
             // size is at 16(SP), low word at 18(SP); index is at 4(SP), low word at 6(SP)
-            M68kInst::Move(Size::Word, Operand::Disp(18, AddrReg::A7), Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::Disp(18, AddrReg::A7),
+                Operand::DataReg(DataReg::D0),
+            ),
             M68kInst::Lsl(Size::Word, Operand::Imm(8), DataReg::D0),
-            M68kInst::Move(Size::Word, Operand::Disp(6, AddrReg::A7), Operand::DataReg(DataReg::D1)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::Disp(6, AddrReg::A7),
+                Operand::DataReg(DataReg::D1),
+            ),
             M68kInst::Addq(Size::Word, 1, Operand::DataReg(DataReg::D1)),
-            M68kInst::Or(Size::Word, Operand::DataReg(DataReg::D1), Operand::DataReg(DataReg::D0)),
-            M68kInst::Move(Size::Word, Operand::DataReg(DataReg::D0), Operand::AbsLong(VDP_DATA)),
+            M68kInst::Or(
+                Size::Word,
+                Operand::DataReg(DataReg::D1),
+                Operand::DataReg(DataReg::D0),
+            ),
+            M68kInst::Move(
+                Size::Word,
+                Operand::DataReg(DataReg::D0),
+                Operand::AbsLong(VDP_DATA),
+            ),
             // Write attribute word - attr is at 20(SP), low word at 22(SP)
-            M68kInst::Move(Size::Word, Operand::Disp(22, AddrReg::A7), Operand::AbsLong(VDP_DATA)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::Disp(22, AddrReg::A7),
+                Operand::AbsLong(VDP_DATA),
+            ),
             // Write X position (x + 128) - x is at 8(SP), low word at 10(SP)
-            M68kInst::Move(Size::Word, Operand::Disp(10, AddrReg::A7), Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::Disp(10, AddrReg::A7),
+                Operand::DataReg(DataReg::D0),
+            ),
             M68kInst::Addi(Size::Word, 128, Operand::DataReg(DataReg::D0)),
-            M68kInst::Move(Size::Word, Operand::DataReg(DataReg::D0), Operand::AbsLong(VDP_DATA)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::DataReg(DataReg::D0),
+                Operand::AbsLong(VDP_DATA),
+            ),
             M68kInst::Rts,
         ]
     }
@@ -1522,35 +3065,91 @@ impl SdkLibraryGenerator {
         vec![
             M68kInst::Label("sprite_set_pos".to_string()),
             // Calculate Y position address: SPRITE_TABLE + index * 8 + 0
-            M68kInst::Move(Size::Long, Operand::Disp(4, AddrReg::A7), Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(4, AddrReg::A7),
+                Operand::DataReg(DataReg::D0),
+            ),
             M68kInst::Lsl(Size::Long, Operand::Imm(3), DataReg::D0),
-            M68kInst::Addi(Size::Long, Self::SPRITE_TABLE as i32, Operand::DataReg(DataReg::D0)),
+            M68kInst::Addi(
+                Size::Long,
+                Self::SPRITE_TABLE as i32,
+                Operand::DataReg(DataReg::D0),
+            ),
             // Set VRAM write address
-            M68kInst::Move(Size::Long, Operand::DataReg(DataReg::D0), Operand::DataReg(DataReg::D1)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::DataReg(DataReg::D0),
+                Operand::DataReg(DataReg::D1),
+            ),
             M68kInst::Andi(Size::Word, 0x3FFF, Operand::DataReg(DataReg::D1)),
             M68kInst::Ori(Size::Word, 0x4000, Operand::DataReg(DataReg::D1)),
-            M68kInst::Move(Size::Word, Operand::DataReg(DataReg::D1), Operand::AbsLong(VDP_CTRL)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::DataReg(DataReg::D1),
+                Operand::AbsLong(VDP_CTRL),
+            ),
             M68kInst::Lsr(Size::Long, Operand::Imm(14), DataReg::D0),
-            M68kInst::Move(Size::Word, Operand::DataReg(DataReg::D0), Operand::AbsLong(VDP_CTRL)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::DataReg(DataReg::D0),
+                Operand::AbsLong(VDP_CTRL),
+            ),
             // Write Y position - y is at 12(SP), low word at 14(SP)
-            M68kInst::Move(Size::Word, Operand::Disp(14, AddrReg::A7), Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::Disp(14, AddrReg::A7),
+                Operand::DataReg(DataReg::D0),
+            ),
             M68kInst::Addi(Size::Word, 128, Operand::DataReg(DataReg::D0)),
-            M68kInst::Move(Size::Word, Operand::DataReg(DataReg::D0), Operand::AbsLong(VDP_DATA)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::DataReg(DataReg::D0),
+                Operand::AbsLong(VDP_DATA),
+            ),
             // Skip size/link word, write attr (need to read-modify-write for X only)
             // For simplicity, update X position at offset +6
-            M68kInst::Move(Size::Long, Operand::Disp(4, AddrReg::A7), Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(4, AddrReg::A7),
+                Operand::DataReg(DataReg::D0),
+            ),
             M68kInst::Lsl(Size::Long, Operand::Imm(3), DataReg::D0),
-            M68kInst::Addi(Size::Long, (Self::SPRITE_TABLE + 6) as i32, Operand::DataReg(DataReg::D0)),
-            M68kInst::Move(Size::Long, Operand::DataReg(DataReg::D0), Operand::DataReg(DataReg::D1)),
+            M68kInst::Addi(
+                Size::Long,
+                (Self::SPRITE_TABLE + 6) as i32,
+                Operand::DataReg(DataReg::D0),
+            ),
+            M68kInst::Move(
+                Size::Long,
+                Operand::DataReg(DataReg::D0),
+                Operand::DataReg(DataReg::D1),
+            ),
             M68kInst::Andi(Size::Word, 0x3FFF, Operand::DataReg(DataReg::D1)),
             M68kInst::Ori(Size::Word, 0x4000, Operand::DataReg(DataReg::D1)),
-            M68kInst::Move(Size::Word, Operand::DataReg(DataReg::D1), Operand::AbsLong(VDP_CTRL)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::DataReg(DataReg::D1),
+                Operand::AbsLong(VDP_CTRL),
+            ),
             M68kInst::Lsr(Size::Long, Operand::Imm(14), DataReg::D0),
-            M68kInst::Move(Size::Word, Operand::DataReg(DataReg::D0), Operand::AbsLong(VDP_CTRL)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::DataReg(DataReg::D0),
+                Operand::AbsLong(VDP_CTRL),
+            ),
             // Write X position - x is at 8(SP), low word at 10(SP)
-            M68kInst::Move(Size::Word, Operand::Disp(10, AddrReg::A7), Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::Disp(10, AddrReg::A7),
+                Operand::DataReg(DataReg::D0),
+            ),
             M68kInst::Addi(Size::Word, 128, Operand::DataReg(DataReg::D0)),
-            M68kInst::Move(Size::Word, Operand::DataReg(DataReg::D0), Operand::AbsLong(VDP_DATA)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::DataReg(DataReg::D0),
+                Operand::AbsLong(VDP_DATA),
+            ),
             M68kInst::Rts,
         ]
     }
@@ -1559,15 +3158,35 @@ impl SdkLibraryGenerator {
         // sprite_hide(index) - set Y to 0 (offscreen) and link to 0 (end list)
         vec![
             M68kInst::Label("sprite_hide".to_string()),
-            M68kInst::Move(Size::Long, Operand::Disp(4, AddrReg::A7), Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(4, AddrReg::A7),
+                Operand::DataReg(DataReg::D0),
+            ),
             M68kInst::Lsl(Size::Long, Operand::Imm(3), DataReg::D0),
-            M68kInst::Addi(Size::Long, Self::SPRITE_TABLE as i32, Operand::DataReg(DataReg::D0)),
-            M68kInst::Move(Size::Long, Operand::DataReg(DataReg::D0), Operand::DataReg(DataReg::D1)),
+            M68kInst::Addi(
+                Size::Long,
+                Self::SPRITE_TABLE as i32,
+                Operand::DataReg(DataReg::D0),
+            ),
+            M68kInst::Move(
+                Size::Long,
+                Operand::DataReg(DataReg::D0),
+                Operand::DataReg(DataReg::D1),
+            ),
             M68kInst::Andi(Size::Word, 0x3FFF, Operand::DataReg(DataReg::D1)),
             M68kInst::Ori(Size::Word, 0x4000, Operand::DataReg(DataReg::D1)),
-            M68kInst::Move(Size::Word, Operand::DataReg(DataReg::D1), Operand::AbsLong(VDP_CTRL)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::DataReg(DataReg::D1),
+                Operand::AbsLong(VDP_CTRL),
+            ),
             M68kInst::Lsr(Size::Long, Operand::Imm(14), DataReg::D0),
-            M68kInst::Move(Size::Word, Operand::DataReg(DataReg::D0), Operand::AbsLong(VDP_CTRL)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::DataReg(DataReg::D0),
+                Operand::AbsLong(VDP_CTRL),
+            ),
             // Y = 0, link = 0 (end sprite list)
             M68kInst::Clr(Size::Long, Operand::AbsLong(VDP_DATA)),
             M68kInst::Rts,
@@ -1596,17 +3215,41 @@ impl SdkLibraryGenerator {
         vec![
             M68kInst::Label("sprite_set_link".to_string()),
             // Address of link byte: SPRITE_TABLE + index * 8 + 3
-            M68kInst::Move(Size::Long, Operand::Disp(4, AddrReg::A7), Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(4, AddrReg::A7),
+                Operand::DataReg(DataReg::D0),
+            ),
             M68kInst::Lsl(Size::Long, Operand::Imm(3), DataReg::D0),
-            M68kInst::Addi(Size::Long, (Self::SPRITE_TABLE + 3) as i32, Operand::DataReg(DataReg::D0)),
-            M68kInst::Move(Size::Long, Operand::DataReg(DataReg::D0), Operand::DataReg(DataReg::D1)),
+            M68kInst::Addi(
+                Size::Long,
+                (Self::SPRITE_TABLE + 3) as i32,
+                Operand::DataReg(DataReg::D0),
+            ),
+            M68kInst::Move(
+                Size::Long,
+                Operand::DataReg(DataReg::D0),
+                Operand::DataReg(DataReg::D1),
+            ),
             M68kInst::Andi(Size::Word, 0x3FFF, Operand::DataReg(DataReg::D1)),
             M68kInst::Ori(Size::Word, 0x4000, Operand::DataReg(DataReg::D1)),
-            M68kInst::Move(Size::Word, Operand::DataReg(DataReg::D1), Operand::AbsLong(VDP_CTRL)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::DataReg(DataReg::D1),
+                Operand::AbsLong(VDP_CTRL),
+            ),
             M68kInst::Lsr(Size::Long, Operand::Imm(14), DataReg::D0),
-            M68kInst::Move(Size::Word, Operand::DataReg(DataReg::D0), Operand::AbsLong(VDP_CTRL)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::DataReg(DataReg::D0),
+                Operand::AbsLong(VDP_CTRL),
+            ),
             // Write link value - next is at 8(SP), low byte at 11(SP)
-            M68kInst::Move(Size::Byte, Operand::Disp(11, AddrReg::A7), Operand::AbsLong(VDP_DATA)),
+            M68kInst::Move(
+                Size::Byte,
+                Operand::Disp(11, AddrReg::A7),
+                Operand::AbsLong(VDP_DATA),
+            ),
             M68kInst::Rts,
         ]
     }
@@ -1626,12 +3269,28 @@ impl SdkLibraryGenerator {
         vec![
             M68kInst::Label("input_init".to_string()),
             // Set port 1 control (output TH, input the rest)
-            M68kInst::Move(Size::Byte, Operand::Imm(0x40), Operand::AbsLong(Self::JOY1_CTRL)),
+            M68kInst::Move(
+                Size::Byte,
+                Operand::Imm(0x40),
+                Operand::AbsLong(Self::JOY1_CTRL),
+            ),
             // Set port 2 control
-            M68kInst::Move(Size::Byte, Operand::Imm(0x40), Operand::AbsLong(Self::JOY2_CTRL)),
+            M68kInst::Move(
+                Size::Byte,
+                Operand::Imm(0x40),
+                Operand::AbsLong(Self::JOY2_CTRL),
+            ),
             // Set TH high initially
-            M68kInst::Move(Size::Byte, Operand::Imm(0x40), Operand::AbsLong(Self::JOY1_DATA)),
-            M68kInst::Move(Size::Byte, Operand::Imm(0x40), Operand::AbsLong(Self::JOY2_DATA)),
+            M68kInst::Move(
+                Size::Byte,
+                Operand::Imm(0x40),
+                Operand::AbsLong(Self::JOY1_DATA),
+            ),
+            M68kInst::Move(
+                Size::Byte,
+                Operand::Imm(0x40),
+                Operand::AbsLong(Self::JOY2_DATA),
+            ),
             M68kInst::Rts,
         ]
     }
@@ -1643,15 +3302,27 @@ impl SdkLibraryGenerator {
         let done_label = self.next_label("done");
         vec![
             M68kInst::Label("input_read".to_string()),
-            M68kInst::Move(Size::Long, Operand::Disp(4, AddrReg::A7), Operand::DataReg(DataReg::D1)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(4, AddrReg::A7),
+                Operand::DataReg(DataReg::D1),
+            ),
             M68kInst::Tst(Size::Long, Operand::DataReg(DataReg::D1)),
-            M68kInst::Bcc(Cond::Eq,port1_label.clone()),
+            M68kInst::Bcc(Cond::Eq, port1_label.clone()),
             // Port 2
-            M68kInst::Move(Size::Byte, Operand::AbsLong(Self::JOY2_DATA), Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(
+                Size::Byte,
+                Operand::AbsLong(Self::JOY2_DATA),
+                Operand::DataReg(DataReg::D0),
+            ),
             M68kInst::Bra(done_label.clone()),
             // Port 1
             M68kInst::Label(port1_label),
-            M68kInst::Move(Size::Byte, Operand::AbsLong(Self::JOY1_DATA), Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(
+                Size::Byte,
+                Operand::AbsLong(Self::JOY1_DATA),
+                Operand::DataReg(DataReg::D0),
+            ),
             M68kInst::Label(done_label),
             // Invert (active low -> active high)
             M68kInst::Not(Size::Byte, Operand::DataReg(DataReg::D0)),
@@ -1662,10 +3333,7 @@ impl SdkLibraryGenerator {
 
     fn gen_input_update(&mut self) -> Vec<M68kInst> {
         // Placeholder - for more complex input state tracking
-        vec![
-            M68kInst::Label("input_update".to_string()),
-            M68kInst::Rts,
-        ]
+        vec![M68kInst::Label("input_update".to_string()), M68kInst::Rts]
     }
 
     fn gen_input_held(&mut self) -> Vec<M68kInst> {
@@ -1779,15 +3447,18 @@ pub fn resolve_dependencies(functions: &HashSet<String>) -> HashSet<String> {
 /// Check if any functions in the set need the frame counter
 pub fn needs_frame_counter(functions: &HashSet<String>) -> bool {
     functions.iter().any(|f| {
-        matches!(f.as_str(), "vdp_wait_vblank_start" | "vdp_get_frame_count" | "vdp_reset_frame_count" | "vdp_init")
+        matches!(
+            f.as_str(),
+            "vdp_wait_vblank_start" | "vdp_get_frame_count" | "vdp_reset_frame_count" | "vdp_init"
+        )
     })
 }
 
 /// Check if any functions need the operator offset table
 pub fn needs_op_offsets(functions: &HashSet<String>) -> bool {
-    functions.iter().any(|f| {
-        matches!(f.as_str(), "ym_write_op" | "ym_load_operator" | "ym_init")
-    })
+    functions
+        .iter()
+        .any(|f| matches!(f.as_str(), "ym_write_op" | "ym_load_operator" | "ym_init"))
 }
 
 /// Generate SDK static data section

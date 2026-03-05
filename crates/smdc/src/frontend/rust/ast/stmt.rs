@@ -1,6 +1,6 @@
 //! Rust statement AST nodes
 
-use super::{Expr, RustType, Pattern, Item};
+use super::{Expr, Item, Pattern, RustType};
 use crate::common::Span;
 
 /// A block of statements
@@ -77,6 +77,11 @@ pub struct Local {
 
 impl Local {
     pub fn new(pattern: Pattern, ty: Option<RustType>, init: Option<Expr>, span: Span) -> Self {
-        Self { pattern, ty, init, span }
+        Self {
+            pattern,
+            ty,
+            init,
+            span,
+        }
     }
 }

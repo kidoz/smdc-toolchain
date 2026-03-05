@@ -65,11 +65,7 @@ impl Fix16 {
     /// Absolute value
     #[inline]
     pub const fn abs(self) -> Fix16 {
-        if self.0 < 0 {
-            Fix16(-self.0)
-        } else {
-            self
-        }
+        if self.0 < 0 { Fix16(-self.0) } else { self }
     }
 
     /// Negate
@@ -118,7 +114,10 @@ pub struct Vec2 {
 
 impl Vec2 {
     /// Zero vector
-    pub const ZERO: Vec2 = Vec2 { x: Fix16::ZERO, y: Fix16::ZERO };
+    pub const ZERO: Vec2 = Vec2 {
+        x: Fix16::ZERO,
+        y: Fix16::ZERO,
+    };
 
     /// Create new vector
     #[inline]
@@ -167,7 +166,12 @@ impl Rect {
     /// Create new rectangle
     #[inline]
     pub const fn new(x: i16, y: i16, width: u16, height: u16) -> Self {
-        Rect { x, y, width, height }
+        Rect {
+            x,
+            y,
+            width,
+            height,
+        }
     }
 
     /// Check if point is inside rectangle

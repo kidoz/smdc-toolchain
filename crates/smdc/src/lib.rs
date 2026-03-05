@@ -12,14 +12,14 @@
 //! - **Common** (`common/`): Shared infrastructure (errors, spans)
 //! - **Types** (`types/`): Language-agnostic type system
 
-pub mod common;
-pub mod types;
-pub mod frontend;
 pub mod backend;
+pub mod common;
 pub mod driver;
+pub mod frontend;
 pub mod ir;
+pub mod types;
 
 // Re-exports for convenience
+pub use backend::{Backend, BackendConfig, BackendOutput, BackendRegistry, OutputFormat};
 pub use common::{CompileError, CompileResult, DiagnosticReporter, Span};
-pub use frontend::{Frontend, FrontendConfig, FrontendRegistry, CompileContext};
-pub use backend::{Backend, BackendConfig, BackendRegistry, BackendOutput, OutputFormat};
+pub use frontend::{CompileContext, Frontend, FrontendConfig, FrontendRegistry};

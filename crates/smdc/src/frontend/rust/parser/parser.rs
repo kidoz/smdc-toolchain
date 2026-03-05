@@ -1,8 +1,8 @@
 //! Rust recursive descent parser
 
 use crate::common::{CompileError, CompileResult, Span};
-use crate::frontend::rust::lexer::{RustLexer, RustToken, RustTokenKind};
 use crate::frontend::rust::ast::*;
+use crate::frontend::rust::lexer::{RustLexer, RustToken, RustTokenKind};
 
 /// Rust parser
 pub struct RustParser<'a> {
@@ -39,9 +39,10 @@ impl<'a> RustParser<'a> {
         let visibility = self.parse_visibility()?;
         let start = self.lexer.peek()?.span;
 
-        let kind = if self.check(&RustTokenKind::Fn)? ||
-                     self.check(&RustTokenKind::Unsafe)? ||
-                     self.check_const_fn()? {
+        let kind = if self.check(&RustTokenKind::Fn)?
+            || self.check(&RustTokenKind::Unsafe)?
+            || self.check_const_fn()?
+        {
             self.parse_fn_item()?
         } else if self.check(&RustTokenKind::Const)? {
             self.parse_const_item()?
@@ -87,10 +88,15 @@ impl<'a> RustParser<'a> {
                 while depth > 0 {
                     let token = self.lexer.next_token()?;
                     match &token.kind {
-                        RustTokenKind::LParen => { depth += 1; args.push('('); }
+                        RustTokenKind::LParen => {
+                            depth += 1;
+                            args.push('(');
+                        }
                         RustTokenKind::RParen => {
                             depth -= 1;
-                            if depth > 0 { args.push(')'); }
+                            if depth > 0 {
+                                args.push(')');
+                            }
                         }
                         _ => args.push_str(&token.kind.to_string()),
                     }
@@ -154,8 +160,14 @@ impl<'a> RustParser<'a> {
             None
         };
 
-        let end_span = body.as_ref().map(|b| b.span).unwrap_or(start);
-        let mut decl = FnDecl::new(name, params, return_type, body, Span::new(start.start, end_span.end));
+        let end_span = body.as_ref().map_or(start, |b| b.span);
+        let mut decl = FnDecl::new(
+            name,
+            params,
+            return_type,
+            body,
+            Span::new(start.start, end_span.end),
+        );
         decl.is_unsafe = is_unsafe;
         decl.is_const = is_const;
 
@@ -166,15 +178,15 @@ impl<'a> RustParser<'a> {
         let mut params = Vec::new();
 
         // Handle self parameter
-        if self.check(&RustTokenKind::SelfValue)? ||
-           self.check(&RustTokenKind::Amp)? ||
-           self.check(&RustTokenKind::Mut)? {
+        if self.check(&RustTokenKind::SelfValue)?
+            || self.check(&RustTokenKind::Amp)?
+            || self.check(&RustTokenKind::Mut)?
+        {
             // Skip self param parsing for now - simplified
             if self.match_token(&RustTokenKind::Amp)? {
                 self.match_token(&RustTokenKind::Mut)?;
             }
-            if self.match_token(&RustTokenKind::Mut)? {
-            }
+            self.match_token(&RustTokenKind::Mut)?;
             if self.match_token(&RustTokenKind::SelfValue)? {
                 // self parameter handled
                 if self.check(&RustTokenKind::Comma)? {
@@ -442,16 +454,25 @@ impl<'a> RustParser<'a> {
                     }
                 }
                 self.expect(RustTokenKind::RBrace)?;
-                Ok(UseTree::Nested { prefix: path, trees })
+                Ok(UseTree::Nested {
+                    prefix: path,
+                    trees,
+                })
             } else {
                 let tree = self.parse_use_tree()?;
-                Ok(UseTree::Path { prefix: path, tree: Some(Box::new(tree)) })
+                Ok(UseTree::Path {
+                    prefix: path,
+                    tree: Some(Box::new(tree)),
+                })
             }
         } else if self.match_token(&RustTokenKind::As)? {
             let alias = self.expect_identifier()?;
             Ok(UseTree::Rename { path, alias })
         } else {
-            Ok(UseTree::Path { prefix: path, tree: None })
+            Ok(UseTree::Path {
+                prefix: path,
+                tree: None,
+            })
         }
     }
 
@@ -484,16 +505,24 @@ impl<'a> RustParser<'a> {
             if self.match_token(&RustTokenKind::Semi)? {
                 let size = self.parse_array_size()?;
                 self.expect(RustTokenKind::RBracket)?;
-                RustTypeKind::Array { element: Box::new(element), size }
+                RustTypeKind::Array {
+                    element: Box::new(element),
+                    size,
+                }
             } else {
                 self.expect(RustTokenKind::RBracket)?;
-                RustTypeKind::Slice { element: Box::new(element) }
+                RustTypeKind::Slice {
+                    element: Box::new(element),
+                }
             }
         } else if self.match_token(&RustTokenKind::Amp)? {
             // Reference
             let mutable = self.match_token(&RustTokenKind::Mut)?;
             let inner = self.parse_type()?;
-            RustTypeKind::Reference { mutable, inner: Box::new(inner) }
+            RustTypeKind::Reference {
+                mutable,
+                inner: Box::new(inner),
+            }
         } else if self.match_token(&RustTokenKind::Star)? {
             // Raw pointer
             let mutable = if self.match_token(&RustTokenKind::Mut)? {
@@ -503,7 +532,10 @@ impl<'a> RustParser<'a> {
                 false
             };
             let inner = self.parse_type()?;
-            RustTypeKind::Pointer { mutable, inner: Box::new(inner) }
+            RustTypeKind::Pointer {
+                mutable,
+                inner: Box::new(inner),
+            }
         } else if self.match_token(&RustTokenKind::Bang)? {
             // Never type
             RustTypeKind::Never
@@ -548,11 +580,10 @@ impl<'a> RustParser<'a> {
     fn parse_array_size(&mut self) -> CompileResult<usize> {
         let token = self.lexer.next_token()?;
         match &token.kind {
-            RustTokenKind::IntLiteral(s) => {
-                s.replace('_', "").parse().map_err(|_| {
-                    CompileError::parser("invalid array size", token.span)
-                })
-            }
+            RustTokenKind::IntLiteral(s) => s
+                .replace('_', "")
+                .parse()
+                .map_err(|_| CompileError::parser("invalid array size", token.span)),
             _ => Err(CompileError::parser(
                 format!("expected array size, found {}", token.kind),
                 token.span,
@@ -633,19 +664,30 @@ impl<'a> RustParser<'a> {
     fn is_block_expr(&self, expr: &Expr) -> bool {
         matches!(
             expr.kind,
-            ExprKind::Block(_) | ExprKind::If { .. } | ExprKind::Loop { .. } |
-            ExprKind::While { .. } | ExprKind::For { .. } | ExprKind::Match { .. } |
-            ExprKind::Unsafe(_)
+            ExprKind::Block(_)
+                | ExprKind::If { .. }
+                | ExprKind::Loop { .. }
+                | ExprKind::While { .. }
+                | ExprKind::For { .. }
+                | ExprKind::Match { .. }
+                | ExprKind::Unsafe(_)
         )
     }
 
     fn is_item_start(&mut self) -> CompileResult<bool> {
         Ok(matches!(
             &self.lexer.peek()?.kind,
-            RustTokenKind::Fn | RustTokenKind::Struct | RustTokenKind::Enum |
-            RustTokenKind::Impl | RustTokenKind::Type | RustTokenKind::Const |
-            RustTokenKind::Static | RustTokenKind::Mod | RustTokenKind::Use |
-            RustTokenKind::Pub | RustTokenKind::Unsafe
+            RustTokenKind::Fn
+                | RustTokenKind::Struct
+                | RustTokenKind::Enum
+                | RustTokenKind::Impl
+                | RustTokenKind::Type
+                | RustTokenKind::Const
+                | RustTokenKind::Static
+                | RustTokenKind::Mod
+                | RustTokenKind::Use
+                | RustTokenKind::Pub
+                | RustTokenKind::Unsafe
         ))
     }
 
@@ -763,11 +805,12 @@ impl<'a> RustParser<'a> {
             PatternKind::Slice(patterns)
         } else if self.match_token(&RustTokenKind::DotDot)? {
             PatternKind::Rest
-        } else if self.check(&RustTokenKind::IntLiteral(String::new()))? ||
-                  self.check(&RustTokenKind::True)? ||
-                  self.check(&RustTokenKind::False)? ||
-                  self.check(&RustTokenKind::CharLiteral(String::new()))? ||
-                  self.check(&RustTokenKind::StringLiteral(String::new()))? {
+        } else if self.check(&RustTokenKind::IntLiteral(String::new()))?
+            || self.check(&RustTokenKind::True)?
+            || self.check(&RustTokenKind::False)?
+            || self.check(&RustTokenKind::CharLiteral(String::new()))?
+            || self.check(&RustTokenKind::StringLiteral(String::new()))?
+        {
             let lit = self.parse_literal_expr()?;
             PatternKind::Literal(Box::new(lit))
         } else {
@@ -877,7 +920,10 @@ impl<'a> RustParser<'a> {
             let operand = self.parse_unary_expr()?;
             let span = Span::new(start.start, operand.span.end);
             return Ok(Expr::new(
-                ExprKind::Unary { op: UnaryOp::Neg, operand: Box::new(operand) },
+                ExprKind::Unary {
+                    op: UnaryOp::Neg,
+                    operand: Box::new(operand),
+                },
                 span,
             ));
         }
@@ -886,7 +932,10 @@ impl<'a> RustParser<'a> {
             let operand = self.parse_unary_expr()?;
             let span = Span::new(start.start, operand.span.end);
             return Ok(Expr::new(
-                ExprKind::Unary { op: UnaryOp::Not, operand: Box::new(operand) },
+                ExprKind::Unary {
+                    op: UnaryOp::Not,
+                    operand: Box::new(operand),
+                },
                 span,
             ));
         }
@@ -902,7 +951,10 @@ impl<'a> RustParser<'a> {
             let operand = self.parse_unary_expr()?;
             let span = Span::new(start.start, operand.span.end);
             return Ok(Expr::new(
-                ExprKind::Reference { mutable, operand: Box::new(operand) },
+                ExprKind::Reference {
+                    mutable,
+                    operand: Box::new(operand),
+                },
                 span,
             ));
         }
@@ -1018,17 +1070,18 @@ impl<'a> RustParser<'a> {
         let start = self.lexer.peek()?.span;
 
         // Literals
-        if self.check(&RustTokenKind::IntLiteral(String::new()))? ||
-           self.check(&RustTokenKind::HexLiteral(String::new()))? ||
-           self.check(&RustTokenKind::OctalLiteral(String::new()))? ||
-           self.check(&RustTokenKind::BinaryLiteral(String::new()))? ||
-           self.check(&RustTokenKind::FloatLiteral(String::new()))? ||
-           self.check(&RustTokenKind::True)? ||
-           self.check(&RustTokenKind::False)? ||
-           self.check(&RustTokenKind::CharLiteral(String::new()))? ||
-           self.check(&RustTokenKind::StringLiteral(String::new()))? ||
-           self.check(&RustTokenKind::ByteLiteral(String::new()))? ||
-           self.check(&RustTokenKind::ByteStringLiteral(String::new()))? {
+        if self.check(&RustTokenKind::IntLiteral(String::new()))?
+            || self.check(&RustTokenKind::HexLiteral(String::new()))?
+            || self.check(&RustTokenKind::OctalLiteral(String::new()))?
+            || self.check(&RustTokenKind::BinaryLiteral(String::new()))?
+            || self.check(&RustTokenKind::FloatLiteral(String::new()))?
+            || self.check(&RustTokenKind::True)?
+            || self.check(&RustTokenKind::False)?
+            || self.check(&RustTokenKind::CharLiteral(String::new()))?
+            || self.check(&RustTokenKind::StringLiteral(String::new()))?
+            || self.check(&RustTokenKind::ByteLiteral(String::new()))?
+            || self.check(&RustTokenKind::ByteStringLiteral(String::new()))?
+        {
             return self.parse_literal_expr();
         }
 
@@ -1059,9 +1112,10 @@ impl<'a> RustParser<'a> {
             } else {
                 None
             };
-            let value = if !self.check(&RustTokenKind::Semi)? &&
-                         !self.check(&RustTokenKind::RBrace)? &&
-                         !self.check(&RustTokenKind::Comma)? {
+            let value = if !self.check(&RustTokenKind::Semi)?
+                && !self.check(&RustTokenKind::RBrace)?
+                && !self.check(&RustTokenKind::Comma)?
+            {
                 Some(Box::new(self.parse_expr()?))
             } else {
                 None
@@ -1087,12 +1141,12 @@ impl<'a> RustParser<'a> {
         }
 
         if self.match_token(&RustTokenKind::Return)? {
-            let value = if !self.check(&RustTokenKind::Semi)? &&
-                         !self.check(&RustTokenKind::RBrace)? {
-                Some(Box::new(self.parse_expr()?))
-            } else {
-                None
-            };
+            let value =
+                if !self.check(&RustTokenKind::Semi)? && !self.check(&RustTokenKind::RBrace)? {
+                    Some(Box::new(self.parse_expr()?))
+                } else {
+                    None
+                };
             let end = self.lexer.peek()?.span;
             return Ok(Expr::new(
                 ExprKind::Return(value),
@@ -1188,28 +1242,34 @@ impl<'a> RustParser<'a> {
         // Range expressions starting with ..
         if self.match_token(&RustTokenKind::DotDot)? {
             let inclusive = self.match_token(&RustTokenKind::Eq)?;
-            let end_expr = if !self.check(&RustTokenKind::Semi)? &&
-                             !self.check(&RustTokenKind::RBrace)? &&
-                             !self.check(&RustTokenKind::Comma)? &&
-                             !self.check(&RustTokenKind::RParen)? &&
-                             !self.check(&RustTokenKind::RBracket)? {
+            let end_expr = if !self.check(&RustTokenKind::Semi)?
+                && !self.check(&RustTokenKind::RBrace)?
+                && !self.check(&RustTokenKind::Comma)?
+                && !self.check(&RustTokenKind::RParen)?
+                && !self.check(&RustTokenKind::RBracket)?
+            {
                 Some(Box::new(self.parse_expr()?))
             } else {
                 None
             };
             let end = self.lexer.peek()?.span;
             return Ok(Expr::new(
-                ExprKind::Range { start: None, end: end_expr, inclusive },
+                ExprKind::Range {
+                    start: None,
+                    end: end_expr,
+                    inclusive,
+                },
                 Span::new(start.start, end.start),
             ));
         }
 
         // Identifier or path
-        if self.check(&RustTokenKind::Identifier(String::new()))? ||
-           self.check(&RustTokenKind::SelfValue)? ||
-           self.check(&RustTokenKind::Super)? ||
-           self.check(&RustTokenKind::Crate)? ||
-           self.check(&RustTokenKind::ColonColon)? {
+        if self.check(&RustTokenKind::Identifier(String::new()))?
+            || self.check(&RustTokenKind::SelfValue)?
+            || self.check(&RustTokenKind::Super)?
+            || self.check(&RustTokenKind::Crate)?
+            || self.check(&RustTokenKind::ColonColon)?
+        {
             let path = self.parse_path()?;
 
             // Check for struct literal
@@ -1256,16 +1316,19 @@ impl<'a> RustParser<'a> {
         let span = token.span;
 
         let kind = match token.kind {
-            RustTokenKind::IntLiteral(s) |
-            RustTokenKind::HexLiteral(s) |
-            RustTokenKind::OctalLiteral(s) |
-            RustTokenKind::BinaryLiteral(s) => {
+            RustTokenKind::IntLiteral(s)
+            | RustTokenKind::HexLiteral(s)
+            | RustTokenKind::OctalLiteral(s)
+            | RustTokenKind::BinaryLiteral(s) => {
                 let value = self.parse_int_literal(&s)?;
                 ExprKind::IntLiteral(value)
             }
             RustTokenKind::FloatLiteral(s) => {
-                let value = s.replace('_', "").trim_end_matches(|c| c == 'f' || c == 'F')
-                    .parse().map_err(|_| CompileError::parser("invalid float literal", span))?;
+                let value = s
+                    .replace('_', "")
+                    .trim_end_matches(['f', 'F'])
+                    .parse()
+                    .map_err(|_| CompileError::parser("invalid float literal", span))?;
                 ExprKind::FloatLiteral(value)
             }
             RustTokenKind::True => ExprKind::BoolLiteral(true),
@@ -1286,10 +1349,12 @@ impl<'a> RustParser<'a> {
                 let bytes = self.parse_byte_string_literal(&s)?;
                 ExprKind::ByteStringLiteral(bytes)
             }
-            _ => return Err(CompileError::parser(
-                format!("expected literal, found {}", token.kind),
-                span,
-            )),
+            _ => {
+                return Err(CompileError::parser(
+                    format!("expected literal, found {}", token.kind),
+                    span,
+                ));
+            }
         };
 
         Ok(Expr::new(kind, span))
@@ -1299,12 +1364,7 @@ impl<'a> RustParser<'a> {
     fn strip_int_suffix(s: &str) -> &str {
         // List of valid integer suffixes, ordered longest first
         const SUFFIXES: &[&str] = &[
-            "isize", "usize",
-            "i128", "u128",
-            "i64", "u64",
-            "i32", "u32",
-            "i16", "u16",
-            "i8", "u8",
+            "isize", "usize", "i128", "u128", "i64", "u64", "i32", "u32", "i16", "u16", "i8", "u8",
         ];
 
         for suffix in SUFFIXES {
@@ -1337,7 +1397,7 @@ impl<'a> RustParser<'a> {
     }
 
     fn parse_char_literal(&self, s: &str) -> CompileResult<char> {
-        let inner = &s[1..s.len()-1]; // Remove quotes
+        let inner = &s[1..s.len() - 1]; // Remove quotes
         self.parse_escape_char(inner)
     }
 
@@ -1358,15 +1418,21 @@ impl<'a> RustParser<'a> {
                         .map_err(|_| CompileError::parser("invalid hex escape", Span::default()))?;
                     Ok(code as char)
                 }
-                _ => Err(CompileError::parser("invalid escape sequence", Span::default())),
+                _ => Err(CompileError::parser(
+                    "invalid escape sequence",
+                    Span::default(),
+                )),
             },
             Some(c) => Ok(c),
-            None => Err(CompileError::parser("empty character literal", Span::default())),
+            None => Err(CompileError::parser(
+                "empty character literal",
+                Span::default(),
+            )),
         }
     }
 
     fn parse_string_literal(&self, s: &str) -> CompileResult<String> {
-        let inner = &s[1..s.len()-1]; // Remove quotes
+        let inner = &s[1..s.len() - 1]; // Remove quotes
         let mut result = String::new();
         let mut chars = inner.chars().peekable();
 
@@ -1382,11 +1448,17 @@ impl<'a> RustParser<'a> {
                     Some('0') => result.push('\0'),
                     Some('x') => {
                         let hex: String = chars.by_ref().take(2).collect();
-                        let code = u8::from_str_radix(&hex, 16)
-                            .map_err(|_| CompileError::parser("invalid hex escape", Span::default()))?;
+                        let code = u8::from_str_radix(&hex, 16).map_err(|_| {
+                            CompileError::parser("invalid hex escape", Span::default())
+                        })?;
                         result.push(code as char);
                     }
-                    _ => return Err(CompileError::parser("invalid escape sequence", Span::default())),
+                    _ => {
+                        return Err(CompileError::parser(
+                            "invalid escape sequence",
+                            Span::default(),
+                        ));
+                    }
                 }
             } else {
                 result.push(c);
@@ -1397,17 +1469,20 @@ impl<'a> RustParser<'a> {
     }
 
     fn parse_byte_literal(&self, s: &str) -> CompileResult<u8> {
-        let inner = &s[2..s.len()-1]; // Remove b' and '
+        let inner = &s[2..s.len() - 1]; // Remove b' and '
         let c = self.parse_escape_char(inner)?;
         if c as u32 > 255 {
-            return Err(CompileError::parser("byte literal out of range", Span::default()));
+            return Err(CompileError::parser(
+                "byte literal out of range",
+                Span::default(),
+            ));
         }
         Ok(c as u8)
     }
 
     fn parse_byte_string_literal(&self, s: &str) -> CompileResult<Vec<u8>> {
-        let inner = &s[2..s.len()-1]; // Remove b" and "
-        let string = self.parse_string_literal(&format!("\"{}\"", inner))?;
+        let inner = &s[2..s.len() - 1]; // Remove b" and "
+        let string = self.parse_string_literal(&format!("\"{inner}\""))?;
         Ok(string.into_bytes())
     }
 
@@ -1547,7 +1622,10 @@ impl<'a> RustParser<'a> {
         let block = self.parse_block()?;
         let end = block.span;
 
-        Ok(Expr::new(ExprKind::Unsafe(block), Span::new(start.start, end.end)))
+        Ok(Expr::new(
+            ExprKind::Unsafe(block),
+            Span::new(start.start, end.end),
+        ))
     }
 
     fn parse_struct_expr(&mut self, path: TypePath) -> CompileResult<Expr> {
@@ -1712,14 +1790,14 @@ mod tests {
 
     #[test]
     fn test_parse_match() {
-        let source = r#"
+        let source = r"
             fn main() {
                 match x {
                     0 => true,
                     _ => false,
                 }
             }
-        "#;
+        ";
         let mut parser = RustParser::new(source);
         let module = parser.parse_module().unwrap();
 
@@ -1728,13 +1806,13 @@ mod tests {
 
     #[test]
     fn test_parse_impl() {
-        let source = r#"
+        let source = r"
             impl Point {
                 fn new(x: i32, y: i32) -> Point {
                     Point { x, y }
                 }
             }
-        "#;
+        ";
         let mut parser = RustParser::new(source);
         let module = parser.parse_module().unwrap();
 

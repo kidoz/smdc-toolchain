@@ -1,16 +1,16 @@
 //! Rust AST definitions
 
-mod types;
 mod expr;
-mod stmt;
 mod item;
 mod pattern;
+mod stmt;
+mod types;
 
-pub use types::*;
 pub use expr::*;
-pub use stmt::*;
 pub use item::*;
 pub use pattern::*;
+pub use stmt::*;
+pub use types::*;
 
 use crate::common::Span;
 

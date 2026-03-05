@@ -66,8 +66,8 @@ pub enum Reg {
 impl std::fmt::Display for Reg {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Reg::Data(d) => write!(f, "{}", d),
-            Reg::Addr(a) => write!(f, "{}", a),
+            Reg::Data(d) => write!(f, "{d}"),
+            Reg::Addr(a) => write!(f, "{a}"),
         }
     }
 }
@@ -75,9 +75,9 @@ impl std::fmt::Display for Reg {
 /// Operation size
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Size {
-    Byte,  // .b
-    Word,  // .w
-    Long,  // .l
+    Byte, // .b
+    Word, // .w
+    Long, // .l
 }
 
 impl std::fmt::Display for Size {
@@ -134,24 +134,24 @@ pub enum Operand {
 impl std::fmt::Display for Operand {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Operand::DataReg(r) => write!(f, "{}", r),
-            Operand::AddrReg(r) => write!(f, "{}", r),
-            Operand::AddrInd(r) => write!(f, "({})", r),
-            Operand::PostInc(r) => write!(f, "({})+", r),
-            Operand::PreDec(r) => write!(f, "-({})", r),
-            Operand::Disp(d, r) => write!(f, "{}({})", d, r),
-            Operand::Indexed(d, a, d2) => write!(f, "({},{},{})", d, a, d2),
-            Operand::AbsShort(a) => write!(f, "${:04X}.w", a),
-            Operand::AbsLong(a) => write!(f, "${:08X}", a),
+            Operand::DataReg(r) => write!(f, "{r}"),
+            Operand::AddrReg(r) => write!(f, "{r}"),
+            Operand::AddrInd(r) => write!(f, "({r})"),
+            Operand::PostInc(r) => write!(f, "({r})+"),
+            Operand::PreDec(r) => write!(f, "-({r})"),
+            Operand::Disp(d, r) => write!(f, "{d}({r})"),
+            Operand::Indexed(d, a, d2) => write!(f, "({d},{a},{d2})"),
+            Operand::AbsShort(a) => write!(f, "${a:04X}.w"),
+            Operand::AbsLong(a) => write!(f, "${a:08X}"),
             Operand::Imm(v) => {
                 if *v >= 0 {
-                    write!(f, "#${:X}", v)
+                    write!(f, "#${v:X}")
                 } else {
                     write!(f, "#-${:X}", -v)
                 }
             }
-            Operand::PcRel(l) => write!(f, "{}(pc)", l),
-            Operand::Label(l) => write!(f, "{}", l),
+            Operand::PcRel(l) => write!(f, "{l}(pc)"),
+            Operand::Label(l) => write!(f, "{l}"),
             Operand::Sr => write!(f, "sr"),
         }
     }
@@ -292,63 +292,63 @@ pub enum M68kInst {
 impl M68kInst {
     pub fn format(&self) -> String {
         match self {
-            M68kInst::Move(s, src, dst) => format!("    move.{}  {}, {}", s, src, dst),
-            M68kInst::Moveq(v, d) => format!("    moveq   #{}, {}", v, d),
-            M68kInst::Lea(src, dst) => format!("    lea     {}, {}", src, dst),
-            M68kInst::Pea(op) => format!("    pea     {}", op),
-            M68kInst::Clr(s, op) => format!("    clr.{}   {}", s, op),
-            M68kInst::Exg(r1, r2) => format!("    exg     {}, {}", r1, r2),
+            M68kInst::Move(s, src, dst) => format!("    move.{s}  {src}, {dst}"),
+            M68kInst::Moveq(v, d) => format!("    moveq   #{v}, {d}"),
+            M68kInst::Lea(src, dst) => format!("    lea     {src}, {dst}"),
+            M68kInst::Pea(op) => format!("    pea     {op}"),
+            M68kInst::Clr(s, op) => format!("    clr.{s}   {op}"),
+            M68kInst::Exg(r1, r2) => format!("    exg     {r1}, {r2}"),
 
-            M68kInst::Add(s, src, dst) => format!("    add.{}  {}, {}", s, src, dst),
-            M68kInst::Adda(s, src, dst) => format!("    adda.{} {}, {}", s, src, dst),
-            M68kInst::Addq(s, v, op) => format!("    addq.{} #{}, {}", s, v, op),
-            M68kInst::Addi(s, v, op) => format!("    addi.{} #{}, {}", s, v, op),
-            M68kInst::Sub(s, src, dst) => format!("    sub.{}  {}, {}", s, src, dst),
-            M68kInst::Suba(s, src, dst) => format!("    suba.{} {}, {}", s, src, dst),
-            M68kInst::Subq(s, v, op) => format!("    subq.{} #{}, {}", s, v, op),
-            M68kInst::Subi(s, v, op) => format!("    subi.{} #{}, {}", s, v, op),
-            M68kInst::Muls(src, dst) => format!("    muls.w  {}, {}", src, dst),
-            M68kInst::Mulu(src, dst) => format!("    mulu.w  {}, {}", src, dst),
-            M68kInst::Divs(src, dst) => format!("    divs.w  {}, {}", src, dst),
-            M68kInst::Divu(src, dst) => format!("    divu.w  {}, {}", src, dst),
-            M68kInst::Neg(s, op) => format!("    neg.{}  {}", s, op),
-            M68kInst::Ext(s, d) => format!("    ext.{}  {}", s, d),
+            M68kInst::Add(s, src, dst) => format!("    add.{s}  {src}, {dst}"),
+            M68kInst::Adda(s, src, dst) => format!("    adda.{s} {src}, {dst}"),
+            M68kInst::Addq(s, v, op) => format!("    addq.{s} #{v}, {op}"),
+            M68kInst::Addi(s, v, op) => format!("    addi.{s} #{v}, {op}"),
+            M68kInst::Sub(s, src, dst) => format!("    sub.{s}  {src}, {dst}"),
+            M68kInst::Suba(s, src, dst) => format!("    suba.{s} {src}, {dst}"),
+            M68kInst::Subq(s, v, op) => format!("    subq.{s} #{v}, {op}"),
+            M68kInst::Subi(s, v, op) => format!("    subi.{s} #{v}, {op}"),
+            M68kInst::Muls(src, dst) => format!("    muls.w  {src}, {dst}"),
+            M68kInst::Mulu(src, dst) => format!("    mulu.w  {src}, {dst}"),
+            M68kInst::Divs(src, dst) => format!("    divs.w  {src}, {dst}"),
+            M68kInst::Divu(src, dst) => format!("    divu.w  {src}, {dst}"),
+            M68kInst::Neg(s, op) => format!("    neg.{s}  {op}"),
+            M68kInst::Ext(s, d) => format!("    ext.{s}  {d}"),
 
-            M68kInst::And(s, src, dst) => format!("    and.{}  {}, {}", s, src, dst),
-            M68kInst::Andi(s, v, op) => format!("    andi.{} #{}, {}", s, v, op),
-            M68kInst::Or(s, src, dst) => format!("    or.{}   {}, {}", s, src, dst),
-            M68kInst::Ori(s, v, op) => format!("    ori.{}  #{}, {}", s, v, op),
-            M68kInst::Eor(s, src, dst) => format!("    eor.{}  {}, {}", s, src, dst),
-            M68kInst::Eori(s, v, op) => format!("    eori.{} #{}, {}", s, v, op),
-            M68kInst::Not(s, op) => format!("    not.{}  {}", s, op),
+            M68kInst::And(s, src, dst) => format!("    and.{s}  {src}, {dst}"),
+            M68kInst::Andi(s, v, op) => format!("    andi.{s} #{v}, {op}"),
+            M68kInst::Or(s, src, dst) => format!("    or.{s}   {src}, {dst}"),
+            M68kInst::Ori(s, v, op) => format!("    ori.{s}  #{v}, {op}"),
+            M68kInst::Eor(s, src, dst) => format!("    eor.{s}  {src}, {dst}"),
+            M68kInst::Eori(s, v, op) => format!("    eori.{s} #{v}, {op}"),
+            M68kInst::Not(s, op) => format!("    not.{s}  {op}"),
 
-            M68kInst::Lsl(s, cnt, d) => format!("    lsl.{}  {}, {}", s, cnt, d),
-            M68kInst::Lsr(s, cnt, d) => format!("    lsr.{}  {}, {}", s, cnt, d),
-            M68kInst::Asl(s, cnt, d) => format!("    asl.{}  {}, {}", s, cnt, d),
-            M68kInst::Asr(s, cnt, d) => format!("    asr.{}  {}, {}", s, cnt, d),
-            M68kInst::Rol(s, cnt, d) => format!("    rol.{}  {}, {}", s, cnt, d),
-            M68kInst::Ror(s, cnt, d) => format!("    ror.{}  {}, {}", s, cnt, d),
+            M68kInst::Lsl(s, cnt, d) => format!("    lsl.{s}  {cnt}, {d}"),
+            M68kInst::Lsr(s, cnt, d) => format!("    lsr.{s}  {cnt}, {d}"),
+            M68kInst::Asl(s, cnt, d) => format!("    asl.{s}  {cnt}, {d}"),
+            M68kInst::Asr(s, cnt, d) => format!("    asr.{s}  {cnt}, {d}"),
+            M68kInst::Rol(s, cnt, d) => format!("    rol.{s}  {cnt}, {d}"),
+            M68kInst::Ror(s, cnt, d) => format!("    ror.{s}  {cnt}, {d}"),
 
-            M68kInst::Btst(bit, op) => format!("    btst    {}, {}", bit, op),
-            M68kInst::Bset(bit, op) => format!("    bset    {}, {}", bit, op),
-            M68kInst::Bclr(bit, op) => format!("    bclr    {}, {}", bit, op),
-            M68kInst::Bchg(bit, op) => format!("    bchg    {}, {}", bit, op),
+            M68kInst::Btst(bit, op) => format!("    btst    {bit}, {op}"),
+            M68kInst::Bset(bit, op) => format!("    bset    {bit}, {op}"),
+            M68kInst::Bclr(bit, op) => format!("    bclr    {bit}, {op}"),
+            M68kInst::Bchg(bit, op) => format!("    bchg    {bit}, {op}"),
 
-            M68kInst::Cmp(s, src, dst) => format!("    cmp.{}  {}, {}", s, src, dst),
-            M68kInst::Cmpa(s, src, dst) => format!("    cmpa.{} {}, {}", s, src, dst),
-            M68kInst::Cmpi(s, v, op) => format!("    cmpi.{} #{}, {}", s, v, op),
-            M68kInst::Tst(s, op) => format!("    tst.{}  {}", s, op),
+            M68kInst::Cmp(s, src, dst) => format!("    cmp.{s}  {src}, {dst}"),
+            M68kInst::Cmpa(s, src, dst) => format!("    cmpa.{s} {src}, {dst}"),
+            M68kInst::Cmpi(s, v, op) => format!("    cmpi.{s} #{v}, {op}"),
+            M68kInst::Tst(s, op) => format!("    tst.{s}  {op}"),
 
-            M68kInst::Bra(l) => format!("    bra     {}", l),
-            M68kInst::Bsr(l) => format!("    bsr     {}", l),
-            M68kInst::Bcc(c, l) => format!("    b{}     {}", c, l),
-            M68kInst::Dbf(d, l) => format!("    dbf     {}, {}", d, l),
+            M68kInst::Bra(l) => format!("    bra     {l}"),
+            M68kInst::Bsr(l) => format!("    bsr     {l}"),
+            M68kInst::Bcc(c, l) => format!("    b{c}     {l}"),
+            M68kInst::Dbf(d, l) => format!("    dbf     {d}, {l}"),
 
-            M68kInst::Jmp(op) => format!("    jmp     {}", op),
-            M68kInst::Jsr(op) => format!("    jsr     {}", op),
+            M68kInst::Jmp(op) => format!("    jmp     {op}"),
+            M68kInst::Jsr(op) => format!("    jsr     {op}"),
 
-            M68kInst::Link(a, d) => format!("    link    {}, #{}", a, d),
-            M68kInst::Unlk(a) => format!("    unlk    {}", a),
+            M68kInst::Link(a, d) => format!("    link    {a}, #{d}"),
+            M68kInst::Unlk(a) => format!("    unlk    {a}"),
             M68kInst::Rts => "    rts".to_string(),
             M68kInst::Rte => "    rte".to_string(),
 
@@ -361,14 +361,14 @@ impl M68kInst {
                 }
             }
 
-            M68kInst::Scc(c, op) => format!("    s{}     {}", c, op),
+            M68kInst::Scc(c, op) => format!("    s{c}     {op}"),
 
             M68kInst::Nop => "    nop".to_string(),
-            M68kInst::Swap(d) => format!("    swap    {}", d),
+            M68kInst::Swap(d) => format!("    swap    {d}"),
 
-            M68kInst::Label(l) => format!("{}:", l),
-            M68kInst::Comment(c) => format!("    ; {}", c),
-            M68kInst::Directive(d) => format!("    {}", d),
+            M68kInst::Label(l) => format!("{l}:"),
+            M68kInst::Comment(c) => format!("    ; {c}"),
+            M68kInst::Directive(d) => format!("    {d}"),
         }
     }
 }

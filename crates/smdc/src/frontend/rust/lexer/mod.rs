@@ -1,7 +1,7 @@
 //! Rust lexer module
 
-mod token;
 mod scanner;
+mod token;
 
-pub use token::{RustToken, RustTokenKind};
 pub use scanner::RustLexer;
+pub use token::{RustToken, RustTokenKind};

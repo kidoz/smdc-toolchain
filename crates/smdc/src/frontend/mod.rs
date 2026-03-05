@@ -22,7 +22,7 @@ pub use rust::RustFrontend;
 pub struct FrontendConfig {
     pub dump_tokens: bool,
     pub dump_ast: bool,
-    pub dump_mir: bool,  // For frontends with intermediate representations
+    pub dump_mir: bool, // For frontends with intermediate representations
     pub verbose: bool,
     /// Include paths for preprocessor (C only)
     pub include_paths: Vec<PathBuf>,
@@ -37,7 +37,11 @@ pub struct CompileContext<'a> {
 
 impl<'a> CompileContext<'a> {
     pub fn new(filename: String, file_id: usize, reporter: &'a DiagnosticReporter) -> Self {
-        Self { filename, file_id, reporter }
+        Self {
+            filename,
+            file_id,
+            reporter,
+        }
     }
 }
 
@@ -82,7 +86,9 @@ pub struct FrontendRegistry {
 
 impl FrontendRegistry {
     pub fn new() -> Self {
-        Self { frontends: Vec::new() }
+        Self {
+            frontends: Vec::new(),
+        }
     }
 
     pub fn register(&mut self, frontend: Box<dyn Frontend>) {
@@ -90,13 +96,15 @@ impl FrontendRegistry {
     }
 
     pub fn find_by_extension(&self, ext: &str) -> Option<&dyn Frontend> {
-        self.frontends.iter()
-            .find(|f| f.extensions().iter().any(|e| *e == ext))
+        self.frontends
+            .iter()
+            .find(|f| f.extensions().contains(&ext))
             .map(|f| f.as_ref())
     }
 
     pub fn find_by_name(&self, name: &str) -> Option<&dyn Frontend> {
-        self.frontends.iter()
+        self.frontends
+            .iter()
             .find(|f| f.name() == name)
             .map(|f| f.as_ref())
     }

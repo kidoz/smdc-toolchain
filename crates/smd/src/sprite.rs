@@ -207,7 +207,11 @@ pub fn set(index: u8, x: i16, y: i16, size: SpriteSize, tile: u16) {
     vdp::write_data((y + 128) as u16);
 
     // Word 1: Size (upper byte) | Link (lower byte)
-    let next = if index < MAX_SPRITES - 1 { index + 1 } else { 0 };
+    let next = if index < MAX_SPRITES - 1 {
+        index + 1
+    } else {
+        0
+    };
     vdp::write_data(((size as u16) << 8) | (next as u16));
 
     // Word 2: Tile attributes
@@ -224,7 +228,11 @@ pub fn update(index: u8, spr: &Sprite) {
 
     vdp::write_data((spr.y + 128) as u16);
 
-    let next = if index < MAX_SPRITES - 1 { index + 1 } else { 0 };
+    let next = if index < MAX_SPRITES - 1 {
+        index + 1
+    } else {
+        0
+    };
     vdp::write_data(((spr.size as u16) << 8) | (next as u16));
 
     vdp::write_data(spr.tile | spr.attr);

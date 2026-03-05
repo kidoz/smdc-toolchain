@@ -91,10 +91,7 @@ impl MirBlock {
 #[derive(Debug, Clone)]
 pub enum MirStatement {
     /// Assign a value to a place
-    Assign {
-        dest: Place,
-        value: Rvalue,
-    },
+    Assign { dest: Place, value: Rvalue },
     /// Drop a value (for ownership)
     Drop(Place),
     /// No operation
@@ -181,10 +178,7 @@ pub enum Rvalue {
     /// Use an operand directly
     Use(Operand),
     /// Take a reference
-    Ref {
-        mutable: bool,
-        place: Place,
-    },
+    Ref { mutable: bool, place: Place },
     /// Binary operation
     BinaryOp {
         op: MirBinOp,
@@ -192,15 +186,9 @@ pub enum Rvalue {
         right: Operand,
     },
     /// Unary operation
-    UnaryOp {
-        op: MirUnaryOp,
-        operand: Operand,
-    },
+    UnaryOp { op: MirUnaryOp, operand: Operand },
     /// Cast
-    Cast {
-        operand: Operand,
-        ty: RustType,
-    },
+    Cast { operand: Operand, ty: RustType },
     /// Create an aggregate (struct, tuple, array)
     Aggregate {
         kind: AggregateKind,

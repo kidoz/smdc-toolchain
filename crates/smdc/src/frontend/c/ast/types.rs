@@ -54,13 +54,11 @@ impl CType {
             TypeKind::Pointer(_) => 4, // 32-bit pointers
             TypeKind::Array { element, size } => element.size() * size.unwrap_or(0),
             TypeKind::Function { .. } => 4, // Function pointer
-            TypeKind::Struct { members, .. } => {
-                members.iter().map(|(_, t)| t.size()).sum()
-            }
+            TypeKind::Struct { members, .. } => members.iter().map(|(_, t)| t.size()).sum(),
             TypeKind::Union { members, .. } => {
                 members.iter().map(|(_, t)| t.size()).max().unwrap_or(0)
             }
-            TypeKind::Enum { .. } => 4, // Enums are ints
+            TypeKind::Enum { .. } => 4,    // Enums are ints
             TypeKind::Typedef(_name) => 4, // Placeholder, resolved during sema
         }
     }
@@ -79,12 +77,16 @@ impl CType {
             TypeKind::Pointer(_) => 2,
             TypeKind::Array { element, .. } => element.alignment(),
             TypeKind::Function { .. } => 2,
-            TypeKind::Struct { members, .. } => {
-                members.iter().map(|(_, t)| t.alignment()).max().unwrap_or(1)
-            }
-            TypeKind::Union { members, .. } => {
-                members.iter().map(|(_, t)| t.alignment()).max().unwrap_or(1)
-            }
+            TypeKind::Struct { members, .. } => members
+                .iter()
+                .map(|(_, t)| t.alignment())
+                .max()
+                .unwrap_or(1),
+            TypeKind::Union { members, .. } => members
+                .iter()
+                .map(|(_, t)| t.alignment())
+                .max()
+                .unwrap_or(1),
             TypeKind::Enum { .. } => 2,
             TypeKind::Typedef(_) => 2,
         }
@@ -134,17 +136,108 @@ impl CType {
             _ => false, // Pointers, enums, etc. are treated as unsigned
         }
     }
+
+    /// Convert to IR type
+    pub fn to_ir_type(&self) -> crate::types::IrType {
+        use crate::types::{IrType, IrTypeKind};
+
+        let kind = match &self.kind {
+            TypeKind::Void => IrTypeKind::Void,
+            TypeKind::Char { signed } => IrTypeKind::Int {
+                bits: 8,
+                signed: *signed,
+            },
+            TypeKind::Short { signed } => IrTypeKind::Int {
+                bits: 16,
+                signed: *signed,
+            },
+            TypeKind::Int { signed } | TypeKind::Long { signed } => IrTypeKind::Int {
+                bits: 32,
+                signed: *signed,
+            },
+            TypeKind::LongLong { signed } => IrTypeKind::Int {
+                bits: 64,
+                signed: *signed,
+            },
+            TypeKind::Float => IrTypeKind::Float { bits: 32 },
+            TypeKind::Double => IrTypeKind::Float { bits: 64 },
+            TypeKind::Pointer(inner) => IrTypeKind::Pointer(Box::new(inner.to_ir_type())),
+            TypeKind::Array { element, size } => IrTypeKind::Array {
+                element: Box::new(element.to_ir_type()),
+                count: size.unwrap_or(0),
+            },
+            TypeKind::Function {
+                return_type,
+                params,
+                variadic,
+            } => IrTypeKind::Function {
+                return_type: Box::new(return_type.to_ir_type()),
+                params: params.iter().map(|(_, ty)| ty.to_ir_type()).collect(),
+                variadic: *variadic,
+            },
+            TypeKind::Struct { name, members } => IrTypeKind::Struct {
+                name: name.clone(),
+                fields: {
+                    let mut fields = Vec::new();
+                    let mut offset = 0;
+                    for (name, ty) in members {
+                        let ir_ty = ty.to_ir_type();
+                        let align = ir_ty.align;
+                        offset = (offset + align - 1) & !(align - 1);
+                        fields.push((name.clone(), ir_ty.clone(), offset));
+                        offset += ir_ty.size;
+                    }
+                    fields
+                },
+            },
+            TypeKind::Union { .. } => {
+                // Approximate unions as array of bytes for now, or just an opaque type
+                IrTypeKind::Array {
+                    element: Box::new(IrType {
+                        kind: IrTypeKind::Int {
+                            bits: 8,
+                            signed: false,
+                        },
+                        size: 1,
+                        align: 1,
+                    }),
+                    count: self.size(),
+                }
+            }
+            TypeKind::Enum { .. } => IrTypeKind::Int {
+                bits: 32,
+                signed: true,
+            }, // Enums are ints
+            TypeKind::Typedef(_) => IrTypeKind::Void, // Should be resolved
+        };
+
+        IrType {
+            kind,
+            size: self.size(),
+            align: self.alignment(),
+        }
+    }
 }
 
 /// The kind of a C type
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypeKind {
     Void,
-    Char { signed: bool },
-    Short { signed: bool },
-    Int { signed: bool },
-    Long { signed: bool },
-    LongLong { signed: bool },
+    Char {
+        signed: bool,
+    },
+    Short {
+        signed: bool,
+    },
+    Int {
+        signed: bool,
+    },
+    Long {
+        signed: bool,
+    },
+    LongLong {
+        signed: bool,
+    },
     Float,
     Double,
     Pointer(Box<CType>),

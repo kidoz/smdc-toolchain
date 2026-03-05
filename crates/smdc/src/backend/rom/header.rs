@@ -86,59 +86,59 @@ impl RomHeader {
         let mut offset = 0;
 
         // System name (16 bytes)
-        bytes[offset..offset+16].copy_from_slice(&self.system_name);
+        bytes[offset..offset + 16].copy_from_slice(&self.system_name);
         offset += 16;
 
         // Copyright (16 bytes)
-        bytes[offset..offset+16].copy_from_slice(&self.copyright);
+        bytes[offset..offset + 16].copy_from_slice(&self.copyright);
         offset += 16;
 
         // Domestic name (48 bytes)
-        bytes[offset..offset+48].copy_from_slice(&self.domestic_name);
+        bytes[offset..offset + 48].copy_from_slice(&self.domestic_name);
         offset += 48;
 
         // Overseas name (48 bytes)
-        bytes[offset..offset+48].copy_from_slice(&self.overseas_name);
+        bytes[offset..offset + 48].copy_from_slice(&self.overseas_name);
         offset += 48;
 
         // Serial number (14 bytes)
-        bytes[offset..offset+14].copy_from_slice(&self.serial_number);
+        bytes[offset..offset + 14].copy_from_slice(&self.serial_number);
         offset += 14;
 
         // Checksum (2 bytes, big-endian)
-        bytes[offset..offset+2].copy_from_slice(&self.checksum.to_be_bytes());
+        bytes[offset..offset + 2].copy_from_slice(&self.checksum.to_be_bytes());
         offset += 2;
 
         // IO support (16 bytes)
-        bytes[offset..offset+16].copy_from_slice(&self.io_support);
+        bytes[offset..offset + 16].copy_from_slice(&self.io_support);
         offset += 16;
 
         // ROM addresses (big-endian)
-        bytes[offset..offset+4].copy_from_slice(&self.rom_start.to_be_bytes());
+        bytes[offset..offset + 4].copy_from_slice(&self.rom_start.to_be_bytes());
         offset += 4;
-        bytes[offset..offset+4].copy_from_slice(&self.rom_end.to_be_bytes());
+        bytes[offset..offset + 4].copy_from_slice(&self.rom_end.to_be_bytes());
         offset += 4;
 
         // RAM addresses
-        bytes[offset..offset+4].copy_from_slice(&self.ram_start.to_be_bytes());
+        bytes[offset..offset + 4].copy_from_slice(&self.ram_start.to_be_bytes());
         offset += 4;
-        bytes[offset..offset+4].copy_from_slice(&self.ram_end.to_be_bytes());
+        bytes[offset..offset + 4].copy_from_slice(&self.ram_end.to_be_bytes());
         offset += 4;
 
         // SRAM info (12 bytes)
-        bytes[offset..offset+12].copy_from_slice(&self.sram_info);
+        bytes[offset..offset + 12].copy_from_slice(&self.sram_info);
         offset += 12;
 
         // Modem info (12 bytes)
-        bytes[offset..offset+12].copy_from_slice(&self.modem_info);
+        bytes[offset..offset + 12].copy_from_slice(&self.modem_info);
         offset += 12;
 
         // Reserved (40 bytes)
-        bytes[offset..offset+40].copy_from_slice(&self.reserved);
+        bytes[offset..offset + 40].copy_from_slice(&self.reserved);
         offset += 40;
 
         // Region (16 bytes)
-        bytes[offset..offset+16].copy_from_slice(&self.region);
+        bytes[offset..offset + 16].copy_from_slice(&self.region);
 
         bytes
     }

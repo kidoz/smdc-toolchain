@@ -22,19 +22,19 @@ const TOP_MARGIN: i32 = 16;
 const BOTTOM_MARGIN: i32 = 208;
 
 // Global state
-static mut player1_x: i32 = 16;
-static mut player1_y: i32 = 96;
-static mut player1_score: i32 = 0;
-static mut player2_x: i32 = 296;
-static mut player2_y: i32 = 96;
-static mut player2_score: i32 = 0;
-static mut ball_x: i32 = 156;
-static mut ball_y: i32 = 108;
-static mut ball_dx: i32 = 3;
-static mut ball_dy: i32 = 2;
-static mut game_running: i32 = 1;
-static mut frame_count: i32 = 0;
-static mut sound_timer: i32 = 0;
+static mut PLAYER1_X: i32 = 16;
+static mut PLAYER1_Y: i32 = 96;
+static mut PLAYER1_SCORE: i32 = 0;
+static mut PLAYER2_X: i32 = 296;
+static mut PLAYER2_Y: i32 = 96;
+static mut PLAYER2_SCORE: i32 = 0;
+static mut BALL_X: i32 = 156;
+static mut BALL_Y: i32 = 108;
+static mut BALL_DX: i32 = 3;
+static mut BALL_DY: i32 = 2;
+static mut GAME_RUNNING: i32 = 1;
+static mut FRAME_COUNT: i32 = 0;
+static mut SOUND_TIMER: i32 = 0;
 
 // ============================================================================
 // Hardware Access Functions
@@ -151,35 +151,35 @@ fn psg_stop() {
 // Sound effect: paddle hit (high-pitched blip)
 fn sound_paddle_hit() {
     unsafe {
-        psg_set_tone(0, 880);    // A5
-        psg_set_volume(0, 2);    // Slightly quieter
-        sound_timer = 4;
+        psg_set_tone(0, 880); // A5
+        psg_set_volume(0, 2); // Slightly quieter
+        SOUND_TIMER = 4;
     }
 }
 
 // Sound effect: wall bounce (lower blip)
 fn sound_wall_bounce() {
     unsafe {
-        psg_set_tone(0, 440);    // A4
-        psg_set_volume(0, 4);    // Medium volume
-        sound_timer = 3;
+        psg_set_tone(0, 440); // A4
+        psg_set_volume(0, 4); // Medium volume
+        SOUND_TIMER = 3;
     }
 }
 
 // Sound effect: score (longer descending tone)
 fn sound_score() {
     unsafe {
-        psg_set_tone(0, 220);    // A3
-        psg_set_volume(0, 0);    // Max volume
-        sound_timer = 15;
+        psg_set_tone(0, 220); // A3
+        psg_set_volume(0, 0); // Max volume
+        SOUND_TIMER = 15;
     }
 }
 
 fn sound_update() {
     unsafe {
-        if sound_timer > 0 {
-            sound_timer = sound_timer - 1;
-            if sound_timer == 0 {
+        if SOUND_TIMER > 0 {
+            SOUND_TIMER -= 1;
+            if SOUND_TIMER == 0 {
                 psg_stop();
             }
         }
@@ -198,17 +198,17 @@ fn vdp_set_register(reg: i32, value: i32) {
 fn vdp_init() {
     vdp_set_register(0, 0x04);
     vdp_set_register(1, 0x44);
-    vdp_set_register(2, 0x30);  // Plane A at 0xC000
+    vdp_set_register(2, 0x30); // Plane A at 0xC000
     vdp_set_register(3, 0x00);
     vdp_set_register(4, 0x07);
-    vdp_set_register(5, 0x78);  // Sprite table at 0xF000
+    vdp_set_register(5, 0x78); // Sprite table at 0xF000
     vdp_set_register(6, 0x00);
-    vdp_set_register(7, 0x00);  // Background = black
+    vdp_set_register(7, 0x00); // Background = black
     vdp_set_register(10, 0xFF);
     vdp_set_register(11, 0x00);
-    vdp_set_register(12, 0x81);  // H40 mode
+    vdp_set_register(12, 0x81); // H40 mode
     vdp_set_register(13, 0x3F);
-    vdp_set_register(15, 0x02);  // Auto-increment 2
+    vdp_set_register(15, 0x02); // Auto-increment 2
     vdp_set_register(16, 0x01);
     vdp_set_register(17, 0x00);
     vdp_set_register(18, 0x00);
@@ -235,8 +235,8 @@ fn vdp_wait_vblank() {
 fn setup_palette() {
     write_vdp_ctrl(0xC000);
     write_vdp_ctrl(0x0000);
-    write_vdp_data(0x0000);  // Color 0 = black
-    write_vdp_data(0x0EEE);  // Color 1 = white
+    write_vdp_data(0x0000); // Color 0 = black
+    write_vdp_data(0x0EEE); // Color 1 = white
 }
 
 // ============================================================================
@@ -257,7 +257,7 @@ fn load_tiles() {
             write_vdp_data(0x1000);
             write_vdp_data(0x0001);
         }
-        row = row + 1;
+        row += 1;
     }
 
     // Tile 2: middle of paddle
@@ -266,7 +266,7 @@ fn load_tiles() {
     while row < 8 {
         write_vdp_data(0x1000);
         write_vdp_data(0x0001);
-        row = row + 1;
+        row += 1;
     }
 
     // Tile 3: middle of paddle
@@ -275,7 +275,7 @@ fn load_tiles() {
     while row < 8 {
         write_vdp_data(0x1000);
         write_vdp_data(0x0001);
-        row = row + 1;
+        row += 1;
     }
 
     // Tile 4: bottom of paddle
@@ -289,7 +289,7 @@ fn load_tiles() {
             write_vdp_data(0x1000);
             write_vdp_data(0x0001);
         }
-        row = row + 1;
+        row += 1;
     }
 
     // Tile 5: Center line segment
@@ -303,7 +303,7 @@ fn load_tiles() {
             write_vdp_data(0x0000);
             write_vdp_data(0x0000);
         }
-        row = row + 1;
+        row += 1;
     }
 
     // Tile 6: Ball
@@ -317,7 +317,7 @@ fn load_tiles() {
             write_vdp_data(0x0000);
             write_vdp_data(0x0000);
         }
-        row = row + 1;
+        row += 1;
     }
 
     // Tile 7: Solid white tile (for score digits)
@@ -326,7 +326,7 @@ fn load_tiles() {
     while row < 8 {
         write_vdp_data(0x1111);
         write_vdp_data(0x1111);
-        row = row + 1;
+        row += 1;
     }
 }
 
@@ -339,8 +339,8 @@ fn draw_center_line() {
     while y < 28 {
         let addr: i32 = 0xC000 + (y * 128) + (20 * 2);
         vdp_set_write_address(addr);
-        write_vdp_data(0x0005);  // Tile 5 (dashed line)
-        y = y + 1;
+        write_vdp_data(0x0005); // Tile 5 (dashed line)
+        y += 1;
     }
 }
 
@@ -353,123 +353,223 @@ fn draw_digit(x: i32, y: i32, digit: i32) {
 
     if digit == 0 {
         vdp_set_write_address(addr);
-        write_vdp_data(0x0007); write_vdp_data(0x0007); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
         vdp_set_write_address(addr + 128);
-        write_vdp_data(0x0007); write_vdp_data(0x0000); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
         vdp_set_write_address(addr + 256);
-        write_vdp_data(0x0007); write_vdp_data(0x0000); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
         vdp_set_write_address(addr + 384);
-        write_vdp_data(0x0007); write_vdp_data(0x0000); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
         vdp_set_write_address(addr + 512);
-        write_vdp_data(0x0007); write_vdp_data(0x0007); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
     } else if digit == 1 {
         vdp_set_write_address(addr);
-        write_vdp_data(0x0000); write_vdp_data(0x0007); write_vdp_data(0x0000);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
         vdp_set_write_address(addr + 128);
-        write_vdp_data(0x0000); write_vdp_data(0x0007); write_vdp_data(0x0000);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
         vdp_set_write_address(addr + 256);
-        write_vdp_data(0x0000); write_vdp_data(0x0007); write_vdp_data(0x0000);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
         vdp_set_write_address(addr + 384);
-        write_vdp_data(0x0000); write_vdp_data(0x0007); write_vdp_data(0x0000);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
         vdp_set_write_address(addr + 512);
-        write_vdp_data(0x0000); write_vdp_data(0x0007); write_vdp_data(0x0000);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
     } else if digit == 2 {
         vdp_set_write_address(addr);
-        write_vdp_data(0x0007); write_vdp_data(0x0007); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
         vdp_set_write_address(addr + 128);
-        write_vdp_data(0x0000); write_vdp_data(0x0000); write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
         vdp_set_write_address(addr + 256);
-        write_vdp_data(0x0007); write_vdp_data(0x0007); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
         vdp_set_write_address(addr + 384);
-        write_vdp_data(0x0007); write_vdp_data(0x0000); write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0000);
         vdp_set_write_address(addr + 512);
-        write_vdp_data(0x0007); write_vdp_data(0x0007); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
     } else if digit == 3 {
         vdp_set_write_address(addr);
-        write_vdp_data(0x0007); write_vdp_data(0x0007); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
         vdp_set_write_address(addr + 128);
-        write_vdp_data(0x0000); write_vdp_data(0x0000); write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
         vdp_set_write_address(addr + 256);
-        write_vdp_data(0x0007); write_vdp_data(0x0007); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
         vdp_set_write_address(addr + 384);
-        write_vdp_data(0x0000); write_vdp_data(0x0000); write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
         vdp_set_write_address(addr + 512);
-        write_vdp_data(0x0007); write_vdp_data(0x0007); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
     } else if digit == 4 {
         vdp_set_write_address(addr);
-        write_vdp_data(0x0007); write_vdp_data(0x0000); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
         vdp_set_write_address(addr + 128);
-        write_vdp_data(0x0007); write_vdp_data(0x0000); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
         vdp_set_write_address(addr + 256);
-        write_vdp_data(0x0007); write_vdp_data(0x0007); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
         vdp_set_write_address(addr + 384);
-        write_vdp_data(0x0000); write_vdp_data(0x0000); write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
         vdp_set_write_address(addr + 512);
-        write_vdp_data(0x0000); write_vdp_data(0x0000); write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
     } else if digit == 5 {
         vdp_set_write_address(addr);
-        write_vdp_data(0x0007); write_vdp_data(0x0007); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
         vdp_set_write_address(addr + 128);
-        write_vdp_data(0x0007); write_vdp_data(0x0000); write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0000);
         vdp_set_write_address(addr + 256);
-        write_vdp_data(0x0007); write_vdp_data(0x0007); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
         vdp_set_write_address(addr + 384);
-        write_vdp_data(0x0000); write_vdp_data(0x0000); write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
         vdp_set_write_address(addr + 512);
-        write_vdp_data(0x0007); write_vdp_data(0x0007); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
     } else if digit == 6 {
         vdp_set_write_address(addr);
-        write_vdp_data(0x0007); write_vdp_data(0x0007); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
         vdp_set_write_address(addr + 128);
-        write_vdp_data(0x0007); write_vdp_data(0x0000); write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0000);
         vdp_set_write_address(addr + 256);
-        write_vdp_data(0x0007); write_vdp_data(0x0007); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
         vdp_set_write_address(addr + 384);
-        write_vdp_data(0x0007); write_vdp_data(0x0000); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
         vdp_set_write_address(addr + 512);
-        write_vdp_data(0x0007); write_vdp_data(0x0007); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
     } else if digit == 7 {
         vdp_set_write_address(addr);
-        write_vdp_data(0x0007); write_vdp_data(0x0007); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
         vdp_set_write_address(addr + 128);
-        write_vdp_data(0x0000); write_vdp_data(0x0000); write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
         vdp_set_write_address(addr + 256);
-        write_vdp_data(0x0000); write_vdp_data(0x0000); write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
         vdp_set_write_address(addr + 384);
-        write_vdp_data(0x0000); write_vdp_data(0x0000); write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
         vdp_set_write_address(addr + 512);
-        write_vdp_data(0x0000); write_vdp_data(0x0000); write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
     } else if digit == 8 {
         vdp_set_write_address(addr);
-        write_vdp_data(0x0007); write_vdp_data(0x0007); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
         vdp_set_write_address(addr + 128);
-        write_vdp_data(0x0007); write_vdp_data(0x0000); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
         vdp_set_write_address(addr + 256);
-        write_vdp_data(0x0007); write_vdp_data(0x0007); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
         vdp_set_write_address(addr + 384);
-        write_vdp_data(0x0007); write_vdp_data(0x0000); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
         vdp_set_write_address(addr + 512);
-        write_vdp_data(0x0007); write_vdp_data(0x0007); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
     } else if digit == 9 {
         vdp_set_write_address(addr);
-        write_vdp_data(0x0007); write_vdp_data(0x0007); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
         vdp_set_write_address(addr + 128);
-        write_vdp_data(0x0007); write_vdp_data(0x0000); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
         vdp_set_write_address(addr + 256);
-        write_vdp_data(0x0007); write_vdp_data(0x0007); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
         vdp_set_write_address(addr + 384);
-        write_vdp_data(0x0000); write_vdp_data(0x0000); write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
         vdp_set_write_address(addr + 512);
-        write_vdp_data(0x0007); write_vdp_data(0x0007); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
     }
 }
 
 fn draw_scores() {
     unsafe {
         // Player 1 score at tile position (8, 2)
-        draw_digit(8, 2, player1_score);
+        draw_digit(8, 2, PLAYER1_SCORE);
         // Player 2 score at tile position (28, 2)
-        draw_digit(28, 2, player2_score);
+        draw_digit(28, 2, PLAYER2_SCORE);
     }
 }
 
@@ -480,137 +580,258 @@ fn draw_scores() {
 fn draw_letter(x: i32, y: i32, letter: i32) {
     let addr: i32 = 0xC000 + (y * 128) + (x * 2);
 
-    if letter == 82 {  // 'R'
+    if letter == 82 {
+        // 'R'
         vdp_set_write_address(addr);
-        write_vdp_data(0x0007); write_vdp_data(0x0007); write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
         vdp_set_write_address(addr + 128);
-        write_vdp_data(0x0007); write_vdp_data(0x0000); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
         vdp_set_write_address(addr + 256);
-        write_vdp_data(0x0007); write_vdp_data(0x0007); write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
         vdp_set_write_address(addr + 384);
-        write_vdp_data(0x0007); write_vdp_data(0x0000); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
         vdp_set_write_address(addr + 512);
-        write_vdp_data(0x0007); write_vdp_data(0x0000); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
     }
-    if letter == 69 {  // 'E'
+    if letter == 69 {
+        // 'E'
         vdp_set_write_address(addr);
-        write_vdp_data(0x0007); write_vdp_data(0x0007); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
         vdp_set_write_address(addr + 128);
-        write_vdp_data(0x0007); write_vdp_data(0x0000); write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0000);
         vdp_set_write_address(addr + 256);
-        write_vdp_data(0x0007); write_vdp_data(0x0007); write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
         vdp_set_write_address(addr + 384);
-        write_vdp_data(0x0007); write_vdp_data(0x0000); write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0000);
         vdp_set_write_address(addr + 512);
-        write_vdp_data(0x0007); write_vdp_data(0x0007); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
     }
-    if letter == 65 {  // 'A'
+    if letter == 65 {
+        // 'A'
         vdp_set_write_address(addr);
-        write_vdp_data(0x0000); write_vdp_data(0x0007); write_vdp_data(0x0000);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
         vdp_set_write_address(addr + 128);
-        write_vdp_data(0x0007); write_vdp_data(0x0000); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
         vdp_set_write_address(addr + 256);
-        write_vdp_data(0x0007); write_vdp_data(0x0007); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
         vdp_set_write_address(addr + 384);
-        write_vdp_data(0x0007); write_vdp_data(0x0000); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
         vdp_set_write_address(addr + 512);
-        write_vdp_data(0x0007); write_vdp_data(0x0000); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
     }
-    if letter == 68 {  // 'D'
+    if letter == 68 {
+        // 'D'
         vdp_set_write_address(addr);
-        write_vdp_data(0x0007); write_vdp_data(0x0007); write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
         vdp_set_write_address(addr + 128);
-        write_vdp_data(0x0007); write_vdp_data(0x0000); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
         vdp_set_write_address(addr + 256);
-        write_vdp_data(0x0007); write_vdp_data(0x0000); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
         vdp_set_write_address(addr + 384);
-        write_vdp_data(0x0007); write_vdp_data(0x0000); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
         vdp_set_write_address(addr + 512);
-        write_vdp_data(0x0007); write_vdp_data(0x0007); write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
     }
-    if letter == 89 {  // 'Y'
+    if letter == 89 {
+        // 'Y'
         vdp_set_write_address(addr);
-        write_vdp_data(0x0007); write_vdp_data(0x0000); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
         vdp_set_write_address(addr + 128);
-        write_vdp_data(0x0007); write_vdp_data(0x0000); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
         vdp_set_write_address(addr + 256);
-        write_vdp_data(0x0000); write_vdp_data(0x0007); write_vdp_data(0x0000);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
         vdp_set_write_address(addr + 384);
-        write_vdp_data(0x0000); write_vdp_data(0x0007); write_vdp_data(0x0000);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
         vdp_set_write_address(addr + 512);
-        write_vdp_data(0x0000); write_vdp_data(0x0007); write_vdp_data(0x0000);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
     }
-    if letter == 63 {  // '?'
+    if letter == 63 {
+        // '?'
         vdp_set_write_address(addr);
-        write_vdp_data(0x0007); write_vdp_data(0x0007); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
         vdp_set_write_address(addr + 128);
-        write_vdp_data(0x0000); write_vdp_data(0x0000); write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
         vdp_set_write_address(addr + 256);
-        write_vdp_data(0x0000); write_vdp_data(0x0007); write_vdp_data(0x0000);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
         vdp_set_write_address(addr + 384);
-        write_vdp_data(0x0000); write_vdp_data(0x0000); write_vdp_data(0x0000);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0000);
         vdp_set_write_address(addr + 512);
-        write_vdp_data(0x0000); write_vdp_data(0x0007); write_vdp_data(0x0000);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
     }
-    if letter == 80 {  // 'P'
+    if letter == 80 {
+        // 'P'
         vdp_set_write_address(addr);
-        write_vdp_data(0x0007); write_vdp_data(0x0007); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
         vdp_set_write_address(addr + 128);
-        write_vdp_data(0x0007); write_vdp_data(0x0000); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
         vdp_set_write_address(addr + 256);
-        write_vdp_data(0x0007); write_vdp_data(0x0007); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
         vdp_set_write_address(addr + 384);
-        write_vdp_data(0x0007); write_vdp_data(0x0000); write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0000);
         vdp_set_write_address(addr + 512);
-        write_vdp_data(0x0007); write_vdp_data(0x0000); write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0000);
     }
-    if letter == 85 {  // 'U'
+    if letter == 85 {
+        // 'U'
         vdp_set_write_address(addr);
-        write_vdp_data(0x0007); write_vdp_data(0x0000); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
         vdp_set_write_address(addr + 128);
-        write_vdp_data(0x0007); write_vdp_data(0x0000); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
         vdp_set_write_address(addr + 256);
-        write_vdp_data(0x0007); write_vdp_data(0x0000); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
         vdp_set_write_address(addr + 384);
-        write_vdp_data(0x0007); write_vdp_data(0x0000); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
         vdp_set_write_address(addr + 512);
-        write_vdp_data(0x0007); write_vdp_data(0x0007); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
     }
-    if letter == 83 {  // 'S'
+    if letter == 83 {
+        // 'S'
         vdp_set_write_address(addr);
-        write_vdp_data(0x0007); write_vdp_data(0x0007); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
         vdp_set_write_address(addr + 128);
-        write_vdp_data(0x0007); write_vdp_data(0x0000); write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0000);
         vdp_set_write_address(addr + 256);
-        write_vdp_data(0x0007); write_vdp_data(0x0007); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
         vdp_set_write_address(addr + 384);
-        write_vdp_data(0x0000); write_vdp_data(0x0000); write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
         vdp_set_write_address(addr + 512);
-        write_vdp_data(0x0007); write_vdp_data(0x0007); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
     }
-    if letter == 72 {  // 'H'
+    if letter == 72 {
+        // 'H'
         vdp_set_write_address(addr);
-        write_vdp_data(0x0007); write_vdp_data(0x0000); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
         vdp_set_write_address(addr + 128);
-        write_vdp_data(0x0007); write_vdp_data(0x0000); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
         vdp_set_write_address(addr + 256);
-        write_vdp_data(0x0007); write_vdp_data(0x0007); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
         vdp_set_write_address(addr + 384);
-        write_vdp_data(0x0007); write_vdp_data(0x0000); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
         vdp_set_write_address(addr + 512);
-        write_vdp_data(0x0007); write_vdp_data(0x0000); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
     }
-    if letter == 84 {  // 'T'
+    if letter == 84 {
+        // 'T'
         vdp_set_write_address(addr);
-        write_vdp_data(0x0007); write_vdp_data(0x0007); write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0007);
         vdp_set_write_address(addr + 128);
-        write_vdp_data(0x0000); write_vdp_data(0x0007); write_vdp_data(0x0000);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
         vdp_set_write_address(addr + 256);
-        write_vdp_data(0x0000); write_vdp_data(0x0007); write_vdp_data(0x0000);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
         vdp_set_write_address(addr + 384);
-        write_vdp_data(0x0000); write_vdp_data(0x0007); write_vdp_data(0x0000);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
         vdp_set_write_address(addr + 512);
-        write_vdp_data(0x0000); write_vdp_data(0x0007); write_vdp_data(0x0000);
+        write_vdp_data(0x0000);
+        write_vdp_data(0x0007);
+        write_vdp_data(0x0000);
     }
 }
 
@@ -622,39 +843,39 @@ fn clear_text_area(x: i32, y: i32, width: i32) {
         let mut col: i32 = 0;
         while col < width {
             write_vdp_data(0x0000);
-            col = col + 1;
+            col += 1;
         }
-        row = row + 1;
+        row += 1;
     }
 }
 
 fn draw_ready_text() {
     // "READY?" centered on screen
-    draw_letter(8, 10, 82);   // R
-    draw_letter(12, 10, 69);  // E
-    draw_letter(16, 10, 65);  // A
-    draw_letter(20, 10, 68);  // D
-    draw_letter(24, 10, 89);  // Y
-    draw_letter(28, 10, 63);  // ?
+    draw_letter(8, 10, 82); // R
+    draw_letter(12, 10, 69); // E
+    draw_letter(16, 10, 65); // A
+    draw_letter(20, 10, 68); // D
+    draw_letter(24, 10, 89); // Y
+    draw_letter(28, 10, 63); // ?
 }
 
 fn draw_push_start_text() {
     // "PUSH START" centered on screen
-    draw_letter(2, 17, 80);   // P
-    draw_letter(6, 17, 85);   // U
-    draw_letter(10, 17, 83);  // S
-    draw_letter(14, 17, 72);  // H
+    draw_letter(2, 17, 80); // P
+    draw_letter(6, 17, 85); // U
+    draw_letter(10, 17, 83); // S
+    draw_letter(14, 17, 72); // H
     // space gap
-    draw_letter(20, 17, 83);  // S
-    draw_letter(24, 17, 84);  // T
-    draw_letter(28, 17, 65);  // A
-    draw_letter(32, 17, 82);  // R
-    draw_letter(36, 17, 84);  // T
+    draw_letter(20, 17, 83); // S
+    draw_letter(24, 17, 84); // T
+    draw_letter(28, 17, 65); // A
+    draw_letter(32, 17, 82); // R
+    draw_letter(36, 17, 84); // T
 }
 
 fn clear_ready_screen() {
-    clear_text_area(8, 10, 24);   // READY?
-    clear_text_area(2, 17, 38);   // PUSH START
+    clear_text_area(8, 10, 24); // READY?
+    clear_text_area(2, 17, 38); // PUSH START
 }
 
 fn wait_for_start() {
@@ -706,14 +927,14 @@ fn clear_sprite(index: i32) {
 
 fn reset_ball() {
     unsafe {
-        ball_x = 156;
-        ball_y = 108;
-        if (frame_count & 1) != 0 {
-            ball_dx = BALL_SPEED;
+        BALL_X = 156;
+        BALL_Y = 108;
+        if (FRAME_COUNT & 1) != 0 {
+            BALL_DX = BALL_SPEED;
         } else {
-            ball_dx = 0 - BALL_SPEED;
+            BALL_DX = 0 - BALL_SPEED;
         }
-        ball_dy = 2;
+        BALL_DY = 2;
     }
 }
 
@@ -721,55 +942,51 @@ fn update_ball() {
     unsafe {
         let paddle_width: i32 = 8;
 
-        ball_x = ball_x + ball_dx;
-        ball_y = ball_y + ball_dy;
+        BALL_X += BALL_DX;
+        BALL_Y += BALL_DY;
 
         // Bounce off top/bottom
-        if ball_y < TOP_MARGIN {
-            ball_y = TOP_MARGIN;
-            ball_dy = 0 - ball_dy;
+        if BALL_Y < TOP_MARGIN {
+            BALL_Y = TOP_MARGIN;
+            BALL_DY = 0 - BALL_DY;
             sound_wall_bounce();
         }
-        if ball_y > BOTTOM_MARGIN - BALL_SIZE {
-            ball_y = BOTTOM_MARGIN - BALL_SIZE;
-            ball_dy = 0 - ball_dy;
+        if BALL_Y > BOTTOM_MARGIN - BALL_SIZE {
+            BALL_Y = BOTTOM_MARGIN - BALL_SIZE;
+            BALL_DY = 0 - BALL_DY;
             sound_wall_bounce();
         }
 
         // Player 1 paddle collision
-        if ball_x < player1_x + paddle_width {
-            if ball_x > player1_x - BALL_SIZE {
-                if ball_y + BALL_SIZE > player1_y {
-                    if ball_y < player1_y + PADDLE_HEIGHT {
-                        ball_x = player1_x + paddle_width;
-                        ball_dx = 0 - ball_dx;
-                        sound_paddle_hit();
-                    }
-                }
-            }
+        if BALL_X < PLAYER1_X + paddle_width
+            && BALL_X > PLAYER1_X - BALL_SIZE
+            && BALL_Y + BALL_SIZE > PLAYER1_Y
+            && BALL_Y < PLAYER1_Y + PADDLE_HEIGHT
+        {
+            BALL_X = PLAYER1_X + paddle_width;
+            BALL_DX = 0 - BALL_DX;
+            sound_paddle_hit();
         }
 
         // Player 2 paddle collision
-        if ball_x + BALL_SIZE > player2_x {
-            if ball_x < player2_x + paddle_width {
-                if ball_y + BALL_SIZE > player2_y {
-                    if ball_y < player2_y + PADDLE_HEIGHT {
-                        ball_x = player2_x - BALL_SIZE;
-                        ball_dx = 0 - ball_dx;
-                        sound_paddle_hit();
-                    }
-                }
-            }
+        if BALL_X + BALL_SIZE > PLAYER2_X
+            && BALL_X < PLAYER2_X + paddle_width
+            && BALL_Y + BALL_SIZE > PLAYER2_Y
+            && BALL_Y < PLAYER2_Y + PADDLE_HEIGHT
+        {
+            BALL_X = PLAYER2_X - BALL_SIZE;
+            BALL_DX = 0 - BALL_DX;
+            sound_paddle_hit();
         }
 
         // Scoring
-        if ball_x < LEFT_MARGIN {
-            player2_score = player2_score + 1;
+        if BALL_X < LEFT_MARGIN {
+            PLAYER2_SCORE += 1;
             sound_score();
             reset_ball();
         }
-        if ball_x > RIGHT_MARGIN {
-            player1_score = player1_score + 1;
+        if BALL_X > RIGHT_MARGIN {
+            PLAYER1_SCORE += 1;
             sound_score();
             reset_ball();
         }
@@ -780,36 +997,36 @@ fn update_paddles(buttons: i32) {
     unsafe {
         // Player 1: Up/Down buttons
         if (buttons & 0x01) == 0 {
-            player1_y = player1_y - PADDLE_SPEED;
+            PLAYER1_Y -= PADDLE_SPEED;
         }
         if (buttons & 0x02) == 0 {
-            player1_y = player1_y + PADDLE_SPEED;
+            PLAYER1_Y += PADDLE_SPEED;
         }
 
         // Clamp player 1
-        if player1_y < TOP_MARGIN {
-            player1_y = TOP_MARGIN;
+        if PLAYER1_Y < TOP_MARGIN {
+            PLAYER1_Y = TOP_MARGIN;
         }
-        if player1_y > BOTTOM_MARGIN - PADDLE_HEIGHT {
-            player1_y = BOTTOM_MARGIN - PADDLE_HEIGHT;
+        if PLAYER1_Y > BOTTOM_MARGIN - PADDLE_HEIGHT {
+            PLAYER1_Y = BOTTOM_MARGIN - PADDLE_HEIGHT;
         }
 
         // AI for player 2
-        if ball_x > 160 {
-            if player2_y + 16 < ball_y {
-                player2_y = player2_y + 3;
+        if BALL_X > 160 {
+            if PLAYER2_Y + 16 < BALL_Y {
+                PLAYER2_Y += 3;
             }
-            if player2_y + 16 > ball_y {
-                player2_y = player2_y - 3;
+            if PLAYER2_Y + 16 > BALL_Y {
+                PLAYER2_Y -= 3;
             }
         }
 
         // Clamp player 2
-        if player2_y < TOP_MARGIN {
-            player2_y = TOP_MARGIN;
+        if PLAYER2_Y < TOP_MARGIN {
+            PLAYER2_Y = TOP_MARGIN;
         }
-        if player2_y > BOTTOM_MARGIN - PADDLE_HEIGHT {
-            player2_y = BOTTOM_MARGIN - PADDLE_HEIGHT;
+        if PLAYER2_Y > BOTTOM_MARGIN - PADDLE_HEIGHT {
+            PLAYER2_Y = BOTTOM_MARGIN - PADDLE_HEIGHT;
         }
     }
 }
@@ -821,10 +1038,10 @@ fn update_paddles(buttons: i32) {
 fn render() {
     unsafe {
         // Paddle sprites: size 0x03 = 1 wide x 4 tall (8x32 pixels)
-        update_sprite(0, player1_x, player1_y, 0x03, 1);
-        update_sprite(1, player2_x, player2_y, 0x03, 1);
+        update_sprite(0, PLAYER1_X, PLAYER1_Y, 0x03, 1);
+        update_sprite(1, PLAYER2_X, PLAYER2_Y, 0x03, 1);
         // Ball sprite: size 0x00 = 1x1 (8x8 pixels)
-        update_sprite(2, ball_x, ball_y, 0x00, 6);
+        update_sprite(2, BALL_X, BALL_Y, 0x00, 6);
         // End sprite list
         clear_sprite(3);
     }
@@ -846,7 +1063,7 @@ fn main() {
         let mut i: i32 = 0;
         while i < 80 {
             clear_sprite(i);
-            i = i + 1;
+            i += 1;
         }
 
         // Wait for START button before starting game
@@ -859,7 +1076,7 @@ fn main() {
         let mut last_p1_score: i32 = 0;
         let mut last_p2_score: i32 = 0;
 
-        while game_running != 0 {
+        while GAME_RUNNING != 0 {
             vdp_wait_vblank();
 
             let buttons: i32 = read_controller();
@@ -869,16 +1086,16 @@ fn main() {
             sound_update();
 
             // Update score display when score changes
-            if player1_score != last_p1_score || player2_score != last_p2_score {
+            if PLAYER1_SCORE != last_p1_score || PLAYER2_SCORE != last_p2_score {
                 draw_scores();
-                last_p1_score = player1_score;
-                last_p2_score = player2_score;
+                last_p1_score = PLAYER1_SCORE;
+                last_p2_score = PLAYER2_SCORE;
             }
 
-            frame_count = frame_count + 1;
+            FRAME_COUNT += 1;
 
-            if player1_score >= 10 || player2_score >= 10 {
-                game_running = 0;
+            if PLAYER1_SCORE >= 10 || PLAYER2_SCORE >= 10 {
+                GAME_RUNNING = 0;
             }
         }
 

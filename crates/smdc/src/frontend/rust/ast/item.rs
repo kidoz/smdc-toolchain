@@ -1,6 +1,6 @@
 //! Rust item AST nodes (top-level declarations)
 
-use super::{RustType, Block, Expr, Pattern, TypePath};
+use super::{Block, Expr, Pattern, RustType, TypePath};
 use crate::common::Span;
 
 /// A top-level item
@@ -82,7 +82,13 @@ pub struct FnDecl {
 }
 
 impl FnDecl {
-    pub fn new(name: String, params: Vec<FnParam>, return_type: Option<RustType>, body: Option<Block>, span: Span) -> Self {
+    pub fn new(
+        name: String,
+        params: Vec<FnParam>,
+        return_type: Option<RustType>,
+        body: Option<Block>,
+        span: Span,
+    ) -> Self {
         Self {
             name,
             params,
@@ -232,10 +238,7 @@ pub enum UseTree {
         tree: Option<Box<UseTree>>,
     },
     /// Rename: use foo as bar;
-    Rename {
-        path: TypePath,
-        alias: String,
-    },
+    Rename { path: TypePath, alias: String },
     /// Glob: use foo::*;
     Glob(TypePath),
     /// Nested: use foo::{bar, baz};

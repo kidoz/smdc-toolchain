@@ -18,8 +18,8 @@ impl Token {
 
 /// All token kinds in C
 #[derive(Logos, Debug, Clone, PartialEq)]
-#[logos(skip r"[ \t\n\r\f]+")]  // Skip whitespace
-#[logos(skip r"//[^\n]*")]      // Skip line comments
+#[logos(skip r"[ \t\n\r\f]+")] // Skip whitespace
+#[logos(skip r"//[^\n]*")] // Skip line comments
 #[logos(skip r"/\*[^*]*\*+(?:[^/*][^*]*\*+)*/")] // Skip block comments
 pub enum TokenKind {
     // === Keywords ===
@@ -364,14 +364,14 @@ impl TokenKind {
 impl std::fmt::Display for TokenKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            TokenKind::Identifier(s) => write!(f, "identifier '{}'", s),
-            TokenKind::IntLiteral(s) => write!(f, "integer '{}'", s),
-            TokenKind::HexLiteral(s) => write!(f, "hex '{}'", s),
-            TokenKind::BinaryLiteral(s) => write!(f, "binary '{}'", s),
-            TokenKind::OctalLiteral(s) => write!(f, "octal '{}'", s),
-            TokenKind::FloatLiteral(s) => write!(f, "float '{}'", s),
-            TokenKind::CharLiteral(s) => write!(f, "char {}", s),
-            TokenKind::StringLiteral(s) => write!(f, "string {}", s),
+            TokenKind::Identifier(s) => write!(f, "identifier '{s}'"),
+            TokenKind::IntLiteral(s) => write!(f, "integer '{s}'"),
+            TokenKind::HexLiteral(s) => write!(f, "hex '{s}'"),
+            TokenKind::BinaryLiteral(s) => write!(f, "binary '{s}'"),
+            TokenKind::OctalLiteral(s) => write!(f, "octal '{s}'"),
+            TokenKind::FloatLiteral(s) => write!(f, "float '{s}'"),
+            TokenKind::CharLiteral(s) => write!(f, "char {s}"),
+            TokenKind::StringLiteral(s) => write!(f, "string {s}"),
             TokenKind::Plus => write!(f, "'+'"),
             TokenKind::Minus => write!(f, "'-'"),
             TokenKind::Star => write!(f, "'*'"),
@@ -419,7 +419,7 @@ impl std::fmt::Display for TokenKind {
             TokenKind::Question => write!(f, "'?'"),
             TokenKind::Ellipsis => write!(f, "'...'"),
             TokenKind::Eof => write!(f, "end of file"),
-            _ => write!(f, "{:?}", self),
+            _ => write!(f, "{self:?}"),
         }
     }
 }

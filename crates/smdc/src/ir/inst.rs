@@ -1,6 +1,6 @@
 //! IR instruction definitions
 
-use crate::frontend::c::ast::CType;
+use crate::types::IrType;
 
 /// A temporary value (virtual register)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -40,11 +40,11 @@ pub enum Value {
 impl std::fmt::Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Value::Temp(t) => write!(f, "{}", t),
-            Value::IntConst(n) => write!(f, "{}", n),
-            Value::StringConst(l) => write!(f, "{}", l),
-            Value::Name(n) => write!(f, "{}", n),
-            Value::Mem(addr) => write!(f, "[{}]", addr),
+            Value::Temp(t) => write!(f, "{t}"),
+            Value::IntConst(n) => write!(f, "{n}"),
+            Value::StringConst(l) => write!(f, "{l}"),
+            Value::Name(n) => write!(f, "{n}"),
+            Value::Mem(addr) => write!(f, "[{addr}]"),
         }
     }
 }
@@ -55,10 +55,10 @@ pub enum BinOp {
     Add,
     Sub,
     Mul,
-    Div,   // Signed division
-    Mod,   // Signed modulo
-    UDiv,  // Unsigned division
-    UMod,  // Unsigned modulo
+    Div,  // Signed division
+    Mod,  // Signed modulo
+    UDiv, // Unsigned division
+    UMod, // Unsigned modulo
     And,
     Or,
     Xor,
@@ -122,17 +122,10 @@ pub enum Inst {
     Label(Label),
 
     /// dst = src (copy)
-    Copy {
-        dst: Temp,
-        src: Value,
-    },
+    Copy { dst: Temp, src: Value },
 
     /// dst = op src
-    Unary {
-        dst: Temp,
-        op: UnOp,
-        src: Value,
-    },
+    Unary { dst: Temp, op: UnOp, src: Value },
 
     /// dst = left op right
     Binary {
@@ -166,16 +159,10 @@ pub enum Inst {
     Jump(Label),
 
     /// Conditional jump: if cond goto label
-    CondJump {
-        cond: Value,
-        target: Label,
-    },
+    CondJump { cond: Value, target: Label },
 
     /// Branch if condition is false
-    CondJumpFalse {
-        cond: Value,
-        target: Label,
-    },
+    CondJumpFalse { cond: Value, target: Label },
 
     /// Function call: dst = func(args...)
     Call {
@@ -195,10 +182,7 @@ pub enum Inst {
     },
 
     /// Get address of named variable
-    AddrOf {
-        dst: Temp,
-        name: String,
-    },
+    AddrOf { dst: Temp, name: String },
 
     /// Load function parameter from stack
     LoadParam {
@@ -214,60 +198,102 @@ pub enum Inst {
 impl std::fmt::Display for Inst {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Inst::Label(l) => write!(f, "{}:", l),
-            Inst::Copy { dst, src } => write!(f, "  {} = {}", dst, src),
-            Inst::Unary { dst, op, src } => write!(f, "  {} = {} {}", dst, op, src),
-            Inst::Binary { dst, op, left, right } => {
-                write!(f, "  {} = {} {} {}", dst, left, op, right)
+            Inst::Label(l) => write!(f, "{l}:"),
+            Inst::Copy { dst, src } => write!(f, "  {dst} = {src}"),
+            Inst::Unary { dst, op, src } => write!(f, "  {dst} = {op} {src}"),
+            Inst::Binary {
+                dst,
+                op,
+                left,
+                right,
+            } => {
+                write!(f, "  {dst} = {left} {op} {right}")
             }
-            Inst::Load { dst, addr, size, volatile, signed } => {
+            Inst::Load {
+                dst,
+                addr,
+                size,
+                volatile,
+                signed,
+            } => {
                 let sign_str = if *signed { "s" } else { "u" };
                 if *volatile {
-                    write!(f, "  {} = load.{}{}.volatile {}", dst, sign_str, size, addr)
+                    write!(f, "  {dst} = load.{sign_str}{size}.volatile {addr}")
                 } else {
-                    write!(f, "  {} = load.{}{} {}", dst, sign_str, size, addr)
+                    write!(f, "  {dst} = load.{sign_str}{size} {addr}")
                 }
             }
-            Inst::Store { addr, src, size, volatile } => {
+            Inst::Store {
+                addr,
+                src,
+                size,
+                volatile,
+            } => {
                 if *volatile {
-                    write!(f, "  store.{}.volatile {}, {}", size, addr, src)
+                    write!(f, "  store.{size}.volatile {addr}, {src}")
                 } else {
-                    write!(f, "  store.{} {}, {}", size, addr, src)
+                    write!(f, "  store.{size} {addr}, {src}")
                 }
             }
-            Inst::Jump(l) => write!(f, "  jump {}", l),
-            Inst::CondJump { cond, target } => write!(f, "  if {} goto {}", cond, target),
-            Inst::CondJumpFalse { cond, target } => write!(f, "  ifnot {} goto {}", cond, target),
+            Inst::Jump(l) => write!(f, "  jump {l}"),
+            Inst::CondJump { cond, target } => write!(f, "  if {cond} goto {target}"),
+            Inst::CondJumpFalse { cond, target } => write!(f, "  ifnot {cond} goto {target}"),
             Inst::Call { dst, func, args } => {
                 if let Some(d) = dst {
-                    write!(f, "  {} = call {}(", d, func)?;
+                    write!(f, "  {d} = call {func}(")?;
                 } else {
-                    write!(f, "  call {}(", func)?;
+                    write!(f, "  call {func}(")?;
                 }
                 for (i, arg) in args.iter().enumerate() {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
-                    write!(f, "{}", arg)?;
+                    write!(f, "{arg}")?;
                 }
                 write!(f, ")")
             }
             Inst::Return(val) => {
                 if let Some(v) = val {
-                    write!(f, "  return {}", v)
+                    write!(f, "  return {v}")
                 } else {
                     write!(f, "  return")
                 }
             }
             Inst::Alloca { dst, size, align } => {
-                write!(f, "  {} = alloca {}, align {}", dst, size, align)
+                write!(f, "  {dst} = alloca {size}, align {align}")
             }
-            Inst::AddrOf { dst, name } => write!(f, "  {} = &{}", dst, name),
+            Inst::AddrOf { dst, name } => write!(f, "  {dst} = &{name}"),
             Inst::LoadParam { dst, index, size } => {
-                write!(f, "  {} = loadparam.{} #{}", dst, size, index)
+                write!(f, "  {dst} = loadparam.{size} #{index}")
             }
-            Inst::Comment(s) => write!(f, "  ; {}", s),
+            Inst::Comment(s) => write!(f, "  ; {s}"),
         }
+    }
+}
+
+/// A basic block in the IR
+#[derive(Debug, Clone)]
+pub struct BasicBlock {
+    pub label: Label,
+    pub insts: Vec<Inst>,
+}
+
+impl BasicBlock {
+    pub fn new(label: Label) -> Self {
+        Self {
+            label,
+            insts: Vec::new(),
+        }
+    }
+}
+
+impl std::fmt::Display for BasicBlock {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "{}:", self.label)?;
+        for inst in &self.insts {
+            writeln!(f, "{inst}")?;
+        }
+        Ok(())
     }
 }
 
@@ -275,19 +301,19 @@ impl std::fmt::Display for Inst {
 #[derive(Debug, Clone)]
 pub struct IrFunction {
     pub name: String,
-    pub params: Vec<(String, CType)>,
-    pub return_type: CType,
-    pub body: Vec<Inst>,
-    pub locals: Vec<(String, CType, usize)>, // name, type, stack offset
+    pub params: Vec<(String, IrType)>,
+    pub return_type: IrType,
+    pub blocks: Vec<BasicBlock>,
+    pub locals: Vec<(String, IrType, usize)>, // name, type, stack offset
 }
 
 impl IrFunction {
-    pub fn new(name: String, params: Vec<(String, CType)>, return_type: CType) -> Self {
+    pub fn new(name: String, params: Vec<(String, IrType)>, return_type: IrType) -> Self {
         Self {
             name,
             params,
             return_type,
-            body: Vec::new(),
+            blocks: Vec::new(),
             locals: Vec::new(),
         }
     }
@@ -296,8 +322,8 @@ impl IrFunction {
 impl std::fmt::Display for IrFunction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "function {}:", self.name)?;
-        for inst in &self.body {
-            writeln!(f, "{}", inst)?;
+        for block in &self.blocks {
+            write!(f, "{block}")?;
         }
         Ok(())
     }
@@ -307,7 +333,7 @@ impl std::fmt::Display for IrFunction {
 #[derive(Debug, Clone)]
 pub struct IrGlobal {
     pub name: String,
-    pub ty: CType,
+    pub ty: IrType,
     pub init: Option<Vec<u8>>,
 }
 
@@ -345,8 +371,80 @@ impl std::fmt::Display for IrModule {
         }
         for func in &self.functions {
             writeln!(f)?;
-            write!(f, "{}", func)?;
+            write!(f, "{func}")?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn test_basic_block_display() {
+        let mut bb = BasicBlock::new(Label("L_test".to_string()));
+        bb.insts.push(Inst::Comment("test comment".to_string()));
+        bb.insts.push(Inst::Return(None));
+
+        let output = format!("{bb}");
+        assert!(output.contains("L_test:"));
+        assert!(output.contains("  ; test comment"));
+        assert!(output.contains("  return"));
+    }
+
+    #[test]
+    fn test_ir_function_display() {
+        let mut func = IrFunction::new(
+            "my_func".to_string(),
+            vec![("arg".to_string(), IrType::i32())],
+            IrType::void(),
+        );
+
+        let mut bb = BasicBlock::new(Label("entry".to_string()));
+        bb.insts.push(Inst::Return(None));
+        func.blocks.push(bb);
+
+        let output = format!("{func}");
+        assert!(output.contains("function my_func:"));
+        assert!(output.contains("entry:"));
+        assert!(output.contains("  return"));
+    }
+
+    #[test]
+    fn test_ir_module_display() {
+        let mut module = IrModule::new();
+
+        module.globals.push(IrGlobal {
+            name: "g_var".to_string(),
+            ty: IrType::i32(),
+            init: None,
+        });
+
+        module
+            .strings
+            .push((Label("str_1".to_string()), "hello world".to_string()));
+
+        let output = format!("{module}");
+        assert!(output.contains("global g_var:"));
+        assert!(output.contains("str_1: \"hello world\""));
+    }
+
+    #[test]
+    fn test_inst_display() {
+        let inst1 = Inst::Copy {
+            dst: Temp(1),
+            src: Value::IntConst(42),
+        };
+        assert_eq!(format!("{}", inst1), "  t1 = 42");
+
+        let inst2 = Inst::Binary {
+            dst: Temp(2),
+            op: BinOp::Add,
+            left: Value::Temp(Temp(1)),
+            right: Value::IntConst(1),
+        };
+        assert_eq!(format!("{}", inst2), "  t2 = t1 + 1");
     }
 }

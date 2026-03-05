@@ -3,9 +3,11 @@
 //! Usage: smdc [OPTIONS] <input> -o <output>
 
 use clap::{Parser as ClapParser, ValueEnum};
+use smd_compiler::backend::{
+    Backend, BackendConfig, M68kBackend, OutputFormat, RomBackend, RomConfig,
+};
 use smd_compiler::common::DiagnosticReporter;
-use smd_compiler::frontend::{CFrontend, RustFrontend, Frontend, FrontendConfig, CompileContext};
-use smd_compiler::backend::{M68kBackend, RomBackend, Backend, BackendConfig, OutputFormat, RomConfig};
+use smd_compiler::frontend::{CFrontend, CompileContext, Frontend, FrontendConfig, RustFrontend};
 use std::fs;
 use std::path::PathBuf;
 use std::process;
@@ -100,23 +102,21 @@ fn main() {
     let args = Args::parse();
 
     if let Err(e) = run(&args) {
-        eprintln!("error: {}", e);
+        eprintln!("error: {e}");
         process::exit(1);
     }
 }
 
 fn detect_language(path: &PathBuf, explicit: Language) -> Language {
     match explicit {
-        Language::Auto => {
-            match path.extension().and_then(|e| e.to_str()) {
-                Some("rs") => Language::Rust,
-                Some("c") | Some("h") => Language::C,
-                _ => {
-                    eprintln!("warning: cannot detect language, defaulting to C");
-                    Language::C
-                }
+        Language::Auto => match path.extension().and_then(|e| e.to_str()) {
+            Some("rs") => Language::Rust,
+            Some("c" | "h") => Language::C,
+            _ => {
+                eprintln!("warning: cannot detect language, defaulting to C");
+                Language::C
             }
-        }
+        },
         other => other,
     }
 }
@@ -156,8 +156,13 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
             OutputType::Asm => "assembly",
             OutputType::Rom => "ROM",
         };
-        eprintln!("Compiling {} ({}) -> {} ({})",
-            args.input.display(), lang_str, output_path.display(), output_str);
+        eprintln!(
+            "Compiling {} ({}) -> {} ({})",
+            args.input.display(),
+            lang_str,
+            output_path.display(),
+            output_str
+        );
     }
 
     // Select frontend
@@ -208,7 +213,7 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
 
     if args.dump_ir {
         eprintln!("=== IR ===");
-        eprintln!("{}", ir_module);
+        eprintln!("{ir_module}");
         eprintln!("=== End IR ===\n");
     }
 
@@ -224,21 +229,26 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         verbose: args.verbose,
     };
 
-    let output = match args.output_type {
-        OutputType::Asm => {
-            let backend = M68kBackend::new();
-            backend.generate(&ir_module, &backend_config)?
-        }
-        OutputType::Rom => {
-            let rom_config = RomConfig {
-                domestic_name: args.domestic_name.clone(),
-                overseas_name: args.overseas_name.clone(),
-                ..Default::default()
-            };
-            let backend = RomBackend::with_config(rom_config);
-            backend.generate(&ir_module, &backend_config)?
-        }
+    let mut registry = smd_compiler::backend::BackendRegistry::new();
+    registry.register(Box::new(M68kBackend::new()));
+
+    let rom_config = RomConfig {
+        domestic_name: args.domestic_name.clone(),
+        overseas_name: args.overseas_name.clone(),
+        ..Default::default()
     };
+    registry.register(Box::new(RomBackend::with_config(rom_config)));
+
+    let backend_name = match args.output_type {
+        OutputType::Asm => "m68k",
+        OutputType::Rom => "rom",
+    };
+
+    let backend = registry
+        .find_by_name(backend_name)
+        .ok_or_else(|| format!("Backend '{backend_name}' not found"))?;
+
+    let output = backend.generate(&ir_module, &ctx, &backend_config)?;
 
     // Write output
     output.write_to(&output_path)?;

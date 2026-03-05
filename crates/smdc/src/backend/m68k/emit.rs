@@ -1,12 +1,12 @@
 //! M68k code emitter
 
-use crate::ir::*;
-use crate::common::CompileResult;
 use super::m68k::*;
 use super::sdk::{
-    SdkRegistry, SdkFunctionKind, SdkInlineGenerator, SdkLibraryGenerator,
-    resolve_dependencies, generate_static_data,
+    SdkFunctionKind, SdkInlineGenerator, SdkLibraryGenerator, SdkRegistry, generate_static_data,
+    resolve_dependencies,
 };
+use crate::common::CompileResult;
+use crate::ir::*;
 use std::collections::{HashMap, HashSet};
 
 /// Code generator that converts IR to M68k assembly
@@ -70,7 +70,7 @@ impl CodeGenerator {
         // Calculate total data size first (for RAM allocation)
         self.data_size = 0;
         for global in &module.globals {
-            let size = global.ty.size();
+            let size = global.ty.size;
             // Align to 4 bytes for efficiency
             self.data_size = (self.data_size + 3) & !3;
             self.data_size += size;
@@ -118,11 +118,11 @@ impl CodeGenerator {
                     self.emit_data_bytes(init_bytes);
                 } else {
                     // Zero-initialized
-                    let size = global.ty.size();
+                    let size = global.ty.size;
                     match size {
                         1 => self.emit(M68kInst::Directive(".byte 0".to_string())),
                         2 => self.emit(M68kInst::Directive(".word 0".to_string())),
-                        _ => self.emit(M68kInst::Directive(format!(".space {}", size))),
+                        _ => self.emit(M68kInst::Directive(format!(".space {size}"))),
                     }
                 }
             }
@@ -137,7 +137,7 @@ impl CodeGenerator {
                     .replace('\r', "\\r")
                     .replace('\t', "\\t")
                     .replace('\0', "\\0");
-                self.emit(M68kInst::Directive(format!(".asciz \"{}\"", escaped)));
+                self.emit(M68kInst::Directive(format!(".asciz \"{escaped}\"")));
             }
 
             // Mark end of data in RAM
@@ -177,7 +177,10 @@ impl CodeGenerator {
         // move.l #$53454741, $A14000 ; Write 'SEGA'
         // .no_tmss:
         self.emit(M68kInst::Lea(Operand::AbsLong(0xA10001), AddrReg::A0));
-        self.emit(M68kInst::Btst(Operand::Imm(0), Operand::AddrInd(AddrReg::A0)));
+        self.emit(M68kInst::Btst(
+            Operand::Imm(0),
+            Operand::AddrInd(AddrReg::A0),
+        ));
         self.emit(M68kInst::Bcc(Cond::Eq, ".no_tmss".to_string()));
         self.emit(M68kInst::Move(
             Size::Long,
@@ -224,13 +227,30 @@ impl CodeGenerator {
         // Source: __data_rom_start (ROM address)
         // Dest: __data_ram_start (RAM address = 0xFF8000)
         // Count: __data_ram_end - __data_ram_start
-        self.emit(M68kInst::Lea(Operand::Label("__data_rom_start".to_string()), AddrReg::A0));  // Source in ROM
-        self.emit(M68kInst::Lea(Operand::Label("__data_ram_start".to_string()), AddrReg::A1)); // Dest in RAM
-        self.emit(M68kInst::Lea(Operand::Label("__data_ram_end".to_string()), AddrReg::A2));   // End marker
+        self.emit(M68kInst::Lea(
+            Operand::Label("__data_rom_start".to_string()),
+            AddrReg::A0,
+        )); // Source in ROM
+        self.emit(M68kInst::Lea(
+            Operand::Label("__data_ram_start".to_string()),
+            AddrReg::A1,
+        )); // Dest in RAM
+        self.emit(M68kInst::Lea(
+            Operand::Label("__data_ram_end".to_string()),
+            AddrReg::A2,
+        )); // End marker
         self.emit(M68kInst::Label(".copy_data".to_string()));
-        self.emit(M68kInst::Cmpa(Size::Long, Operand::AddrReg(AddrReg::A1), AddrReg::A2));     // Compare A1 with A2
-        self.emit(M68kInst::Bcc(Cond::Le, ".copy_done".to_string()));  // If A2 <= A1, we're done (end reached)
-        self.emit(M68kInst::Move(Size::Long, Operand::PostInc(AddrReg::A0), Operand::PostInc(AddrReg::A1)));
+        self.emit(M68kInst::Cmpa(
+            Size::Long,
+            Operand::AddrReg(AddrReg::A1),
+            AddrReg::A2,
+        )); // Compare A1 with A2
+        self.emit(M68kInst::Bcc(Cond::Le, ".copy_done".to_string())); // If A2 <= A1, we're done (end reached)
+        self.emit(M68kInst::Move(
+            Size::Long,
+            Operand::PostInc(AddrReg::A0),
+            Operand::PostInc(AddrReg::A1),
+        ));
         self.emit(M68kInst::Bra(".copy_data".to_string()));
         self.emit(M68kInst::Label(".copy_done".to_string()));
 
@@ -245,27 +265,87 @@ impl CodeGenerator {
         // This ensures VDP is set up before any C code runs
         self.emit(M68kInst::Lea(Operand::AbsLong(0xC00004), AddrReg::A1));
         // VDP register writes: 0x8000 | (reg << 8) | value
-        self.emit(M68kInst::Move(Size::Word, Operand::Imm(0x8004), Operand::AddrInd(AddrReg::A1))); // Reg 0
-        self.emit(M68kInst::Move(Size::Word, Operand::Imm(0x8104), Operand::AddrInd(AddrReg::A1))); // Reg 1 - display OFF (vdp_init enables after VRAM clear)
-        self.emit(M68kInst::Move(Size::Word, Operand::Imm(0x8230), Operand::AddrInd(AddrReg::A1))); // Reg 2
-        self.emit(M68kInst::Move(Size::Word, Operand::Imm(0x8407), Operand::AddrInd(AddrReg::A1))); // Reg 4
-        self.emit(M68kInst::Move(Size::Word, Operand::Imm(0x8578), Operand::AddrInd(AddrReg::A1))); // Reg 5
-        self.emit(M68kInst::Move(Size::Word, Operand::Imm(0x8700), Operand::AddrInd(AddrReg::A1))); // Reg 7 - backdrop=0 (black)
-        self.emit(M68kInst::Move(Size::Word, Operand::Imm(0x8AFF), Operand::AddrInd(AddrReg::A1))); // Reg 10
-        self.emit(M68kInst::Move(Size::Word, Operand::Imm(0x8B00), Operand::AddrInd(AddrReg::A1))); // Reg 11
-        self.emit(M68kInst::Move(Size::Word, Operand::Imm(0x8C81), Operand::AddrInd(AddrReg::A1))); // Reg 12
-        self.emit(M68kInst::Move(Size::Word, Operand::Imm(0x8D3F), Operand::AddrInd(AddrReg::A1))); // Reg 13
-        self.emit(M68kInst::Move(Size::Word, Operand::Imm(0x8F02), Operand::AddrInd(AddrReg::A1))); // Reg 15
-        self.emit(M68kInst::Move(Size::Word, Operand::Imm(0x9011), Operand::AddrInd(AddrReg::A1))); // Reg 16: H64xV32
+        self.emit(M68kInst::Move(
+            Size::Word,
+            Operand::Imm(0x8004),
+            Operand::AddrInd(AddrReg::A1),
+        )); // Reg 0
+        self.emit(M68kInst::Move(
+            Size::Word,
+            Operand::Imm(0x8104),
+            Operand::AddrInd(AddrReg::A1),
+        )); // Reg 1 - display OFF (vdp_init enables after VRAM clear)
+        self.emit(M68kInst::Move(
+            Size::Word,
+            Operand::Imm(0x8230),
+            Operand::AddrInd(AddrReg::A1),
+        )); // Reg 2
+        self.emit(M68kInst::Move(
+            Size::Word,
+            Operand::Imm(0x8407),
+            Operand::AddrInd(AddrReg::A1),
+        )); // Reg 4
+        self.emit(M68kInst::Move(
+            Size::Word,
+            Operand::Imm(0x8578),
+            Operand::AddrInd(AddrReg::A1),
+        )); // Reg 5
+        self.emit(M68kInst::Move(
+            Size::Word,
+            Operand::Imm(0x8700),
+            Operand::AddrInd(AddrReg::A1),
+        )); // Reg 7 - backdrop=0 (black)
+        self.emit(M68kInst::Move(
+            Size::Word,
+            Operand::Imm(0x8AFF),
+            Operand::AddrInd(AddrReg::A1),
+        )); // Reg 10
+        self.emit(M68kInst::Move(
+            Size::Word,
+            Operand::Imm(0x8B00),
+            Operand::AddrInd(AddrReg::A1),
+        )); // Reg 11
+        self.emit(M68kInst::Move(
+            Size::Word,
+            Operand::Imm(0x8C81),
+            Operand::AddrInd(AddrReg::A1),
+        )); // Reg 12
+        self.emit(M68kInst::Move(
+            Size::Word,
+            Operand::Imm(0x8D3F),
+            Operand::AddrInd(AddrReg::A1),
+        )); // Reg 13
+        self.emit(M68kInst::Move(
+            Size::Word,
+            Operand::Imm(0x8F02),
+            Operand::AddrInd(AddrReg::A1),
+        )); // Reg 15
+        self.emit(M68kInst::Move(
+            Size::Word,
+            Operand::Imm(0x9011),
+            Operand::AddrInd(AddrReg::A1),
+        )); // Reg 16: H64xV32
 
         // Clear all VRAM (64KB) from address 0 upward
         // Set VRAM write address to 0x0000
         // Command format: first word = 0x4000 | (addr & 0x3FFF), second word = (addr >> 14)
-        self.emit(M68kInst::Move(Size::Word, Operand::Imm(0x4000), Operand::AddrInd(AddrReg::A1))); // VRAM write @ 0x0000
-        self.emit(M68kInst::Move(Size::Word, Operand::Imm(0x0000), Operand::AddrInd(AddrReg::A1))); // Upper addr = 0
+        self.emit(M68kInst::Move(
+            Size::Word,
+            Operand::Imm(0x4000),
+            Operand::AddrInd(AddrReg::A1),
+        )); // VRAM write @ 0x0000
+        self.emit(M68kInst::Move(
+            Size::Word,
+            Operand::Imm(0x0000),
+            Operand::AddrInd(AddrReg::A1),
+        )); // Upper addr = 0
         // Clear 64KB (32K words)
         self.emit(M68kInst::Lea(Operand::AbsLong(0xC00000), AddrReg::A1));
-        self.emit(M68kInst::Move(Size::Word, Operand::Imm(0x7FFF), Operand::DataReg(DataReg::D0)));
+        self.emit(M68kInst::Move(
+            Size::Word,
+            Operand::Imm(0x7FFF),
+            Operand::DataReg(DataReg::D0),
+        ));
         self.emit(M68kInst::Label(".clear_vram".to_string()));
         self.emit(M68kInst::Clr(Size::Word, Operand::AddrInd(AddrReg::A1)));
         self.emit(M68kInst::Dbf(DataReg::D0, ".clear_vram".to_string()));
@@ -274,23 +354,63 @@ impl CodeGenerator {
         self.emit(M68kInst::Lea(Operand::AbsLong(0xC00004), AddrReg::A1));
 
         // Set up palette - CRAM write
-        self.emit(M68kInst::Move(Size::Word, Operand::Imm(0xC000u32 as i32), Operand::AddrInd(AddrReg::A1)));
-        self.emit(M68kInst::Move(Size::Word, Operand::Imm(0x0000), Operand::AddrInd(AddrReg::A1)));
+        self.emit(M68kInst::Move(
+            Size::Word,
+            Operand::Imm(0xC000u32 as i32),
+            Operand::AddrInd(AddrReg::A1),
+        ));
+        self.emit(M68kInst::Move(
+            Size::Word,
+            Operand::Imm(0x0000),
+            Operand::AddrInd(AddrReg::A1),
+        ));
         // Write colors to VDP data port ($C00000)
         self.emit(M68kInst::Lea(Operand::AbsLong(0xC00000), AddrReg::A1));
-        self.emit(M68kInst::Move(Size::Word, Operand::Imm(0x0000), Operand::AddrInd(AddrReg::A1))); // Black
-        self.emit(M68kInst::Move(Size::Word, Operand::Imm(0x0EEE), Operand::AddrInd(AddrReg::A1))); // White
-        self.emit(M68kInst::Move(Size::Word, Operand::Imm(0x00E0), Operand::AddrInd(AddrReg::A1))); // Green
-        self.emit(M68kInst::Move(Size::Word, Operand::Imm(0x000E), Operand::AddrInd(AddrReg::A1))); // Red
+        self.emit(M68kInst::Move(
+            Size::Word,
+            Operand::Imm(0x0000),
+            Operand::AddrInd(AddrReg::A1),
+        )); // Black
+        self.emit(M68kInst::Move(
+            Size::Word,
+            Operand::Imm(0x0EEE),
+            Operand::AddrInd(AddrReg::A1),
+        )); // White
+        self.emit(M68kInst::Move(
+            Size::Word,
+            Operand::Imm(0x00E0),
+            Operand::AddrInd(AddrReg::A1),
+        )); // Green
+        self.emit(M68kInst::Move(
+            Size::Word,
+            Operand::Imm(0x000E),
+            Operand::AddrInd(AddrReg::A1),
+        )); // Red
 
         // Silence all PSG channels
         // PSG is at $C00011, accessed via byte writes
         // Volume command: 1xx1 vvvv where xx=channel, vvvv=volume (F=silent)
         self.emit(M68kInst::Lea(Operand::AbsLong(0xC00011), AddrReg::A2));
-        self.emit(M68kInst::Move(Size::Byte, Operand::Imm(0x9F), Operand::AddrInd(AddrReg::A2))); // Ch 0 silent
-        self.emit(M68kInst::Move(Size::Byte, Operand::Imm(0xBF), Operand::AddrInd(AddrReg::A2))); // Ch 1 silent
-        self.emit(M68kInst::Move(Size::Byte, Operand::Imm(0xDF), Operand::AddrInd(AddrReg::A2))); // Ch 2 silent
-        self.emit(M68kInst::Move(Size::Byte, Operand::Imm(0xFF), Operand::AddrInd(AddrReg::A2))); // Ch 3 (noise) silent
+        self.emit(M68kInst::Move(
+            Size::Byte,
+            Operand::Imm(0x9F),
+            Operand::AddrInd(AddrReg::A2),
+        )); // Ch 0 silent
+        self.emit(M68kInst::Move(
+            Size::Byte,
+            Operand::Imm(0xBF),
+            Operand::AddrInd(AddrReg::A2),
+        )); // Ch 1 silent
+        self.emit(M68kInst::Move(
+            Size::Byte,
+            Operand::Imm(0xDF),
+            Operand::AddrInd(AddrReg::A2),
+        )); // Ch 2 silent
+        self.emit(M68kInst::Move(
+            Size::Byte,
+            Operand::Imm(0xFF),
+            Operand::AddrInd(AddrReg::A2),
+        )); // Ch 3 (noise) silent
 
         // Enable interrupts
         // move.w #$2000, sr (user mode, enable interrupts)
@@ -319,14 +439,14 @@ impl CodeGenerator {
         // Emit 4-byte (long) values where possible
         while i + 4 <= len {
             let val = u32::from_be_bytes([bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]]);
-            self.emit(M68kInst::Directive(format!(".long 0x{:08X}", val)));
+            self.emit(M68kInst::Directive(format!(".long 0x{val:08X}")));
             i += 4;
         }
 
         // Emit 2-byte (word) values
         while i + 2 <= len {
             let val = u16::from_be_bytes([bytes[i], bytes[i + 1]]);
-            self.emit(M68kInst::Directive(format!(".word 0x{:04X}", val)));
+            self.emit(M68kInst::Directive(format!(".word 0x{val:04X}")));
             i += 2;
         }
 
@@ -344,20 +464,22 @@ impl CodeGenerator {
 
         // Count how many temps we need
         let mut max_temp = 0u32;
-        for inst in &func.body {
-            match inst {
-                Inst::Copy { dst, .. }
-                | Inst::Unary { dst, .. }
-                | Inst::Binary { dst, .. }
-                | Inst::Load { dst, .. }
-                | Inst::Alloca { dst, .. }
-                | Inst::AddrOf { dst, .. } => {
-                    max_temp = max_temp.max(dst.0 + 1);
+        for block in &func.blocks {
+            for inst in &block.insts {
+                match inst {
+                    Inst::Copy { dst, .. }
+                    | Inst::Unary { dst, .. }
+                    | Inst::Binary { dst, .. }
+                    | Inst::Load { dst, .. }
+                    | Inst::Alloca { dst, .. }
+                    | Inst::AddrOf { dst, .. } => {
+                        max_temp = max_temp.max(dst.0 + 1);
+                    }
+                    Inst::Call { dst: Some(dst), .. } => {
+                        max_temp = max_temp.max(dst.0 + 1);
+                    }
+                    _ => {}
                 }
-                Inst::Call { dst: Some(dst), .. } => {
-                    max_temp = max_temp.max(dst.0 + 1);
-                }
-                _ => {}
             }
         }
 
@@ -392,8 +514,11 @@ impl CodeGenerator {
         ));
 
         // Generate body
-        for inst in &func.body {
-            self.generate_inst(inst)?;
+        for block in &func.blocks {
+            self.emit(M68kInst::Label(block.label.0.clone()));
+            for inst in &block.insts {
+                self.generate_inst(inst)?;
+            }
         }
 
         Ok(())
@@ -439,10 +564,7 @@ impl CodeGenerator {
                 ));
             }
             Value::StringConst(label) => {
-                self.emit(M68kInst::Lea(
-                    Operand::Label(label.0.clone()),
-                    AddrReg::A0,
-                ));
+                self.emit(M68kInst::Lea(Operand::Label(label.0.clone()), AddrReg::A0));
                 self.emit(M68kInst::Move(
                     Size::Long,
                     Operand::AddrReg(AddrReg::A0),
@@ -514,7 +636,12 @@ impl CodeGenerator {
                 self.store_temp(*dst, DataReg::D0);
             }
 
-            Inst::Binary { dst, op, left, right } => {
+            Inst::Binary {
+                dst,
+                op,
+                left,
+                right,
+            } => {
                 self.load_value(left, DataReg::D0)?;
                 self.load_value(right, DataReg::D1)?;
 
@@ -535,48 +662,41 @@ impl CodeGenerator {
                     }
                     BinOp::Mul => {
                         // M68000 only has 16x16->32 multiply
-                        self.emit(M68kInst::Muls(
-                            Operand::DataReg(DataReg::D1),
-                            DataReg::D0,
-                        ));
+                        self.emit(M68kInst::Muls(Operand::DataReg(DataReg::D1), DataReg::D0));
                     }
                     BinOp::Div => {
                         // 32/16->16r16 signed divide
-                        self.emit(M68kInst::Divs(
-                            Operand::DataReg(DataReg::D1),
-                            DataReg::D0,
-                        ));
+                        self.emit(M68kInst::Divs(Operand::DataReg(DataReg::D1), DataReg::D0));
                         // Quotient is in low word, sign-extend
                         self.emit(M68kInst::Ext(Size::Long, DataReg::D0));
                     }
                     BinOp::Mod => {
                         // 32/16->16r16 signed divide for remainder
-                        self.emit(M68kInst::Divs(
-                            Operand::DataReg(DataReg::D1),
-                            DataReg::D0,
-                        ));
+                        self.emit(M68kInst::Divs(Operand::DataReg(DataReg::D1), DataReg::D0));
                         // Remainder is in high word
                         self.emit(M68kInst::Swap(DataReg::D0));
                         self.emit(M68kInst::Ext(Size::Long, DataReg::D0));
                     }
                     BinOp::UDiv => {
                         // 32/16->16r16 unsigned divide
-                        self.emit(M68kInst::Divu(
-                            Operand::DataReg(DataReg::D1),
-                            DataReg::D0,
-                        ));
+                        self.emit(M68kInst::Divu(Operand::DataReg(DataReg::D1), DataReg::D0));
                         // Quotient is in low word, zero-extend
-                        self.emit(M68kInst::Andi(Size::Long, 0xFFFF, Operand::DataReg(DataReg::D0)));
+                        self.emit(M68kInst::Andi(
+                            Size::Long,
+                            0xFFFF,
+                            Operand::DataReg(DataReg::D0),
+                        ));
                     }
                     BinOp::UMod => {
                         // 32/16->16r16 unsigned divide for remainder
-                        self.emit(M68kInst::Divu(
-                            Operand::DataReg(DataReg::D1),
-                            DataReg::D0,
-                        ));
+                        self.emit(M68kInst::Divu(Operand::DataReg(DataReg::D1), DataReg::D0));
                         // Remainder is in high word
                         self.emit(M68kInst::Swap(DataReg::D0));
-                        self.emit(M68kInst::Andi(Size::Long, 0xFFFF, Operand::DataReg(DataReg::D0)));
+                        self.emit(M68kInst::Andi(
+                            Size::Long,
+                            0xFFFF,
+                            Operand::DataReg(DataReg::D0),
+                        ));
                     }
                     BinOp::And => {
                         self.emit(M68kInst::And(
@@ -639,7 +759,13 @@ impl CodeGenerator {
                 self.store_temp(*dst, DataReg::D0);
             }
 
-            Inst::Load { dst, addr, size, volatile: _, signed } => {
+            Inst::Load {
+                dst,
+                addr,
+                size,
+                volatile: _,
+                signed,
+            } => {
                 // Note: volatile flag indicates this memory access should not be optimized.
                 // For now, we emit the same code (no optimization pass yet).
                 self.load_value(addr, DataReg::D0)?;
@@ -668,15 +794,28 @@ impl CodeGenerator {
                 } else {
                     // Zero extend using AND
                     if *size == 1 {
-                        self.emit(M68kInst::Andi(Size::Long, 0xFF, Operand::DataReg(DataReg::D0)));
+                        self.emit(M68kInst::Andi(
+                            Size::Long,
+                            0xFF,
+                            Operand::DataReg(DataReg::D0),
+                        ));
                     } else if *size == 2 {
-                        self.emit(M68kInst::Andi(Size::Long, 0xFFFF, Operand::DataReg(DataReg::D0)));
+                        self.emit(M68kInst::Andi(
+                            Size::Long,
+                            0xFFFF,
+                            Operand::DataReg(DataReg::D0),
+                        ));
                     }
                 }
                 self.store_temp(*dst, DataReg::D0);
             }
 
-            Inst::Store { addr, src, size, volatile: _ } => {
+            Inst::Store {
+                addr,
+                src,
+                size,
+                volatile: _,
+            } => {
                 // Note: volatile flag indicates this memory access should not be optimized.
                 // For now, we emit the same code (no optimization pass yet).
                 self.load_value(addr, DataReg::D0)?;
@@ -783,10 +922,7 @@ impl CodeGenerator {
             }
 
             Inst::AddrOf { dst, name } => {
-                self.emit(M68kInst::Lea(
-                    Operand::Label(name.clone()),
-                    AddrReg::A0,
-                ));
+                self.emit(M68kInst::Lea(Operand::Label(name.clone()), AddrReg::A0));
                 self.emit(M68kInst::Move(
                     Size::Long,
                     Operand::AddrReg(AddrReg::A0),
@@ -812,9 +948,9 @@ impl CodeGenerator {
                 // - 1-byte: offset + 3
                 let base_offset = 8 + (*index as i16) * 4;
                 let size_adjust = match *size {
-                    1 => 3,  // byte at end of 4-byte slot
-                    2 => 2,  // word at end of 4-byte slot
-                    _ => 0,  // long uses full slot
+                    1 => 3, // byte at end of 4-byte slot
+                    2 => 2, // word at end of 4-byte slot
+                    _ => 0, // long uses full slot
                 };
                 let offset = base_offset + size_adjust;
                 self.emit(M68kInst::Lea(
@@ -857,7 +993,7 @@ impl CodeGenerator {
         }
 
         // Generate inline instructions
-        let inline_code = SdkInlineGenerator::generate(func);
+        let inline_code = SdkInlineGenerator::generate(func)?;
         for inst in inline_code {
             self.emit(inst);
         }
@@ -929,9 +1065,9 @@ impl CodeGenerator {
         let mut library_functions: Vec<_> = all_functions
             .iter()
             .filter(|f| {
-                self.sdk_registry.lookup(f)
-                    .map(|sdk| sdk.kind == SdkFunctionKind::Library)
-                    .unwrap_or(false)
+                self.sdk_registry
+                    .lookup(f)
+                    .is_some_and(|sdk| sdk.kind == SdkFunctionKind::Library)
             })
             .cloned()
             .collect();
@@ -942,7 +1078,7 @@ impl CodeGenerator {
         // Generate each function
         let mut generator = SdkLibraryGenerator::new();
         for func_name in library_functions {
-            self.emit(M68kInst::Comment(format!("SDK function: {}", func_name)));
+            self.emit(M68kInst::Comment(format!("SDK function: {func_name}")));
             let code = generator.generate(&func_name);
             for inst in code {
                 self.emit(inst);

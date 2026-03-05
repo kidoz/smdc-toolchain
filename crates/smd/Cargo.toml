@@ -17,3 +17,6 @@ default = []
 
 [dependencies]
 # No dependencies - bare metal target
+
+[lints]
+workspace = true

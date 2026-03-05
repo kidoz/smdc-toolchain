@@ -4,11 +4,11 @@
 //! of Rust ("Genesis Rust") to the shared IR, enabling Rust code to
 //! target the Sega Megadrive/Genesis.
 
-pub mod lexer;
 pub mod ast;
+pub mod lexer;
+pub mod mir;
 pub mod parser;
 pub mod sema;
-pub mod mir;
 
 pub use lexer::RustLexer;
 pub use parser::RustParser;
@@ -16,9 +16,7 @@ pub use sema::RustAnalyzer;
 
 use crate::common::CompileResult;
 use crate::frontend::{CompileContext, Frontend, FrontendConfig};
-use crate::ir::{IrModule, IrGlobal};
-use crate::frontend::c::ast::CType;
-use crate::common::Span;
+use crate::ir::{IrGlobal, IrModule};
 use std::collections::{HashMap, HashSet};
 
 /// Rust language frontend
@@ -61,7 +59,7 @@ impl Frontend for RustFrontend {
                 Ok(tokens) => {
                     eprintln!("=== Rust Tokens ===");
                     for token in &tokens {
-                        eprintln!("{:?}", token);
+                        eprintln!("{token:?}");
                     }
                     eprintln!("=== End Tokens ===\n");
                 }
@@ -88,7 +86,7 @@ impl Frontend for RustFrontend {
 
         if config.dump_ast {
             eprintln!("=== Rust AST ===");
-            eprintln!("{:#?}", module);
+            eprintln!("{module:#?}");
             eprintln!("=== End AST ===\n");
         }
 
@@ -134,7 +132,7 @@ impl Frontend for RustFrontend {
 
                     ir_module.globals.push(IrGlobal {
                         name: s.name.clone(),
-                        ty: CType::int(Span::default()), // Use i32 for now
+                        ty: crate::types::IrType::i32(), // Use i32 for now
                         init: init_bytes,
                     });
                 }
@@ -144,37 +142,39 @@ impl Frontend for RustFrontend {
 
         // Second pass: process functions with const/static info
         for item in &module.items {
-            if let ItemKind::Fn(func) = &item.kind {
-                if func.body.is_some() {
-                    // Get return type
-                    let return_type = func.return_type.clone()
-                        .unwrap_or_else(|| ast::RustType::unit(func.span));
+            if let ItemKind::Fn(func) = &item.kind
+                && func.body.is_some()
+            {
+                // Get return type
+                let return_type = func
+                    .return_type
+                    .clone()
+                    .unwrap_or_else(|| ast::RustType::unit(func.span));
 
-                    // Lower to MIR with const values and static names
-                    let lowerer = MirLowerer::with_constants(
-                        return_type,
-                        const_values.clone(),
-                        static_names.clone(),
-                    );
-                    let mir_body = match lowerer.lower_function(func) {
-                        Ok(m) => m,
-                        Err(e) => {
-                            ctx.reporter.report_error(ctx.file_id, &e);
-                            return Err(e);
-                        }
-                    };
-
-                    if config.dump_mir {
-                        eprintln!("=== MIR for {} ===", func.name);
-                        eprintln!("{:#?}", mir_body);
-                        eprintln!("=== End MIR ===\n");
+                // Lower to MIR with const values and static names
+                let lowerer = MirLowerer::with_constants(
+                    return_type,
+                    const_values.clone(),
+                    static_names.clone(),
+                );
+                let mir_body = match lowerer.lower_function(func) {
+                    Ok(m) => m,
+                    Err(e) => {
+                        ctx.reporter.report_error(ctx.file_id, &e);
+                        return Err(e);
                     }
+                };
 
-                    // Convert MIR to shared IR
-                    let mut converter = MirToIr::new();
-                    let ir_func = converter.convert(func.name.clone(), &mir_body);
-                    ir_module.functions.push(ir_func);
+                if config.dump_mir {
+                    eprintln!("=== MIR for {} ===", func.name);
+                    eprintln!("{mir_body:#?}");
+                    eprintln!("=== End MIR ===\n");
                 }
+
+                // Convert MIR to shared IR
+                let mut converter = MirToIr::new();
+                let ir_func = converter.convert(func.name.clone(), &mir_body);
+                ir_module.functions.push(ir_func);
             }
         }
 
@@ -186,7 +186,7 @@ impl Frontend for RustFrontend {
         let tokens = lexer.tokenize_all()?;
         let mut output = String::new();
         for token in &tokens {
-            output.push_str(&format!("{:?}\n", token));
+            output.push_str(&format!("{token:?}\n"));
         }
         Ok(output)
     }
@@ -194,20 +194,20 @@ impl Frontend for RustFrontend {
     fn dump_ast(&self, source: &str) -> CompileResult<String> {
         let mut parser = RustParser::new(source);
         let module = parser.parse_module()?;
-        Ok(format!("{:#?}", module))
+        Ok(format!("{module:#?}"))
     }
 }
 
 impl RustFrontend {
     /// Evaluate a constant expression to an integer value
     fn eval_const_expr(expr: &ast::Expr) -> Option<i64> {
-        use ast::ExprKind;
         use ast::BinOp;
+        use ast::ExprKind;
         use ast::UnaryOp;
 
         match &expr.kind {
             ExprKind::IntLiteral(v) => Some(*v),
-            ExprKind::BoolLiteral(b) => Some(if *b { 1 } else { 0 }),
+            ExprKind::BoolLiteral(b) => Some(i64::from(*b)),
             ExprKind::CharLiteral(c) => Some(*c as i64),
             ExprKind::Unary { op, operand } => {
                 let val = Self::eval_const_expr(operand)?;

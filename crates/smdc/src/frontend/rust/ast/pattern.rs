@@ -102,10 +102,18 @@ pub struct FieldPattern {
 
 impl FieldPattern {
     pub fn new(name: String, pattern: Option<Pattern>, span: Span) -> Self {
-        Self { name, pattern, span }
+        Self {
+            name,
+            pattern,
+            span,
+        }
     }
 
     pub fn shorthand(name: String, span: Span) -> Self {
-        Self { name, pattern: None, span }
+        Self {
+            name,
+            pattern: None,
+            span,
+        }
     }
 }

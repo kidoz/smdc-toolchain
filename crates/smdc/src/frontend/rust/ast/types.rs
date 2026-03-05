@@ -62,7 +62,7 @@ impl RustType {
             RustTypeKind::Slice { .. } => 8, // Fat pointer (ptr + len)
             RustTypeKind::Tuple(types) => types.iter().map(|t| t.size()).sum(),
             RustTypeKind::Named(_) => 4, // Resolved during sema
-            RustTypeKind::Infer => 4, // Resolved during type inference
+            RustTypeKind::Infer => 4,    // Resolved during type inference
         }
     }
 
@@ -103,10 +103,18 @@ impl RustType {
         matches!(
             &self.kind,
             RustTypeKind::Primitive(
-                PrimitiveType::I8 | PrimitiveType::I16 | PrimitiveType::I32 | PrimitiveType::I64 |
-                PrimitiveType::U8 | PrimitiveType::U16 | PrimitiveType::U32 | PrimitiveType::U64 |
-                PrimitiveType::Isize | PrimitiveType::Usize |
-                PrimitiveType::F32 | PrimitiveType::F64
+                PrimitiveType::I8
+                    | PrimitiveType::I16
+                    | PrimitiveType::I32
+                    | PrimitiveType::I64
+                    | PrimitiveType::U8
+                    | PrimitiveType::U16
+                    | PrimitiveType::U32
+                    | PrimitiveType::U64
+                    | PrimitiveType::Isize
+                    | PrimitiveType::Usize
+                    | PrimitiveType::F32
+                    | PrimitiveType::F64
             )
         )
     }
@@ -116,9 +124,16 @@ impl RustType {
         matches!(
             &self.kind,
             RustTypeKind::Primitive(
-                PrimitiveType::I8 | PrimitiveType::I16 | PrimitiveType::I32 | PrimitiveType::I64 |
-                PrimitiveType::U8 | PrimitiveType::U16 | PrimitiveType::U32 | PrimitiveType::U64 |
-                PrimitiveType::Isize | PrimitiveType::Usize
+                PrimitiveType::I8
+                    | PrimitiveType::I16
+                    | PrimitiveType::I32
+                    | PrimitiveType::I64
+                    | PrimitiveType::U8
+                    | PrimitiveType::U16
+                    | PrimitiveType::U32
+                    | PrimitiveType::U64
+                    | PrimitiveType::Isize
+                    | PrimitiveType::Usize
             )
         )
     }
@@ -134,24 +149,13 @@ pub enum RustTypeKind {
     /// Primitive types
     Primitive(PrimitiveType),
     /// Reference &T or &mut T
-    Reference {
-        mutable: bool,
-        inner: Box<RustType>,
-    },
+    Reference { mutable: bool, inner: Box<RustType> },
     /// Raw pointer *const T or *mut T
-    Pointer {
-        mutable: bool,
-        inner: Box<RustType>,
-    },
+    Pointer { mutable: bool, inner: Box<RustType> },
     /// Array [T; N]
-    Array {
-        element: Box<RustType>,
-        size: usize,
-    },
+    Array { element: Box<RustType>, size: usize },
     /// Slice &[T]
-    Slice {
-        element: Box<RustType>,
-    },
+    Slice { element: Box<RustType> },
     /// Tuple (T, U, ...)
     Tuple(Vec<RustType>),
     /// Named type (struct, enum, type alias)
@@ -204,8 +208,11 @@ impl PrimitiveType {
     pub fn is_signed(&self) -> bool {
         matches!(
             self,
-            PrimitiveType::I8 | PrimitiveType::I16 | PrimitiveType::I32 |
-            PrimitiveType::I64 | PrimitiveType::Isize
+            PrimitiveType::I8
+                | PrimitiveType::I16
+                | PrimitiveType::I32
+                | PrimitiveType::I64
+                | PrimitiveType::Isize
         )
     }
 }
@@ -243,11 +250,13 @@ impl TypePath {
     }
 
     pub fn simple(name: String) -> Self {
-        Self { segments: vec![name] }
+        Self {
+            segments: vec![name],
+        }
     }
 
     pub fn name(&self) -> &str {
-        self.segments.last().map(|s| s.as_str()).unwrap_or("")
+        self.segments.last().map_or("", |s| s.as_str())
     }
 }
 
@@ -262,34 +271,34 @@ impl std::fmt::Display for RustType {
         match &self.kind {
             RustTypeKind::Unit => write!(f, "()"),
             RustTypeKind::Never => write!(f, "!"),
-            RustTypeKind::Primitive(p) => write!(f, "{}", p),
+            RustTypeKind::Primitive(p) => write!(f, "{p}"),
             RustTypeKind::Reference { mutable, inner } => {
                 if *mutable {
-                    write!(f, "&mut {}", inner)
+                    write!(f, "&mut {inner}")
                 } else {
-                    write!(f, "&{}", inner)
+                    write!(f, "&{inner}")
                 }
             }
             RustTypeKind::Pointer { mutable, inner } => {
                 if *mutable {
-                    write!(f, "*mut {}", inner)
+                    write!(f, "*mut {inner}")
                 } else {
-                    write!(f, "*const {}", inner)
+                    write!(f, "*const {inner}")
                 }
             }
-            RustTypeKind::Array { element, size } => write!(f, "[{}; {}]", element, size),
-            RustTypeKind::Slice { element } => write!(f, "[{}]", element),
+            RustTypeKind::Array { element, size } => write!(f, "[{element}; {size}]"),
+            RustTypeKind::Slice { element } => write!(f, "[{element}]"),
             RustTypeKind::Tuple(types) => {
                 write!(f, "(")?;
                 for (i, t) in types.iter().enumerate() {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
-                    write!(f, "{}", t)?;
+                    write!(f, "{t}")?;
                 }
                 write!(f, ")")
             }
-            RustTypeKind::Named(path) => write!(f, "{}", path),
+            RustTypeKind::Named(path) => write!(f, "{path}"),
             RustTypeKind::Infer => write!(f, "_"),
         }
     }

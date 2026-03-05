@@ -169,6 +169,7 @@ pub trait Backend: Send + Sync {
     fn generate(
         &self,
         module: &IrModule,
+        ctx: &crate::frontend::CompileContext,
         config: &BackendConfig,
     ) -> CompileResult<BackendOutput>;
 }
@@ -180,7 +181,9 @@ pub struct BackendRegistry {
 
 impl BackendRegistry {
     pub fn new() -> Self {
-        Self { backends: Vec::new() }
+        Self {
+            backends: Vec::new(),
+        }
     }
 
     pub fn register(&mut self, backend: Box<dyn Backend>) {
@@ -188,7 +191,8 @@ impl BackendRegistry {
     }
 
     pub fn find_by_name(&self, name: &str) -> Option<&dyn Backend> {
-        self.backends.iter()
+        self.backends
+            .iter()
             .find(|b| b.name() == name)
             .map(|b| b.as_ref())
     }
@@ -205,5 +209,65 @@ impl BackendRegistry {
 impl Default for BackendRegistry {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct MockBackend {
+        name: &'static str,
+    }
+
+    impl Backend for MockBackend {
+        fn name(&self) -> &'static str {
+            self.name
+        }
+
+        fn target(&self) -> &'static str {
+            "mock"
+        }
+
+        fn supported_formats(&self) -> &'static [OutputFormat] {
+            &[OutputFormat::Assembly]
+        }
+
+        fn generate(
+            &self,
+            _module: &IrModule,
+            _ctx: &crate::frontend::CompileContext,
+            _config: &BackendConfig,
+        ) -> CompileResult<BackendOutput> {
+            Ok(BackendOutput::Text("mock".to_string()))
+        }
+    }
+
+    #[test]
+    fn test_backend_registry() {
+        let mut registry = BackendRegistry::new();
+
+        assert!(registry.default_backend().is_none());
+        assert!(registry.find_by_name("mock1").is_none());
+
+        registry.register(Box::new(MockBackend { name: "mock1" }));
+        registry.register(Box::new(MockBackend { name: "mock2" }));
+
+        assert_eq!(registry.default_backend().unwrap().name(), "mock1");
+        assert_eq!(registry.find_by_name("mock1").unwrap().name(), "mock1");
+        assert_eq!(registry.find_by_name("mock2").unwrap().name(), "mock2");
+        assert!(registry.find_by_name("mock3").is_none());
+
+        let names: Vec<_> = registry.list().map(|b| b.name()).collect();
+        assert_eq!(names, vec!["mock1", "mock2"]);
+    }
+
+    #[test]
+    fn test_rom_config_defaults() {
+        let config = RomConfig::default();
+        assert_eq!(config.system_name, "SEGA MEGA DRIVE ");
+        assert_eq!(config.rom_start, 0x00000000);
+        assert_eq!(config.ram_start, 0x00FF0000);
+        assert!(matches!(config.region, RomRegion::All));
     }
 }

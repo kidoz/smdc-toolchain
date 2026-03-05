@@ -13,7 +13,7 @@
 //! psg::set_volume(0, 0);    // Max volume
 //!
 //! // Later: silence
-//! psg::set_volume(0, volume::OFF);
+//! psg::set_volume(0, psg::volume::OFF);
 //! ```
 //!
 //! ## Channels

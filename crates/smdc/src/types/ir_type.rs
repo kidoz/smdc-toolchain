@@ -20,21 +20,18 @@ pub enum IrTypeKind {
 
     /// Integer type
     Int {
-        bits: u8,        // 8, 16, 32, 64
+        bits: u8, // 8, 16, 32, 64
         signed: bool,
     },
 
     /// Floating point (for future M68881 support)
-    Float { bits: u8 },  // 32, 64
+    Float { bits: u8 }, // 32, 64
 
     /// Pointer type
     Pointer(Box<IrType>),
 
     /// Array type
-    Array {
-        element: Box<IrType>,
-        count: usize,
-    },
+    Array { element: Box<IrType>, count: usize },
 
     /// Struct type
     Struct {
@@ -56,48 +53,108 @@ impl IrType {
 
     /// Void type (size 0)
     pub fn void() -> Self {
-        Self { kind: IrTypeKind::Void, size: 0, align: 1 }
+        Self {
+            kind: IrTypeKind::Void,
+            size: 0,
+            align: 1,
+        }
     }
 
     /// Signed 8-bit integer (byte)
     pub fn i8() -> Self {
-        Self { kind: IrTypeKind::Int { bits: 8, signed: true }, size: 1, align: 1 }
+        Self {
+            kind: IrTypeKind::Int {
+                bits: 8,
+                signed: true,
+            },
+            size: 1,
+            align: 1,
+        }
     }
 
     /// Unsigned 8-bit integer (byte)
     pub fn u8() -> Self {
-        Self { kind: IrTypeKind::Int { bits: 8, signed: false }, size: 1, align: 1 }
+        Self {
+            kind: IrTypeKind::Int {
+                bits: 8,
+                signed: false,
+            },
+            size: 1,
+            align: 1,
+        }
     }
 
     /// Signed 16-bit integer (word)
     pub fn i16() -> Self {
-        Self { kind: IrTypeKind::Int { bits: 16, signed: true }, size: 2, align: 2 }
+        Self {
+            kind: IrTypeKind::Int {
+                bits: 16,
+                signed: true,
+            },
+            size: 2,
+            align: 2,
+        }
     }
 
     /// Unsigned 16-bit integer (word)
     pub fn u16() -> Self {
-        Self { kind: IrTypeKind::Int { bits: 16, signed: false }, size: 2, align: 2 }
+        Self {
+            kind: IrTypeKind::Int {
+                bits: 16,
+                signed: false,
+            },
+            size: 2,
+            align: 2,
+        }
     }
 
     /// Signed 32-bit integer (long)
     pub fn i32() -> Self {
         // M68k aligns longs to 2 bytes (word boundary), not 4
-        Self { kind: IrTypeKind::Int { bits: 32, signed: true }, size: 4, align: 2 }
+        Self {
+            kind: IrTypeKind::Int {
+                bits: 32,
+                signed: true,
+            },
+            size: 4,
+            align: 2,
+        }
     }
 
     /// Unsigned 32-bit integer (long)
     pub fn u32() -> Self {
-        Self { kind: IrTypeKind::Int { bits: 32, signed: false }, size: 4, align: 2 }
+        Self {
+            kind: IrTypeKind::Int {
+                bits: 32,
+                signed: false,
+            },
+            size: 4,
+            align: 2,
+        }
     }
 
     /// Signed 64-bit integer (for extended calculations)
     pub fn i64() -> Self {
-        Self { kind: IrTypeKind::Int { bits: 64, signed: true }, size: 8, align: 2 }
+        Self {
+            kind: IrTypeKind::Int {
+                bits: 64,
+                signed: true,
+            },
+            size: 8,
+            align: 2,
+        }
     }
 
     /// Unsigned 64-bit integer
     pub fn u64() -> Self {
-        Self { kind: IrTypeKind::Int { bits: 64, signed: false }, size: 8, align: 2 }
+        Self {
+            kind: IrTypeKind::Int {
+                bits: 64,
+                signed: false,
+            },
+            size: 8,
+            align: 2,
+        }
     }
 
     /// Pointer type (32-bit on M68k)
@@ -199,5 +256,79 @@ impl IrType {
 impl Default for IrType {
     fn default() -> Self {
         Self::i32() // Default to 32-bit signed int
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn test_ir_type_sizes() {
+        assert_eq!(IrType::void().size, 0);
+        assert_eq!(IrType::i8().size, 1);
+        assert_eq!(IrType::u8().size, 1);
+        assert_eq!(IrType::i16().size, 2);
+        assert_eq!(IrType::u16().size, 2);
+        assert_eq!(IrType::i32().size, 4);
+        assert_eq!(IrType::u32().size, 4);
+        assert_eq!(IrType::i64().size, 8);
+        assert_eq!(IrType::u64().size, 8);
+        assert_eq!(IrType::ptr(IrType::i32()).size, 4);
+        assert_eq!(IrType::ptr_void().size, 4);
+    }
+
+    #[test]
+    fn test_ir_type_alignments() {
+        assert_eq!(IrType::void().align, 1);
+        assert_eq!(IrType::i8().align, 1);
+        assert_eq!(IrType::i16().align, 2);
+        assert_eq!(IrType::i32().align, 2); // M68k alignment
+        assert_eq!(IrType::i64().align, 2);
+        assert_eq!(IrType::ptr(IrType::i8()).align, 2);
+    }
+
+    #[test]
+    fn test_ir_type_queries() {
+        let i32_ty = IrType::i32();
+        assert!(i32_ty.is_integer());
+        assert!(i32_ty.is_signed());
+        assert!(!i32_ty.is_pointer());
+
+        let u32_ty = IrType::u32();
+        assert!(u32_ty.is_integer());
+        assert!(!u32_ty.is_signed());
+
+        let ptr_ty = IrType::ptr_void();
+        assert!(ptr_ty.is_pointer());
+        assert!(!ptr_ty.is_integer());
+
+        let arr_ty = IrType::array(IrType::i32(), 10);
+        assert!(arr_ty.is_array());
+        assert_eq!(arr_ty.size, 40);
+        assert_eq!(arr_ty.align, 2);
+    }
+
+    #[test]
+    fn test_ir_type_element_type() {
+        let inner = IrType::i16();
+        let ptr_ty = IrType::ptr(inner.clone());
+        assert_eq!(ptr_ty.element_type(), Some(&inner));
+
+        let arr_ty = IrType::array(inner.clone(), 5);
+        assert_eq!(arr_ty.element_type(), Some(&inner));
+
+        let int_ty = IrType::i32();
+        assert_eq!(int_ty.element_type(), None);
+    }
+
+    #[test]
+    fn test_ir_type_bits() {
+        assert_eq!(IrType::i8().bits(), Some(8));
+        assert_eq!(IrType::u16().bits(), Some(16));
+        assert_eq!(IrType::i32().bits(), Some(32));
+        assert_eq!(IrType::u64().bits(), Some(64));
+        assert_eq!(IrType::ptr_void().bits(), None);
     }
 }

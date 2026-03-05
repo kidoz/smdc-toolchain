@@ -1,1 +1,9 @@
+.idea/
+
 /target
+
+# Generated artifacts
+*.bin
+*.zip
+*.ppm
+*.mid

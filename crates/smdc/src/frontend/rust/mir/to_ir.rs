@@ -1,10 +1,9 @@
 //! Convert MIR to the shared IR
 
-use crate::ir::{IrFunction, Inst, Label, Temp, Value, BinOp as IrBinOp, UnOp as IrUnOp};
-use crate::frontend::c::ast::CType;
-use crate::frontend::rust::ast::{RustType, RustTypeKind};
-use crate::common::Span;
 use super::types::*;
+use crate::frontend::rust::ast::RustTypeKind;
+use crate::ir::{BinOp as IrBinOp, Inst, IrFunction, Label, Temp, UnOp as IrUnOp, Value};
+use crate::types::IrType;
 use std::collections::HashMap;
 
 /// Converts MIR to the shared IR
@@ -18,7 +17,7 @@ pub struct MirToIr<'a> {
     /// Next label ID
     next_label: usize,
     /// Generated instructions
-    instructions: Vec<Inst>,
+    blocks: Vec<crate::ir::BasicBlock>,
     /// Current function name (for unique labels)
     func_name: String,
     /// Reference to the MIR body for type lookups
@@ -32,7 +31,7 @@ impl<'a> MirToIr<'a> {
             block_to_label: HashMap::new(),
             next_temp: 0,
             next_label: 0,
-            instructions: Vec::new(),
+            blocks: Vec::new(),
             func_name: String::new(),
             mir_body: None,
         }
@@ -64,9 +63,7 @@ impl<'a> MirToIr<'a> {
         for i in 0..mir.arg_count {
             let local_id = LocalId(i + 1); // +1 because local 0 is return value
             if let Some(&temp) = self.local_to_temp.get(&local_id) {
-                let size = mir.locals.get(i + 1)
-                    .map(|l| l.ty.size())
-                    .unwrap_or(4);
+                let size = mir.locals.get(i + 1).map_or(4, |l| l.ty.size());
                 // Create a temp for the address
                 let addr_temp = self.new_temp();
                 self.emit(Inst::LoadParam {
@@ -91,13 +88,13 @@ impl<'a> MirToIr<'a> {
         }
 
         // Create a simple return type (i32 for now)
-        let return_type = CType::int(Span::default());
+        let return_type = IrType::i32();
 
         IrFunction {
             name,
             params: Vec::new(), // Would need to extract from MIR
             return_type,
-            body: std::mem::take(&mut self.instructions),
+            blocks: std::mem::take(&mut self.blocks),
             locals: Vec::new(),
         }
     }
@@ -147,17 +144,20 @@ impl<'a> MirToIr<'a> {
     }
 
     fn place_has_deref(&self, place: &Place) -> bool {
-        place.projections.iter().any(|p| matches!(p, Projection::Deref))
+        place
+            .projections
+            .iter()
+            .any(|p| matches!(p, Projection::Deref))
     }
 
     /// Get the size of the pointee type for a dereferenced place
     fn get_deref_size(&self, place: &Place) -> usize {
-        if let Some(mir) = self.mir_body {
-            if let Some(local) = mir.locals.get(place.local.0) {
-                // Get the pointer type and extract the pointee size
-                if let RustTypeKind::Pointer { inner, .. } = &local.ty.kind {
-                    return inner.size();
-                }
+        if let Some(mir) = self.mir_body
+            && let Some(local) = mir.locals.get(place.local.0)
+        {
+            // Get the pointer type and extract the pointee size
+            if let RustTypeKind::Pointer { inner, .. } = &local.ty.kind {
+                return inner.size();
             }
         }
         // Default to 4 bytes (i32) if we can't determine the type
@@ -168,7 +168,10 @@ impl<'a> MirToIr<'a> {
         match rvalue {
             Rvalue::Use(operand) => {
                 let value = self.operand_to_value(operand);
-                self.emit(Inst::Copy { dst: dest, src: value });
+                self.emit(Inst::Copy {
+                    dst: dest,
+                    src: value,
+                });
             }
             Rvalue::Ref { place, .. } => {
                 // Take address of place
@@ -202,7 +205,10 @@ impl<'a> MirToIr<'a> {
             Rvalue::Cast { operand, .. } => {
                 // Simplified: just copy
                 let val = self.operand_to_value(operand);
-                self.emit(Inst::Copy { dst: dest, src: val });
+                self.emit(Inst::Copy {
+                    dst: dest,
+                    src: val,
+                });
             }
             Rvalue::Aggregate { operands, .. } => {
                 // For aggregates, we'd need to allocate space and store fields
@@ -210,10 +216,16 @@ impl<'a> MirToIr<'a> {
                 for (i, operand) in operands.iter().enumerate() {
                     let val = self.operand_to_value(operand);
                     if i == 0 {
-                        self.emit(Inst::Copy { dst: dest, src: val });
+                        self.emit(Inst::Copy {
+                            dst: dest,
+                            src: val,
+                        });
                     } else {
                         let field_temp = self.new_temp();
-                        self.emit(Inst::Copy { dst: field_temp, src: val });
+                        self.emit(Inst::Copy {
+                            dst: field_temp,
+                            src: val,
+                        });
                     }
                 }
             }
@@ -238,7 +250,11 @@ impl<'a> MirToIr<'a> {
                 let label = self.get_block_label(target);
                 self.emit(Inst::Jump(label));
             }
-            MirTerminator::If { condition, then_block, else_block } => {
+            MirTerminator::If {
+                condition,
+                then_block,
+                else_block,
+            } => {
                 let cond = self.operand_to_value(condition);
                 let then_label = self.get_block_label(then_block);
                 let else_label = self.get_block_label(else_block);
@@ -250,7 +266,11 @@ impl<'a> MirToIr<'a> {
                 });
                 self.emit(Inst::Jump(else_label));
             }
-            MirTerminator::Switch { value, targets, default } => {
+            MirTerminator::Switch {
+                value,
+                targets,
+                default,
+            } => {
                 let val = self.operand_to_value(value);
                 let default_label = self.get_block_label(default);
 
@@ -273,15 +293,18 @@ impl<'a> MirToIr<'a> {
 
                 self.emit(Inst::Jump(default_label));
             }
-            MirTerminator::Call { func, args, dest, target } => {
+            MirTerminator::Call {
+                func,
+                args,
+                dest,
+                target,
+            } => {
                 let func_name = match func {
                     Operand::Constant(MirConstant::Function(name)) => name.clone(),
                     _ => "unknown".to_string(),
                 };
 
-                let arg_values: Vec<_> = args.iter()
-                    .map(|a| self.operand_to_value(a))
-                    .collect();
+                let arg_values: Vec<_> = args.iter().map(|a| self.operand_to_value(a)).collect();
 
                 let dest_temp = self.place_to_temp(dest);
                 self.emit(Inst::Call {
@@ -310,10 +333,7 @@ impl<'a> MirToIr<'a> {
 
     /// Get the IR temp for a MIR local, with fallback for missing locals
     fn get_local_temp(&self, local_id: &LocalId) -> Temp {
-        self.local_to_temp
-            .get(local_id)
-            .copied()
-            .unwrap_or(Temp(0))
+        self.local_to_temp.get(local_id).copied().unwrap_or(Temp(0))
     }
 
     fn place_to_temp(&self, place: &Place) -> Temp {
@@ -347,7 +367,7 @@ impl<'a> MirToIr<'a> {
                 match constant {
                     MirConstant::Int(v) => Value::IntConst(*v),
                     MirConstant::Float(v) => Value::IntConst(*v as i64),
-                    MirConstant::Bool(v) => Value::IntConst(if *v { 1 } else { 0 }),
+                    MirConstant::Bool(v) => Value::IntConst(i64::from(*v)),
                     MirConstant::Char(v) => Value::IntConst(*v as i64),
                     MirConstant::String(s) => {
                         // Create a label for the string
@@ -413,7 +433,17 @@ impl<'a> MirToIr<'a> {
     }
 
     fn emit(&mut self, inst: Inst) {
-        self.instructions.push(inst);
+        if let Inst::Label(label) = inst {
+            self.blocks.push(crate::ir::BasicBlock::new(label));
+        } else {
+            if self.blocks.is_empty() {
+                let entry_label = Label(format!(".L{}_entry", self.func_name));
+                self.blocks.push(crate::ir::BasicBlock::new(entry_label));
+            }
+            if let Some(block) = self.blocks.last_mut() {
+                block.insts.push(inst);
+            }
+        }
     }
 }
 
