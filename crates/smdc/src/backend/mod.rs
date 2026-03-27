@@ -121,33 +121,63 @@ pub enum ExtraMemoryType {
     Eeprom,
 }
 
-/// Output from a backend
-pub enum BackendOutput {
+/// The kind of primary output data
+pub enum OutputKind {
     /// Text output (assembly)
     Text(String),
     /// Binary output (object file or ROM)
     Binary(Vec<u8>),
 }
 
+/// Output from a backend
+pub struct BackendOutput {
+    /// Primary output data
+    pub data: OutputKind,
+    /// Additional debug files to write alongside the main output.
+    /// Each entry is (file_extension, content).
+    pub side_artifacts: Vec<(String, String)>,
+}
+
 impl BackendOutput {
-    pub fn write_to(&self, path: &Path) -> std::io::Result<()> {
-        match self {
-            BackendOutput::Text(s) => std::fs::write(path, s),
-            BackendOutput::Binary(b) => std::fs::write(path, b),
+    /// Create a text output with no side artifacts.
+    pub fn text(s: String) -> Self {
+        Self {
+            data: OutputKind::Text(s),
+            side_artifacts: Vec::new(),
         }
     }
 
+    /// Create a binary output with no side artifacts.
+    pub fn binary(b: Vec<u8>) -> Self {
+        Self {
+            data: OutputKind::Binary(b),
+            side_artifacts: Vec::new(),
+        }
+    }
+
+    pub fn write_to(&self, path: &Path) -> std::io::Result<()> {
+        match &self.data {
+            OutputKind::Text(s) => std::fs::write(path, s)?,
+            OutputKind::Binary(b) => std::fs::write(path, b)?,
+        }
+        for (ext, content) in &self.side_artifacts {
+            let side_path = path.with_extension(ext);
+            std::fs::write(&side_path, content)?;
+        }
+        Ok(())
+    }
+
     pub fn as_text(&self) -> Option<&str> {
-        match self {
-            BackendOutput::Text(s) => Some(s),
-            _ => None,
+        match &self.data {
+            OutputKind::Text(s) => Some(s),
+            OutputKind::Binary(_) => None,
         }
     }
 
     pub fn as_binary(&self) -> Option<&[u8]> {
-        match self {
-            BackendOutput::Binary(b) => Some(b),
-            _ => None,
+        match &self.data {
+            OutputKind::Binary(b) => Some(b),
+            OutputKind::Text(_) => None,
         }
     }
 }
@@ -239,7 +269,7 @@ mod tests {
             _ctx: &crate::frontend::CompileContext,
             _config: &BackendConfig,
         ) -> CompileResult<BackendOutput> {
-            Ok(BackendOutput::Text("mock".to_string()))
+            Ok(BackendOutput::text("mock".to_string()))
         }
     }
 

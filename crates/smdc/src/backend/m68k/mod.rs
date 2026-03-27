@@ -8,12 +8,14 @@ mod emit;
 mod encoder;
 mod m68k;
 pub mod sdk;
+mod symfile;
 
 pub use assembler::Assembler;
 pub use emit::CodeGenerator;
 pub use encoder::{EncodeError, InstructionEncoder};
 pub use m68k::*;
 pub use sdk::{SdkFunction, SdkFunctionKind, SdkRegistry};
+pub use symfile::generate_sym_file;
 
 use crate::backend::{Backend, BackendConfig, BackendOutput, OutputFormat};
 use crate::common::CompileResult;
@@ -58,8 +60,13 @@ impl Backend for M68kBackend {
         }
 
         let mut codegen = CodeGenerator::new();
+        if config.debug_info {
+            if let Some(di) = &module.debug_info {
+                codegen.set_debug_info(di.filename.clone(), di.source.clone());
+            }
+        }
         let asm = codegen.generate(module)?;
 
-        Ok(BackendOutput::Text(asm))
+        Ok(BackendOutput::text(asm))
     }
 }

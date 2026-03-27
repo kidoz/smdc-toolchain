@@ -15,6 +15,8 @@ pub struct IrBuilder {
     locals: HashMap<String, Temp>,
     break_label: Option<Label>,
     continue_label: Option<Label>,
+    /// Current source span — automatically attached to emitted instructions
+    current_span: Option<crate::common::Span>,
 }
 
 impl IrBuilder {
@@ -28,6 +30,7 @@ impl IrBuilder {
             locals: HashMap::new(),
             break_label: None,
             continue_label: None,
+            current_span: None,
         }
     }
 
@@ -52,6 +55,16 @@ impl IrBuilder {
     }
 
     fn emit(&mut self, inst: Inst) {
+        // Labels don't carry source spans
+        let span = if matches!(inst, Inst::Label(_)) {
+            None
+        } else {
+            self.current_span
+        };
+        self.emit_spanned(inst, span);
+    }
+
+    fn emit_spanned(&mut self, inst: Inst, span: Option<crate::common::Span>) {
         if let Some(func) = &mut self.current_func {
             if let Inst::Label(label) = inst {
                 func.blocks.push(BasicBlock::new(label));
@@ -61,7 +74,7 @@ impl IrBuilder {
                     func.blocks.push(BasicBlock::new(entry_label));
                 }
                 if let Some(block) = func.blocks.last_mut() {
-                    block.insts.push(inst);
+                    block.insts.push(SpannedInst::new(inst, span));
                 }
             }
         }
@@ -340,6 +353,7 @@ impl IrBuilder {
         if func.body.is_none() {
             return Ok(()); // Skip declarations without body
         }
+        self.current_span = Some(func.span);
 
         let params: Vec<(String, crate::types::IrType)> = func
             .params
@@ -411,6 +425,7 @@ impl IrBuilder {
     }
 
     fn build_local_var(&mut self, var: &VarDecl) -> CompileResult<()> {
+        self.current_span = Some(var.span);
         let temp = self.new_temp();
         self.locals.insert(var.name.clone(), temp);
 
@@ -440,6 +455,7 @@ impl IrBuilder {
     }
 
     fn build_stmt(&mut self, stmt: &Stmt) -> CompileResult<()> {
+        self.current_span = Some(stmt.span);
         match &stmt.kind {
             StmtKind::Expr(expr) => {
                 self.build_expr(expr)?;
@@ -786,6 +802,7 @@ impl IrBuilder {
     }
 
     fn build_expr(&mut self, expr: &Expr) -> CompileResult<Value> {
+        self.current_span = Some(expr.span);
         match &expr.kind {
             ExprKind::IntLiteral(n) => Ok(Value::IntConst(*n)),
 

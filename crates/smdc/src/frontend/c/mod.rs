@@ -135,13 +135,18 @@ impl Frontend for CFrontend {
         }
 
         let mut ir_builder = crate::ir::IrBuilder::new();
-        let ir_module = match ir_builder.build(&ast) {
+        let mut ir_module = match ir_builder.build(&ast) {
             Ok(m) => m,
             Err(e) => {
                 ctx.reporter.report_error(ctx.file_id, &e);
                 return Err(e);
             }
         };
+
+        ir_module.debug_info = Some(crate::ir::DebugInfo {
+            filename: ctx.filename.clone(),
+            source: source.to_string(),
+        });
 
         Ok(ir_module)
     }

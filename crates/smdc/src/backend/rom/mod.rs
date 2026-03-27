@@ -16,10 +16,11 @@ pub use checksum::{calculate_checksum, update_checksum, verify_checksum};
 pub use header::RomHeader;
 pub use vectors::VectorTable;
 
-use crate::backend::m68k::{Assembler, CodeGenerator};
+use crate::backend::m68k::{Assembler, CodeGenerator, generate_sym_file};
 use crate::backend::{Backend, BackendConfig, BackendOutput, OutputFormat, RomConfig};
 use crate::common::{CompileError, CompileResult};
 use crate::ir::IrModule;
+use std::collections::HashMap;
 
 /// ROM builder backend
 ///
@@ -46,10 +47,22 @@ impl RomBackend {
         self.rom_config = config;
     }
 
-    /// Build a ROM from the given IR module
-    pub fn build_rom(&self, module: &IrModule) -> CompileResult<Vec<u8>> {
+    /// Build a ROM from the given IR module.
+    ///
+    /// Returns the ROM binary and optionally the assembler symbol table
+    /// (when `config.debug_info` is true, for `.sym` file generation).
+    pub fn build_rom(
+        &self,
+        module: &IrModule,
+        config: &BackendConfig,
+    ) -> CompileResult<(Vec<u8>, Option<HashMap<String, u32>>)> {
         // 1. Generate M68k instructions from IR
         let mut codegen = CodeGenerator::new();
+        if config.debug_info {
+            if let Some(di) = &module.debug_info {
+                codegen.set_debug_info(di.filename.clone(), di.source.clone());
+            }
+        }
         let instructions = codegen.generate_instructions(module)?;
 
         // 2. Assemble to binary (code starts at 0x200 after header)
@@ -58,10 +71,18 @@ impl RomBackend {
             .assemble(&instructions)
             .map_err(|e| CompileError::backend(format!("assembly error: {e}")))?;
 
+        let symbols = if config.debug_info {
+            Some(assembler.symbols().clone())
+        } else {
+            None
+        };
+
         // 3. Build ROM with actual code
         let mut builder = RomBuilder::new(self.rom_config.clone());
         builder.set_code(code_binary);
-        builder.build()
+        let rom = builder.build()?;
+
+        Ok((rom, symbols))
     }
 }
 
@@ -100,12 +121,20 @@ impl Backend for RomBackend {
             eprintln!("Building Sega Megadrive/Genesis ROM...");
         }
 
-        let rom = self.build_rom(module)?;
+        let (rom, symbols) = self.build_rom(module, config)?;
 
         if config.verbose {
             eprintln!("ROM size: {} bytes ({} KB)", rom.len(), rom.len() / 1024);
         }
 
-        Ok(BackendOutput::Binary(rom))
+        let mut output = BackendOutput::binary(rom);
+
+        // Generate .sym file when debug info is enabled
+        if let Some(sym_table) = symbols {
+            let sym_content = generate_sym_file(&sym_table);
+            output.side_artifacts.push(("sym".to_string(), sym_content));
+        }
+
+        Ok(output)
     }
 }

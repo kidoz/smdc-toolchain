@@ -271,11 +271,34 @@ impl std::fmt::Display for Inst {
     }
 }
 
+/// An IR instruction paired with an optional source location
+#[derive(Debug, Clone)]
+pub struct SpannedInst {
+    pub inst: Inst,
+    pub span: Option<crate::common::Span>,
+}
+
+impl SpannedInst {
+    pub fn new(inst: Inst, span: Option<crate::common::Span>) -> Self {
+        Self { inst, span }
+    }
+
+    pub fn bare(inst: Inst) -> Self {
+        Self { inst, span: None }
+    }
+}
+
+impl std::fmt::Display for SpannedInst {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.inst)
+    }
+}
+
 /// A basic block in the IR
 #[derive(Debug, Clone)]
 pub struct BasicBlock {
     pub label: Label,
-    pub insts: Vec<Inst>,
+    pub insts: Vec<SpannedInst>,
 }
 
 impl BasicBlock {
@@ -290,8 +313,8 @@ impl BasicBlock {
 impl std::fmt::Display for BasicBlock {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "{}:", self.label)?;
-        for inst in &self.insts {
-            writeln!(f, "{inst}")?;
+        for sinst in &self.insts {
+            writeln!(f, "{sinst}")?;
         }
         Ok(())
     }
@@ -337,12 +360,23 @@ pub struct IrGlobal {
     pub init: Option<Vec<u8>>,
 }
 
+/// Source-level debug information attached to an IR module
+#[derive(Debug, Clone)]
+pub struct DebugInfo {
+    /// Source filename
+    pub filename: String,
+    /// Full source text (for byte-offset → line mapping)
+    pub source: String,
+}
+
 /// IR module (translation unit)
 #[derive(Debug, Clone)]
 pub struct IrModule {
     pub functions: Vec<IrFunction>,
     pub globals: Vec<IrGlobal>,
     pub strings: Vec<(Label, String)>,
+    /// Debug information from the frontend (populated when available)
+    pub debug_info: Option<DebugInfo>,
 }
 
 impl IrModule {
@@ -351,6 +385,7 @@ impl IrModule {
             functions: Vec::new(),
             globals: Vec::new(),
             strings: Vec::new(),
+            debug_info: None,
         }
     }
 }
@@ -385,8 +420,9 @@ mod tests {
     #[test]
     fn test_basic_block_display() {
         let mut bb = BasicBlock::new(Label("L_test".to_string()));
-        bb.insts.push(Inst::Comment("test comment".to_string()));
-        bb.insts.push(Inst::Return(None));
+        bb.insts
+            .push(SpannedInst::bare(Inst::Comment("test comment".to_string())));
+        bb.insts.push(SpannedInst::bare(Inst::Return(None)));
 
         let output = format!("{bb}");
         assert!(output.contains("L_test:"));
@@ -403,7 +439,7 @@ mod tests {
         );
 
         let mut bb = BasicBlock::new(Label("entry".to_string()));
-        bb.insts.push(Inst::Return(None));
+        bb.insts.push(SpannedInst::bare(Inst::Return(None)));
         func.blocks.push(bb);
 
         let output = format!("{func}");
@@ -429,6 +465,39 @@ mod tests {
         let output = format!("{module}");
         assert!(output.contains("global g_var:"));
         assert!(output.contains("str_1: \"hello world\""));
+        assert!(module.debug_info.is_none());
+    }
+
+    #[test]
+    fn test_spanned_inst_with_span() {
+        let span = crate::common::Span::new(10, 20);
+        let sinst = SpannedInst::new(
+            Inst::Copy {
+                dst: Temp(0),
+                src: Value::IntConst(42),
+            },
+            Some(span),
+        );
+        assert_eq!(sinst.span, Some(span));
+        assert_eq!(format!("{sinst}"), "  t0 = 42");
+    }
+
+    #[test]
+    fn test_spanned_inst_bare() {
+        let sinst = SpannedInst::bare(Inst::Return(None));
+        assert!(sinst.span.is_none());
+        assert_eq!(format!("{sinst}"), "  return");
+    }
+
+    #[test]
+    fn test_debug_info() {
+        let mut module = IrModule::new();
+        module.debug_info = Some(DebugInfo {
+            filename: "test.c".to_string(),
+            source: "int main() { return 0; }".to_string(),
+        });
+        let di = module.debug_info.as_ref().unwrap();
+        assert_eq!(di.filename, "test.c");
     }
 
     #[test]

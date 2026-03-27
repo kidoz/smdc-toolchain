@@ -180,11 +180,7 @@ fn registry_inline_vs_library_classification() {
     ];
     for name in &inline_funcs {
         let f = reg.lookup(name).unwrap();
-        assert_eq!(
-            f.kind,
-            SdkFunctionKind::Inline,
-            "'{name}' should be Inline"
-        );
+        assert_eq!(f.kind, SdkFunctionKind::Inline, "'{name}' should be Inline");
     }
 
     // Library functions
@@ -280,10 +276,11 @@ fn inline_generate_vdp_set_reg() {
     let insts = SdkInlineGenerator::generate("vdp_set_reg").unwrap();
     assert!(!insts.is_empty());
     // Should contain a write to VDP_CTRL
-    assert!(insts.iter().any(|i| matches!(
-        i,
-        M68kInst::Move(Size::Word, _, Operand::AbsLong(VDP_CTRL))
-    )));
+    assert!(
+        insts
+            .iter()
+            .any(|i| matches!(i, M68kInst::Move(Size::Word, _, Operand::AbsLong(VDP_CTRL))))
+    );
 }
 
 #[test]
@@ -293,7 +290,11 @@ fn inline_generate_vdp_get_status() {
     // Should read from VDP_CTRL into D0
     assert!(matches!(
         &insts[0],
-        M68kInst::Move(Size::Word, Operand::AbsLong(VDP_CTRL), Operand::DataReg(DataReg::D0))
+        M68kInst::Move(
+            Size::Word,
+            Operand::AbsLong(VDP_CTRL),
+            Operand::DataReg(DataReg::D0)
+        )
     ));
 }
 
@@ -318,7 +319,11 @@ fn inline_generate_psg_write() {
     assert_eq!(insts.len(), 1);
     assert!(matches!(
         &insts[0],
-        M68kInst::Move(Size::Byte, Operand::DataReg(DataReg::D0), Operand::AbsLong(PSG_PORT))
+        M68kInst::Move(
+            Size::Byte,
+            Operand::DataReg(DataReg::D0),
+            Operand::AbsLong(PSG_PORT)
+        )
     ));
 }
 
@@ -326,22 +331,28 @@ fn inline_generate_psg_write() {
 fn inline_generate_joy1_read() {
     let insts = SdkInlineGenerator::generate("joy1_read").unwrap();
     // Should read from joystick 1 port
-    assert!(insts
-        .iter()
-        .any(|i| matches!(i, M68kInst::Move(Size::Byte, Operand::AbsLong(0xA10003), _))));
+    assert!(
+        insts
+            .iter()
+            .any(|i| matches!(i, M68kInst::Move(Size::Byte, Operand::AbsLong(0xA10003), _)))
+    );
     // Should invert bits
-    assert!(insts
-        .iter()
-        .any(|i| matches!(i, M68kInst::Not(Size::Byte, _))));
+    assert!(
+        insts
+            .iter()
+            .any(|i| matches!(i, M68kInst::Not(Size::Byte, _)))
+    );
 }
 
 #[test]
 fn inline_generate_joy2_read() {
     let insts = SdkInlineGenerator::generate("joy2_read").unwrap();
     // Should read from joystick 2 port
-    assert!(insts
-        .iter()
-        .any(|i| matches!(i, M68kInst::Move(Size::Byte, Operand::AbsLong(0xA10005), _))));
+    assert!(
+        insts
+            .iter()
+            .any(|i| matches!(i, M68kInst::Move(Size::Byte, Operand::AbsLong(0xA10005), _)))
+    );
 }
 
 #[test]
@@ -447,7 +458,12 @@ fn library_generate_psg_stop_silences_all_channels() {
     // Should write 4 silence bytes (0x9F, 0xBF, 0xDF, 0xFF)
     let psg_writes: Vec<_> = insts
         .iter()
-        .filter(|i| matches!(i, M68kInst::Move(Size::Byte, Operand::Imm(_), Operand::AbsLong(PSG_PORT))))
+        .filter(|i| {
+            matches!(
+                i,
+                M68kInst::Move(Size::Byte, Operand::Imm(_), Operand::AbsLong(PSG_PORT))
+            )
+        })
         .collect();
     assert_eq!(psg_writes.len(), 4);
 }

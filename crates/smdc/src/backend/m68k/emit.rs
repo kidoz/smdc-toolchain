@@ -26,6 +26,12 @@ pub struct CodeGenerator {
     pending_sdk_functions: HashSet<String>,
     /// Set of user-defined functions (to avoid SDK conflicts)
     defined_functions: HashSet<String>,
+    /// Whether to emit debug source comments
+    debug_enabled: bool,
+    /// Source filename for debug comments
+    debug_filename: String,
+    /// Source text for byte-offset → line mapping
+    debug_source: String,
 }
 
 impl CodeGenerator {
@@ -39,6 +45,9 @@ impl CodeGenerator {
             sdk_registry: SdkRegistry::new(),
             pending_sdk_functions: HashSet::new(),
             defined_functions: HashSet::new(),
+            debug_enabled: false,
+            debug_filename: String::new(),
+            debug_source: String::new(),
         }
     }
 
@@ -56,11 +65,20 @@ impl CodeGenerator {
         Ok(result)
     }
 
+    /// Enable debug output (source comments in assembly)
+    pub fn set_debug_info(&mut self, filename: String, source: String) {
+        self.debug_enabled = true;
+        self.debug_filename = filename;
+        self.debug_source = source;
+    }
+
     /// Generate M68k instructions from IR module (for binary output)
     pub fn generate_instructions(&mut self, module: &IrModule) -> CompileResult<Vec<M68kInst>> {
         self.output.clear();
         self.pending_sdk_functions.clear();
         self.defined_functions.clear();
+
+        // Debug info is configured externally via set_debug_info() before calling this
 
         // Track all user-defined functions to avoid SDK conflicts
         for func in &module.functions {
@@ -465,8 +483,8 @@ impl CodeGenerator {
         // Count how many temps we need
         let mut max_temp = 0u32;
         for block in &func.blocks {
-            for inst in &block.insts {
-                match inst {
+            for sinst in &block.insts {
+                match &sinst.inst {
                     Inst::Copy { dst, .. }
                     | Inst::Unary { dst, .. }
                     | Inst::Binary { dst, .. }
@@ -514,10 +532,25 @@ impl CodeGenerator {
         ));
 
         // Generate body
+        let mut last_debug_line: usize = 0;
         for block in &func.blocks {
             self.emit(M68kInst::Label(block.label.0.clone()));
-            for inst in &block.insts {
-                self.generate_inst(inst)?;
+            for sinst in &block.insts {
+                // Emit source line comment when the line changes
+                if self.debug_enabled {
+                    if let Some(span) = sinst.span {
+                        let line =
+                            crate::common::byte_offset_to_line(&self.debug_source, span.start);
+                        if line != last_debug_line {
+                            last_debug_line = line;
+                            self.emit(M68kInst::Comment(format!(
+                                "{}:{}",
+                                self.debug_filename, line
+                            )));
+                        }
+                    }
+                }
+                self.generate_inst(&sinst.inst)?;
             }
         }
 

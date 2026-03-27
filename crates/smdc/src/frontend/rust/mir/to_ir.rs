@@ -441,7 +441,7 @@ impl<'a> MirToIr<'a> {
                 self.blocks.push(crate::ir::BasicBlock::new(entry_label));
             }
             if let Some(block) = self.blocks.last_mut() {
-                block.insts.push(inst);
+                block.insts.push(crate::ir::SpannedInst::bare(inst));
             }
         }
     }

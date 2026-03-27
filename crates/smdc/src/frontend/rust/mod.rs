@@ -178,6 +178,11 @@ impl Frontend for RustFrontend {
             }
         }
 
+        ir_module.debug_info = Some(crate::ir::DebugInfo {
+            filename: ctx.filename.clone(),
+            source: source.to_string(),
+        });
+
         Ok(ir_module)
     }
 
