@@ -30,6 +30,10 @@ pub const YM_DATA0: u32 = 0xA04001;
 pub const YM_ADDR1: u32 = 0xA04002;
 pub const YM_DATA1: u32 = 0xA04003;
 
+/// SRAM (battery-backed save RAM)
+pub const SRAM_CTRL: u32 = 0xA130F1;
+pub const SRAM_BASE: u32 = 0x200001; // Odd-byte addressing
+
 // ============================================================================
 // SDK Function Classification
 // ============================================================================
@@ -51,6 +55,8 @@ pub enum SdkCategory {
     Input,
     Ym2612,
     Psg,
+    Util,
+    Sram,
 }
 
 /// SDK function definition

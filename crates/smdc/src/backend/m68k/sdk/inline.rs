@@ -1,6 +1,8 @@
 //! Inline code generation for simple SDK functions
 
-use super::{PSG_PORT, VDP_CTRL, VDP_DATA, YM_ADDR0, YM_ADDR1, YM_DATA0, YM_DATA1};
+use super::{
+    PSG_PORT, SRAM_BASE, SRAM_CTRL, VDP_CTRL, VDP_DATA, YM_ADDR0, YM_ADDR1, YM_DATA0, YM_DATA1,
+};
 use crate::backend::m68k::m68k::*;
 
 /// Generates inline M68k instructions for simple SDK functions
@@ -43,6 +45,19 @@ impl SdkInlineGenerator {
             // Input inline functions
             "joy1_read" => Self::gen_joy1_read(),
             "joy2_read" => Self::gen_joy2_read(),
+
+            // Util inline functions
+            "abs_val" => Self::gen_abs_val(),
+
+            // VDP window inline functions
+            "vdp_set_window_x" => Self::gen_vdp_set_window_x(),
+            "vdp_set_window_y" => Self::gen_vdp_set_window_y(),
+
+            // SRAM inline functions
+            "sram_enable" => Self::gen_sram_enable(),
+            "sram_disable" => Self::gen_sram_disable(),
+            "sram_read_byte" => Self::gen_sram_read_byte(),
+            "sram_write_byte" => Self::gen_sram_write_byte(),
 
             _ => {
                 return Err(crate::common::CompileError::codegen(format!(
@@ -509,6 +524,124 @@ impl SdkInlineGenerator {
             // Invert bits (active low -> active high)
             M68kInst::Not(Size::Byte, Operand::DataReg(DataReg::D0)),
             M68kInst::Andi(Size::Long, 0xFF, Operand::DataReg(DataReg::D0)),
+        ]
+    }
+
+    // -------------------------------------------------------------------------
+    // Util Inline Functions
+    // -------------------------------------------------------------------------
+
+    /// abs_val(x) -> |x|
+    /// Args: D0 = x, Returns: D0 = |x|
+    fn gen_abs_val() -> Vec<M68kInst> {
+        vec![
+            M68kInst::Tst(Size::Long, Operand::DataReg(DataReg::D0)),
+            M68kInst::Bcc(Cond::Ge, ".abs_done".to_string()),
+            M68kInst::Neg(Size::Long, Operand::DataReg(DataReg::D0)),
+            M68kInst::Label(".abs_done".to_string()),
+        ]
+    }
+
+    // -------------------------------------------------------------------------
+    // VDP Window Inline Functions
+    // -------------------------------------------------------------------------
+
+    /// vdp_set_window_x(cells) -> set window H position via VDP register 17
+    /// Args: D0 = cells
+    fn gen_vdp_set_window_x() -> Vec<M68kInst> {
+        vec![
+            M68kInst::Andi(Size::Word, 0x1F, Operand::DataReg(DataReg::D0)),
+            M68kInst::Ori(Size::Word, 0x9100, Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::DataReg(DataReg::D0),
+                Operand::AbsLong(VDP_CTRL),
+            ),
+        ]
+    }
+
+    /// vdp_set_window_y(cells) -> set window V position via VDP register 18
+    /// Args: D0 = cells
+    fn gen_vdp_set_window_y() -> Vec<M68kInst> {
+        vec![
+            M68kInst::Andi(Size::Word, 0x1F, Operand::DataReg(DataReg::D0)),
+            M68kInst::Ori(Size::Word, 0x9200, Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::DataReg(DataReg::D0),
+                Operand::AbsLong(VDP_CTRL),
+            ),
+        ]
+    }
+
+    // -------------------------------------------------------------------------
+    // SRAM Inline Functions
+    // -------------------------------------------------------------------------
+
+    /// sram_enable() -> write 0x01 to SRAM control register
+    fn gen_sram_enable() -> Vec<M68kInst> {
+        vec![M68kInst::Move(
+            Size::Byte,
+            Operand::Imm(0x01),
+            Operand::AbsLong(SRAM_CTRL),
+        )]
+    }
+
+    /// sram_disable() -> write 0x00 to SRAM control register
+    fn gen_sram_disable() -> Vec<M68kInst> {
+        vec![M68kInst::Move(
+            Size::Byte,
+            Operand::Imm(0x00),
+            Operand::AbsLong(SRAM_CTRL),
+        )]
+    }
+
+    /// sram_read_byte(offset) -> read byte from SRAM at odd address
+    /// Args: D0 = offset, Returns: D0 = byte value
+    fn gen_sram_read_byte() -> Vec<M68kInst> {
+        vec![
+            // addr = SRAM_BASE + offset * 2
+            M68kInst::Add(
+                Size::Long,
+                Operand::DataReg(DataReg::D0),
+                Operand::DataReg(DataReg::D0),
+            ),
+            M68kInst::Addi(Size::Long, SRAM_BASE as i32, Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::DataReg(DataReg::D0),
+                Operand::AddrReg(AddrReg::A0),
+            ),
+            M68kInst::Clr(Size::Long, Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(
+                Size::Byte,
+                Operand::AddrInd(AddrReg::A0),
+                Operand::DataReg(DataReg::D0),
+            ),
+        ]
+    }
+
+    /// sram_write_byte(offset, value) -> write byte to SRAM at odd address
+    /// Args: D0 = offset, D1 = value
+    fn gen_sram_write_byte() -> Vec<M68kInst> {
+        vec![
+            // addr = SRAM_BASE + offset * 2
+            M68kInst::Add(
+                Size::Long,
+                Operand::DataReg(DataReg::D0),
+                Operand::DataReg(DataReg::D0),
+            ),
+            M68kInst::Addi(Size::Long, SRAM_BASE as i32, Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::DataReg(DataReg::D0),
+                Operand::AddrReg(AddrReg::A0),
+            ),
+            M68kInst::Move(
+                Size::Byte,
+                Operand::DataReg(DataReg::D1),
+                Operand::AddrInd(AddrReg::A0),
+            ),
         ]
     }
 }

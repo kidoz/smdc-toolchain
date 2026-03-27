@@ -1,6 +1,6 @@
 //! Library code generation for complex SDK functions
 
-use super::{PSG_PORT, VDP_CTRL, VDP_DATA, YM_ADDR0};
+use super::{PSG_PORT, SRAM_BASE, VDP_CTRL, VDP_DATA, YM_ADDR0};
 use crate::backend::m68k::m68k::*;
 
 /// Generates full M68k function bodies for complex SDK functions
@@ -81,6 +81,27 @@ impl SdkLibraryGenerator {
             "input_pressed" => self.gen_input_pressed(),
             "input_released" => self.gen_input_released(),
             "input_is_6button" => self.gen_input_is_6button(),
+
+            // Util library functions
+            "mem_copy" => self.gen_mem_copy(),
+            "mem_set" => self.gen_mem_set(),
+            "rand_next" => self.gen_rand_next(),
+            "rand_seed" => self.gen_rand_seed(),
+
+            // VDP DMA library functions
+            "vdp_dma_transfer" => self.gen_vdp_dma_transfer(),
+            "vdp_dma_fill" => self.gen_vdp_dma_fill(),
+            "vdp_dma_copy" => self.gen_vdp_dma_copy(),
+
+            // VDP window library functions
+            "vdp_set_tile_w" => self.gen_vdp_set_tile_w(),
+
+            // Collision library functions
+            "rect_overlap" => self.gen_rect_overlap(),
+
+            // SRAM library functions
+            "sram_read" => self.gen_sram_read(),
+            "sram_write" => self.gen_sram_write(),
 
             _ => {
                 // For unimplemented functions, generate a stub
@@ -1722,6 +1743,702 @@ impl SdkLibraryGenerator {
         vec![
             M68kInst::Label("input_is_6button".to_string()),
             M68kInst::Moveq(0, DataReg::D0),
+            M68kInst::Rts,
+        ]
+    }
+
+    // -------------------------------------------------------------------------
+    // Util Library Functions
+    // -------------------------------------------------------------------------
+
+    fn gen_mem_copy(&mut self) -> Vec<M68kInst> {
+        // Args: 8(a6)=dst, 12(a6)=src, 16(a6)=len
+        let loop_label = self.next_label("mcpy_loop");
+        vec![
+            M68kInst::Label("mem_copy".to_string()),
+            M68kInst::Link(AddrReg::A6, 0),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(8, AddrReg::A6),
+                Operand::AddrReg(AddrReg::A1),
+            ),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(12, AddrReg::A6),
+                Operand::AddrReg(AddrReg::A0),
+            ),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(16, AddrReg::A6),
+                Operand::DataReg(DataReg::D0),
+            ),
+            M68kInst::Subq(Size::Long, 1, Operand::DataReg(DataReg::D0)),
+            M68kInst::Bcc(Cond::Mi, ".mcpy_done".to_string()),
+            M68kInst::Label(loop_label.clone()),
+            M68kInst::Move(
+                Size::Byte,
+                Operand::PostInc(AddrReg::A0),
+                Operand::PostInc(AddrReg::A1),
+            ),
+            M68kInst::Dbf(DataReg::D0, loop_label),
+            M68kInst::Label(".mcpy_done".to_string()),
+            M68kInst::Unlk(AddrReg::A6),
+            M68kInst::Rts,
+        ]
+    }
+
+    fn gen_mem_set(&mut self) -> Vec<M68kInst> {
+        // Args: 8(a6)=dst, 12(a6)=value, 16(a6)=len
+        let loop_label = self.next_label("mset_loop");
+        vec![
+            M68kInst::Label("mem_set".to_string()),
+            M68kInst::Link(AddrReg::A6, 0),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(8, AddrReg::A6),
+                Operand::AddrReg(AddrReg::A0),
+            ),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(12, AddrReg::A6),
+                Operand::DataReg(DataReg::D1),
+            ),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(16, AddrReg::A6),
+                Operand::DataReg(DataReg::D0),
+            ),
+            M68kInst::Subq(Size::Long, 1, Operand::DataReg(DataReg::D0)),
+            M68kInst::Bcc(Cond::Mi, ".mset_done".to_string()),
+            M68kInst::Label(loop_label.clone()),
+            M68kInst::Move(
+                Size::Byte,
+                Operand::DataReg(DataReg::D1),
+                Operand::PostInc(AddrReg::A0),
+            ),
+            M68kInst::Dbf(DataReg::D0, loop_label),
+            M68kInst::Label(".mset_done".to_string()),
+            M68kInst::Unlk(AddrReg::A6),
+            M68kInst::Rts,
+        ]
+    }
+
+    fn gen_rand_next(&mut self) -> Vec<M68kInst> {
+        // Simple LCG: state = state * 1103515245 + 12345
+        // Returns (state >> 16) & 0x7FFF
+        // 68000 only has 16x16->32 MULU, so we decompose the multiply
+        // multiplier = 1103515245 = 0x41C6_4E6D
+        // hi16 = 0x41C6, lo16 = 0x4E6D
+        vec![
+            M68kInst::Label("rand_next".to_string()),
+            M68kInst::Lea(Operand::Label("__sdk_rand_state".to_string()), AddrReg::A0),
+            M68kInst::Move(
+                Size::Long,
+                Operand::AddrInd(AddrReg::A0),
+                Operand::DataReg(DataReg::D0),
+            ),
+            // Multiply state by 0x4E6D (low 16 bits of multiplier)
+            M68kInst::Move(
+                Size::Long,
+                Operand::DataReg(DataReg::D0),
+                Operand::DataReg(DataReg::D1),
+            ),
+            M68kInst::Mulu(Operand::Imm(0x4E6D), DataReg::D0),
+            // state.hi * 0x4E6D
+            M68kInst::Swap(DataReg::D1),
+            M68kInst::Mulu(Operand::Imm(0x4E6D), DataReg::D1),
+            M68kInst::Swap(DataReg::D1),
+            M68kInst::Clr(Size::Word, Operand::DataReg(DataReg::D1)),
+            M68kInst::Add(
+                Size::Long,
+                Operand::DataReg(DataReg::D1),
+                Operand::DataReg(DataReg::D0),
+            ),
+            // state.lo * 0x41C6
+            M68kInst::Move(
+                Size::Long,
+                Operand::AddrInd(AddrReg::A0),
+                Operand::DataReg(DataReg::D1),
+            ),
+            M68kInst::Mulu(Operand::Imm(0x41C6), DataReg::D1),
+            M68kInst::Swap(DataReg::D1),
+            M68kInst::Clr(Size::Word, Operand::DataReg(DataReg::D1)),
+            M68kInst::Add(
+                Size::Long,
+                Operand::DataReg(DataReg::D1),
+                Operand::DataReg(DataReg::D0),
+            ),
+            // Add constant 12345
+            M68kInst::Addi(Size::Long, 12345, Operand::DataReg(DataReg::D0)),
+            // Store new state
+            M68kInst::Move(
+                Size::Long,
+                Operand::DataReg(DataReg::D0),
+                Operand::AddrInd(AddrReg::A0),
+            ),
+            // Return (state >> 16) & 0x7FFF
+            M68kInst::Swap(DataReg::D0),
+            M68kInst::Andi(Size::Long, 0x7FFF, Operand::DataReg(DataReg::D0)),
+            M68kInst::Rts,
+        ]
+    }
+
+    fn gen_rand_seed(&mut self) -> Vec<M68kInst> {
+        // Arg: 4(a7)=seed
+        vec![
+            M68kInst::Label("rand_seed".to_string()),
+            M68kInst::Lea(Operand::Label("__sdk_rand_state".to_string()), AddrReg::A0),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(4, AddrReg::A7),
+                Operand::AddrInd(AddrReg::A0),
+            ),
+            M68kInst::Rts,
+        ]
+    }
+
+    // -------------------------------------------------------------------------
+    // VDP DMA Library Functions
+    // -------------------------------------------------------------------------
+
+    fn gen_vdp_dma_transfer(&mut self) -> Vec<M68kInst> {
+        // Args: 8(a6)=src (68k address), 12(a6)=dst (VRAM address), 16(a6)=len (words)
+        // DMA from 68k bus to VRAM: regs 19-23, then command word
+        vec![
+            M68kInst::Label("vdp_dma_transfer".to_string()),
+            M68kInst::Link(AddrReg::A6, 0),
+            M68kInst::Lea(Operand::AbsLong(VDP_CTRL), AddrReg::A0),
+            // Set DMA length (regs 19-20)
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(16, AddrReg::A6),
+                Operand::DataReg(DataReg::D0),
+            ),
+            M68kInst::Move(
+                Size::Long,
+                Operand::DataReg(DataReg::D0),
+                Operand::DataReg(DataReg::D1),
+            ),
+            M68kInst::Andi(Size::Word, 0xFF, Operand::DataReg(DataReg::D0)),
+            M68kInst::Ori(Size::Word, 0x9300, Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::DataReg(DataReg::D0),
+                Operand::AddrInd(AddrReg::A0),
+            ),
+            M68kInst::Lsr(Size::Long, Operand::Imm(8), DataReg::D1),
+            M68kInst::Andi(Size::Word, 0xFF, Operand::DataReg(DataReg::D1)),
+            M68kInst::Ori(Size::Word, 0x9400, Operand::DataReg(DataReg::D1)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::DataReg(DataReg::D1),
+                Operand::AddrInd(AddrReg::A0),
+            ),
+            // Set DMA source (regs 21-23), source >> 1 for word addressing
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(8, AddrReg::A6),
+                Operand::DataReg(DataReg::D0),
+            ),
+            M68kInst::Lsr(Size::Long, Operand::Imm(1), DataReg::D0),
+            M68kInst::Move(
+                Size::Long,
+                Operand::DataReg(DataReg::D0),
+                Operand::DataReg(DataReg::D1),
+            ),
+            M68kInst::Andi(Size::Word, 0xFF, Operand::DataReg(DataReg::D1)),
+            M68kInst::Ori(Size::Word, 0x9500, Operand::DataReg(DataReg::D1)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::DataReg(DataReg::D1),
+                Operand::AddrInd(AddrReg::A0),
+            ),
+            M68kInst::Lsr(Size::Long, Operand::Imm(8), DataReg::D0),
+            M68kInst::Move(
+                Size::Long,
+                Operand::DataReg(DataReg::D0),
+                Operand::DataReg(DataReg::D1),
+            ),
+            M68kInst::Andi(Size::Word, 0xFF, Operand::DataReg(DataReg::D1)),
+            M68kInst::Ori(Size::Word, 0x9600, Operand::DataReg(DataReg::D1)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::DataReg(DataReg::D1),
+                Operand::AddrInd(AddrReg::A0),
+            ),
+            M68kInst::Lsr(Size::Long, Operand::Imm(8), DataReg::D0),
+            M68kInst::Andi(Size::Word, 0x7F, Operand::DataReg(DataReg::D0)),
+            M68kInst::Ori(Size::Word, 0x9700, Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::DataReg(DataReg::D0),
+                Operand::AddrInd(AddrReg::A0),
+            ),
+            // Write DMA command word: VRAM write with DMA bit set
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(12, AddrReg::A6),
+                Operand::DataReg(DataReg::D0),
+            ),
+            M68kInst::Move(
+                Size::Long,
+                Operand::DataReg(DataReg::D0),
+                Operand::DataReg(DataReg::D1),
+            ),
+            M68kInst::Andi(Size::Word, 0x3FFF, Operand::DataReg(DataReg::D1)),
+            M68kInst::Ori(Size::Word, 0x4000, Operand::DataReg(DataReg::D1)),
+            M68kInst::Swap(DataReg::D1),
+            M68kInst::Lsr(Size::Long, Operand::Imm(14), DataReg::D0),
+            M68kInst::Andi(Size::Word, 0x03, Operand::DataReg(DataReg::D0)),
+            M68kInst::Ori(Size::Word, 0x0080, Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::DataReg(DataReg::D0),
+                Operand::DataReg(DataReg::D1),
+            ),
+            M68kInst::Move(
+                Size::Long,
+                Operand::DataReg(DataReg::D1),
+                Operand::AddrInd(AddrReg::A0),
+            ),
+            M68kInst::Unlk(AddrReg::A6),
+            M68kInst::Rts,
+        ]
+    }
+
+    fn gen_vdp_dma_fill(&mut self) -> Vec<M68kInst> {
+        // Args: 8(a6)=dst (VRAM address), 12(a6)=value, 16(a6)=len (bytes)
+        vec![
+            M68kInst::Label("vdp_dma_fill".to_string()),
+            M68kInst::Link(AddrReg::A6, 0),
+            M68kInst::Lea(Operand::AbsLong(VDP_CTRL), AddrReg::A0),
+            // Set DMA length
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(16, AddrReg::A6),
+                Operand::DataReg(DataReg::D0),
+            ),
+            M68kInst::Move(
+                Size::Long,
+                Operand::DataReg(DataReg::D0),
+                Operand::DataReg(DataReg::D1),
+            ),
+            M68kInst::Andi(Size::Word, 0xFF, Operand::DataReg(DataReg::D0)),
+            M68kInst::Ori(Size::Word, 0x9300, Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::DataReg(DataReg::D0),
+                Operand::AddrInd(AddrReg::A0),
+            ),
+            M68kInst::Lsr(Size::Long, Operand::Imm(8), DataReg::D1),
+            M68kInst::Andi(Size::Word, 0xFF, Operand::DataReg(DataReg::D1)),
+            M68kInst::Ori(Size::Word, 0x9400, Operand::DataReg(DataReg::D1)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::DataReg(DataReg::D1),
+                Operand::AddrInd(AddrReg::A0),
+            ),
+            // Set DMA mode to fill (reg 23 bit 7 = 1)
+            M68kInst::Move(
+                Size::Word,
+                Operand::Imm(0x9780_u16 as i32),
+                Operand::AddrInd(AddrReg::A0),
+            ),
+            // Write VRAM DMA command word
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(8, AddrReg::A6),
+                Operand::DataReg(DataReg::D0),
+            ),
+            M68kInst::Move(
+                Size::Long,
+                Operand::DataReg(DataReg::D0),
+                Operand::DataReg(DataReg::D1),
+            ),
+            M68kInst::Andi(Size::Word, 0x3FFF, Operand::DataReg(DataReg::D1)),
+            M68kInst::Ori(Size::Word, 0x4000, Operand::DataReg(DataReg::D1)),
+            M68kInst::Swap(DataReg::D1),
+            M68kInst::Lsr(Size::Long, Operand::Imm(14), DataReg::D0),
+            M68kInst::Andi(Size::Word, 0x03, Operand::DataReg(DataReg::D0)),
+            M68kInst::Ori(Size::Word, 0x0080, Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::DataReg(DataReg::D0),
+                Operand::DataReg(DataReg::D1),
+            ),
+            M68kInst::Move(
+                Size::Long,
+                Operand::DataReg(DataReg::D1),
+                Operand::AddrInd(AddrReg::A0),
+            ),
+            // Write fill value to VDP data port
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(12, AddrReg::A6),
+                Operand::DataReg(DataReg::D0),
+            ),
+            M68kInst::Move(
+                Size::Word,
+                Operand::DataReg(DataReg::D0),
+                Operand::AbsLong(VDP_DATA),
+            ),
+            M68kInst::Unlk(AddrReg::A6),
+            M68kInst::Rts,
+        ]
+    }
+
+    fn gen_vdp_dma_copy(&mut self) -> Vec<M68kInst> {
+        // Args: 8(a6)=src (VRAM address), 12(a6)=dst (VRAM address), 16(a6)=len (bytes)
+        vec![
+            M68kInst::Label("vdp_dma_copy".to_string()),
+            M68kInst::Link(AddrReg::A6, 0),
+            M68kInst::Lea(Operand::AbsLong(VDP_CTRL), AddrReg::A0),
+            // Set DMA length
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(16, AddrReg::A6),
+                Operand::DataReg(DataReg::D0),
+            ),
+            M68kInst::Move(
+                Size::Long,
+                Operand::DataReg(DataReg::D0),
+                Operand::DataReg(DataReg::D1),
+            ),
+            M68kInst::Andi(Size::Word, 0xFF, Operand::DataReg(DataReg::D0)),
+            M68kInst::Ori(Size::Word, 0x9300, Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::DataReg(DataReg::D0),
+                Operand::AddrInd(AddrReg::A0),
+            ),
+            M68kInst::Lsr(Size::Long, Operand::Imm(8), DataReg::D1),
+            M68kInst::Andi(Size::Word, 0xFF, Operand::DataReg(DataReg::D1)),
+            M68kInst::Ori(Size::Word, 0x9400, Operand::DataReg(DataReg::D1)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::DataReg(DataReg::D1),
+                Operand::AddrInd(AddrReg::A0),
+            ),
+            // Set DMA source (VRAM source address)
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(8, AddrReg::A6),
+                Operand::DataReg(DataReg::D0),
+            ),
+            M68kInst::Move(
+                Size::Long,
+                Operand::DataReg(DataReg::D0),
+                Operand::DataReg(DataReg::D1),
+            ),
+            M68kInst::Andi(Size::Word, 0xFF, Operand::DataReg(DataReg::D1)),
+            M68kInst::Ori(Size::Word, 0x9500, Operand::DataReg(DataReg::D1)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::DataReg(DataReg::D1),
+                Operand::AddrInd(AddrReg::A0),
+            ),
+            M68kInst::Lsr(Size::Long, Operand::Imm(8), DataReg::D0),
+            M68kInst::Andi(Size::Word, 0xFF, Operand::DataReg(DataReg::D0)),
+            M68kInst::Ori(Size::Word, 0x9600, Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::DataReg(DataReg::D0),
+                Operand::AddrInd(AddrReg::A0),
+            ),
+            // Set DMA mode to VRAM copy (reg 23 = 0xC0)
+            M68kInst::Move(
+                Size::Word,
+                Operand::Imm(0x97C0_u16 as i32),
+                Operand::AddrInd(AddrReg::A0),
+            ),
+            // Write VRAM DMA command word
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(12, AddrReg::A6),
+                Operand::DataReg(DataReg::D0),
+            ),
+            M68kInst::Move(
+                Size::Long,
+                Operand::DataReg(DataReg::D0),
+                Operand::DataReg(DataReg::D1),
+            ),
+            M68kInst::Andi(Size::Word, 0x3FFF, Operand::DataReg(DataReg::D1)),
+            M68kInst::Ori(Size::Word, 0x4000, Operand::DataReg(DataReg::D1)),
+            M68kInst::Swap(DataReg::D1),
+            M68kInst::Lsr(Size::Long, Operand::Imm(14), DataReg::D0),
+            M68kInst::Andi(Size::Word, 0x03, Operand::DataReg(DataReg::D0)),
+            M68kInst::Ori(Size::Word, 0x00C0, Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::DataReg(DataReg::D0),
+                Operand::DataReg(DataReg::D1),
+            ),
+            M68kInst::Move(
+                Size::Long,
+                Operand::DataReg(DataReg::D1),
+                Operand::AddrInd(AddrReg::A0),
+            ),
+            M68kInst::Unlk(AddrReg::A6),
+            M68kInst::Rts,
+        ]
+    }
+
+    // -------------------------------------------------------------------------
+    // VDP Window Library Functions
+    // -------------------------------------------------------------------------
+
+    fn gen_vdp_set_tile_w(&mut self) -> Vec<M68kInst> {
+        // Args: 8(a6)=x, 12(a6)=y, 16(a6)=tile
+        // Window plane at VRAM 0xD000
+        vec![
+            M68kInst::Label("vdp_set_tile_w".to_string()),
+            M68kInst::Link(AddrReg::A6, 0),
+            // addr = 0xD000 + (y * 128) + (x * 2)
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(12, AddrReg::A6),
+                Operand::DataReg(DataReg::D0),
+            ),
+            M68kInst::Lsl(Size::Long, Operand::Imm(7), DataReg::D0),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(8, AddrReg::A6),
+                Operand::DataReg(DataReg::D1),
+            ),
+            M68kInst::Add(
+                Size::Long,
+                Operand::DataReg(DataReg::D1),
+                Operand::DataReg(DataReg::D0),
+            ),
+            M68kInst::Add(
+                Size::Long,
+                Operand::DataReg(DataReg::D1),
+                Operand::DataReg(DataReg::D0),
+            ),
+            M68kInst::Addi(Size::Long, 0xD000, Operand::DataReg(DataReg::D0)),
+            // Set write address
+            M68kInst::Move(
+                Size::Long,
+                Operand::DataReg(DataReg::D0),
+                Operand::DataReg(DataReg::D1),
+            ),
+            M68kInst::Andi(Size::Word, 0x3FFF, Operand::DataReg(DataReg::D1)),
+            M68kInst::Ori(Size::Word, 0x4000, Operand::DataReg(DataReg::D1)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::DataReg(DataReg::D1),
+                Operand::AbsLong(VDP_CTRL),
+            ),
+            M68kInst::Lsr(Size::Long, Operand::Imm(14), DataReg::D0),
+            M68kInst::Andi(Size::Word, 0x03, Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(
+                Size::Word,
+                Operand::DataReg(DataReg::D0),
+                Operand::AbsLong(VDP_CTRL),
+            ),
+            // Write tile
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(16, AddrReg::A6),
+                Operand::DataReg(DataReg::D1),
+            ),
+            M68kInst::Move(
+                Size::Word,
+                Operand::DataReg(DataReg::D1),
+                Operand::AbsLong(VDP_DATA),
+            ),
+            M68kInst::Unlk(AddrReg::A6),
+            M68kInst::Rts,
+        ]
+    }
+
+    // -------------------------------------------------------------------------
+    // Collision Library Functions
+    // -------------------------------------------------------------------------
+
+    fn gen_rect_overlap(&mut self) -> Vec<M68kInst> {
+        // Args on stack (no Link, direct SP access):
+        // 4(SP)=x1, 8(SP)=y1, 12(SP)=w1, 16(SP)=h1,
+        // 20(SP)=x2, 24(SP)=y2, 28(SP)=w2, 32(SP)=h2
+        // Returns D0 = 1 if overlap, 0 otherwise
+        // AABB test: overlap if x1 < x2+w2 && x2 < x1+w1 && y1 < y2+h2 && y2 < y1+h1
+        let no_overlap = self.next_label("ro_no");
+        vec![
+            M68kInst::Label("rect_overlap".to_string()),
+            // Test x1 < x2 + w2
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(20, AddrReg::A7),
+                Operand::DataReg(DataReg::D0),
+            ),
+            M68kInst::Add(
+                Size::Long,
+                Operand::Disp(28, AddrReg::A7),
+                Operand::DataReg(DataReg::D0),
+            ),
+            M68kInst::Cmp(
+                Size::Long,
+                Operand::Disp(4, AddrReg::A7),
+                Operand::DataReg(DataReg::D0),
+            ),
+            M68kInst::Bcc(Cond::Le, no_overlap.clone()),
+            // Test x2 < x1 + w1
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(4, AddrReg::A7),
+                Operand::DataReg(DataReg::D0),
+            ),
+            M68kInst::Add(
+                Size::Long,
+                Operand::Disp(12, AddrReg::A7),
+                Operand::DataReg(DataReg::D0),
+            ),
+            M68kInst::Cmp(
+                Size::Long,
+                Operand::Disp(20, AddrReg::A7),
+                Operand::DataReg(DataReg::D0),
+            ),
+            M68kInst::Bcc(Cond::Le, no_overlap.clone()),
+            // Test y1 < y2 + h2
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(24, AddrReg::A7),
+                Operand::DataReg(DataReg::D0),
+            ),
+            M68kInst::Add(
+                Size::Long,
+                Operand::Disp(32, AddrReg::A7),
+                Operand::DataReg(DataReg::D0),
+            ),
+            M68kInst::Cmp(
+                Size::Long,
+                Operand::Disp(8, AddrReg::A7),
+                Operand::DataReg(DataReg::D0),
+            ),
+            M68kInst::Bcc(Cond::Le, no_overlap.clone()),
+            // Test y2 < y1 + h1
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(8, AddrReg::A7),
+                Operand::DataReg(DataReg::D0),
+            ),
+            M68kInst::Add(
+                Size::Long,
+                Operand::Disp(16, AddrReg::A7),
+                Operand::DataReg(DataReg::D0),
+            ),
+            M68kInst::Cmp(
+                Size::Long,
+                Operand::Disp(24, AddrReg::A7),
+                Operand::DataReg(DataReg::D0),
+            ),
+            M68kInst::Bcc(Cond::Le, no_overlap.clone()),
+            // All tests passed — overlap
+            M68kInst::Moveq(1, DataReg::D0),
+            M68kInst::Rts,
+            // No overlap
+            M68kInst::Label(no_overlap),
+            M68kInst::Moveq(0, DataReg::D0),
+            M68kInst::Rts,
+        ]
+    }
+
+    // -------------------------------------------------------------------------
+    // SRAM Library Functions
+    // -------------------------------------------------------------------------
+
+    fn gen_sram_read(&mut self) -> Vec<M68kInst> {
+        // Args: 8(a6)=dst, 12(a6)=offset, 16(a6)=len
+        let loop_label = self.next_label("srd_loop");
+        vec![
+            M68kInst::Label("sram_read".to_string()),
+            M68kInst::Link(AddrReg::A6, 0),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(8, AddrReg::A6),
+                Operand::AddrReg(AddrReg::A1),
+            ),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(12, AddrReg::A6),
+                Operand::DataReg(DataReg::D0),
+            ),
+            M68kInst::Add(
+                Size::Long,
+                Operand::DataReg(DataReg::D0),
+                Operand::DataReg(DataReg::D0),
+            ),
+            M68kInst::Addi(Size::Long, SRAM_BASE as i32, Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::DataReg(DataReg::D0),
+                Operand::AddrReg(AddrReg::A0),
+            ),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(16, AddrReg::A6),
+                Operand::DataReg(DataReg::D0),
+            ),
+            M68kInst::Subq(Size::Long, 1, Operand::DataReg(DataReg::D0)),
+            M68kInst::Bcc(Cond::Mi, ".srd_done".to_string()),
+            M68kInst::Label(loop_label.clone()),
+            M68kInst::Move(
+                Size::Byte,
+                Operand::AddrInd(AddrReg::A0),
+                Operand::PostInc(AddrReg::A1),
+            ),
+            M68kInst::Addq(Size::Long, 2, Operand::AddrReg(AddrReg::A0)),
+            M68kInst::Dbf(DataReg::D0, loop_label),
+            M68kInst::Label(".srd_done".to_string()),
+            M68kInst::Unlk(AddrReg::A6),
+            M68kInst::Rts,
+        ]
+    }
+
+    fn gen_sram_write(&mut self) -> Vec<M68kInst> {
+        // Args: 8(a6)=src, 12(a6)=offset, 16(a6)=len
+        let loop_label = self.next_label("swr_loop");
+        vec![
+            M68kInst::Label("sram_write".to_string()),
+            M68kInst::Link(AddrReg::A6, 0),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(8, AddrReg::A6),
+                Operand::AddrReg(AddrReg::A0),
+            ),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(12, AddrReg::A6),
+                Operand::DataReg(DataReg::D0),
+            ),
+            M68kInst::Add(
+                Size::Long,
+                Operand::DataReg(DataReg::D0),
+                Operand::DataReg(DataReg::D0),
+            ),
+            M68kInst::Addi(Size::Long, SRAM_BASE as i32, Operand::DataReg(DataReg::D0)),
+            M68kInst::Move(
+                Size::Long,
+                Operand::DataReg(DataReg::D0),
+                Operand::AddrReg(AddrReg::A1),
+            ),
+            M68kInst::Move(
+                Size::Long,
+                Operand::Disp(16, AddrReg::A6),
+                Operand::DataReg(DataReg::D0),
+            ),
+            M68kInst::Subq(Size::Long, 1, Operand::DataReg(DataReg::D0)),
+            M68kInst::Bcc(Cond::Mi, ".swr_done".to_string()),
+            M68kInst::Label(loop_label.clone()),
+            M68kInst::Move(
+                Size::Byte,
+                Operand::PostInc(AddrReg::A0),
+                Operand::AddrInd(AddrReg::A1),
+            ),
+            M68kInst::Addq(Size::Long, 2, Operand::AddrReg(AddrReg::A1)),
+            M68kInst::Dbf(DataReg::D0, loop_label),
+            M68kInst::Label(".swr_done".to_string()),
+            M68kInst::Unlk(AddrReg::A6),
             M68kInst::Rts,
         ]
     }

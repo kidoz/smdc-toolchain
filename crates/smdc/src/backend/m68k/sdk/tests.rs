@@ -36,6 +36,12 @@ fn registry_contains_all_vdp_functions() {
         "vdp_set_vscroll_b",
         "vdp_get_frame_count",
         "vdp_reset_frame_count",
+        "vdp_dma_transfer",
+        "vdp_dma_fill",
+        "vdp_dma_copy",
+        "vdp_set_window_x",
+        "vdp_set_window_y",
+        "vdp_set_tile_w",
     ];
     for name in &vdp_names {
         assert!(
@@ -121,6 +127,7 @@ fn registry_contains_all_sprite_functions() {
         "sprite_clear",
         "sprite_clear_all",
         "sprite_set_link",
+        "rect_overlap",
     ];
     for name in &sprite_names {
         assert!(
@@ -177,6 +184,8 @@ fn registry_inline_vs_library_classification() {
         "sprite_attr",
         "joy1_read",
         "joy2_read",
+        "abs_val",
+        "sram_enable",
     ];
     for name in &inline_funcs {
         let f = reg.lookup(name).unwrap();
@@ -192,6 +201,9 @@ fn registry_inline_vs_library_classification() {
         "psg_set_tone",
         "sprite_init",
         "input_init",
+        "mem_copy",
+        "rand_next",
+        "rect_overlap",
     ];
     for name in &library_funcs {
         let f = reg.lookup(name).unwrap();
@@ -407,6 +419,13 @@ fn inline_all_registered_inline_functions_generate() {
         "sprite_get_height",
         "joy1_read",
         "joy2_read",
+        "abs_val",
+        "vdp_set_window_x",
+        "vdp_set_window_y",
+        "sram_enable",
+        "sram_disable",
+        "sram_read_byte",
+        "sram_write_byte",
     ];
     for name in &inline_names {
         let f = reg.lookup(name).unwrap();
@@ -566,6 +585,17 @@ fn library_all_registered_library_functions_generate() {
         "input_pressed",
         "input_released",
         "input_is_6button",
+        "mem_copy",
+        "mem_set",
+        "rand_next",
+        "rand_seed",
+        "vdp_dma_transfer",
+        "vdp_dma_fill",
+        "vdp_dma_copy",
+        "vdp_set_tile_w",
+        "rect_overlap",
+        "sram_read",
+        "sram_write",
     ];
     for name in &library_names {
         let f = reg.lookup(name).unwrap();
@@ -755,4 +785,144 @@ fn hardware_addresses_correct() {
     assert_eq!(YM_DATA0, 0xA04001);
     assert_eq!(YM_ADDR1, 0xA04002);
     assert_eq!(YM_DATA1, 0xA04003);
+}
+
+// ============================================================================
+// New SDK Function Tests
+// ============================================================================
+
+#[test]
+fn registry_contains_all_util_functions() {
+    let reg = SdkRegistry::new();
+    let util_names = ["mem_copy", "mem_set", "abs_val", "rand_next", "rand_seed"];
+    for name in &util_names {
+        assert!(
+            reg.is_sdk_function(name),
+            "Util function '{name}' not found in registry"
+        );
+        let f = reg.lookup(name).unwrap();
+        assert_eq!(f.category, SdkCategory::Util);
+    }
+}
+
+#[test]
+fn registry_contains_all_sram_functions() {
+    let reg = SdkRegistry::new();
+    let sram_names = [
+        "sram_enable",
+        "sram_disable",
+        "sram_read_byte",
+        "sram_write_byte",
+        "sram_read",
+        "sram_write",
+    ];
+    for name in &sram_names {
+        assert!(
+            reg.is_sdk_function(name),
+            "SRAM function '{name}' not found in registry"
+        );
+        let f = reg.lookup(name).unwrap();
+        assert_eq!(f.category, SdkCategory::Sram);
+    }
+}
+
+#[test]
+fn inline_generate_abs_val() {
+    let insts = SdkInlineGenerator::generate("abs_val").unwrap();
+    assert!(!insts.is_empty());
+    // Should test and conditionally negate
+    assert!(insts.iter().any(|i| matches!(i, M68kInst::Tst(..))));
+    assert!(insts.iter().any(|i| matches!(i, M68kInst::Neg(..))));
+}
+
+#[test]
+fn inline_generate_sram_enable() {
+    let insts = SdkInlineGenerator::generate("sram_enable").unwrap();
+    assert_eq!(insts.len(), 1);
+    assert!(matches!(
+        &insts[0],
+        M68kInst::Move(Size::Byte, Operand::Imm(0x01), Operand::AbsLong(SRAM_CTRL))
+    ));
+}
+
+#[test]
+fn inline_generate_vdp_set_window_x() {
+    let insts = SdkInlineGenerator::generate("vdp_set_window_x").unwrap();
+    assert!(
+        insts
+            .iter()
+            .any(|i| matches!(i, M68kInst::Move(Size::Word, _, Operand::AbsLong(VDP_CTRL))))
+    );
+}
+
+#[test]
+fn library_generate_mem_copy_has_loop() {
+    let mut libgen = SdkLibraryGenerator::new();
+    let insts = libgen.generate("mem_copy");
+    assert!(matches!(&insts[0], M68kInst::Label(name) if name == "mem_copy"));
+    assert!(insts.iter().any(|i| matches!(i, M68kInst::Dbf(..))));
+    assert!(matches!(insts.last(), Some(M68kInst::Rts)));
+}
+
+#[test]
+fn library_generate_rand_next() {
+    let mut libgen = SdkLibraryGenerator::new();
+    let insts = libgen.generate("rand_next");
+    assert!(matches!(&insts[0], M68kInst::Label(name) if name == "rand_next"));
+    assert!(insts.iter().any(|i| matches!(i, M68kInst::Mulu(..))));
+}
+
+#[test]
+fn library_generate_vdp_dma_transfer() {
+    let mut libgen = SdkLibraryGenerator::new();
+    let insts = libgen.generate("vdp_dma_transfer");
+    assert!(matches!(&insts[0], M68kInst::Label(name) if name == "vdp_dma_transfer"));
+    assert!(matches!(insts.last(), Some(M68kInst::Rts)));
+}
+
+#[test]
+fn library_generate_rect_overlap() {
+    let mut libgen = SdkLibraryGenerator::new();
+    let insts = libgen.generate("rect_overlap");
+    assert!(matches!(&insts[0], M68kInst::Label(name) if name == "rect_overlap"));
+    assert!(insts.iter().any(|i| matches!(i, M68kInst::Cmp(..))));
+}
+
+#[test]
+fn library_generate_sram_read() {
+    let mut libgen = SdkLibraryGenerator::new();
+    let insts = libgen.generate("sram_read");
+    assert!(matches!(&insts[0], M68kInst::Label(name) if name == "sram_read"));
+    assert!(insts.iter().any(|i| matches!(i, M68kInst::Dbf(..))));
+}
+
+#[test]
+fn static_data_rand_state_needed() {
+    let mut funcs = HashSet::new();
+    funcs.insert("rand_next".to_string());
+    assert!(deps::needs_rand_state(&funcs));
+}
+
+#[test]
+fn static_data_rand_state_not_needed() {
+    let mut funcs = HashSet::new();
+    funcs.insert("mem_copy".to_string());
+    assert!(!deps::needs_rand_state(&funcs));
+}
+
+#[test]
+fn static_data_contains_rand_state() {
+    let mut funcs = HashSet::new();
+    funcs.insert("rand_next".to_string());
+    let data = generate_static_data(&funcs);
+    assert!(
+        data.iter()
+            .any(|i| matches!(i, M68kInst::Label(l) if l == "__sdk_rand_state"))
+    );
+}
+
+#[test]
+fn hardware_addresses_sram_correct() {
+    assert_eq!(SRAM_CTRL, 0xA130F1);
+    assert_eq!(SRAM_BASE, 0x200001);
 }

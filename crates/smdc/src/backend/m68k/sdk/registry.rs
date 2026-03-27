@@ -27,6 +27,12 @@ impl SdkRegistry {
         // PSG Functions
         Self::register_psg_functions(&mut functions);
 
+        // Util Functions
+        Self::register_util_functions(&mut functions);
+
+        // SRAM Functions
+        Self::register_sram_functions(&mut functions);
+
         Self { functions }
     }
 
@@ -285,6 +291,69 @@ impl SdkRegistry {
                 has_return: false,
             },
         );
+
+        // DMA functions
+        map.insert(
+            "vdp_dma_transfer",
+            SdkFunction {
+                name: "vdp_dma_transfer",
+                kind: Library,
+                category: Vdp,
+                param_count: 3,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "vdp_dma_fill",
+            SdkFunction {
+                name: "vdp_dma_fill",
+                kind: Library,
+                category: Vdp,
+                param_count: 3,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "vdp_dma_copy",
+            SdkFunction {
+                name: "vdp_dma_copy",
+                kind: Library,
+                category: Vdp,
+                param_count: 3,
+                has_return: false,
+            },
+        );
+        // Window plane functions
+        map.insert(
+            "vdp_set_window_x",
+            SdkFunction {
+                name: "vdp_set_window_x",
+                kind: Inline,
+                category: Vdp,
+                param_count: 1,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "vdp_set_window_y",
+            SdkFunction {
+                name: "vdp_set_window_y",
+                kind: Inline,
+                category: Vdp,
+                param_count: 1,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "vdp_set_tile_w",
+            SdkFunction {
+                name: "vdp_set_tile_w",
+                kind: Library,
+                category: Vdp,
+                param_count: 3,
+                has_return: false,
+            },
+        );
     }
 
     fn register_sprite_functions(map: &mut HashMap<&'static str, SdkFunction>) {
@@ -392,6 +461,16 @@ impl SdkRegistry {
                 category: Sprite,
                 param_count: 2,
                 has_return: false,
+            },
+        );
+        map.insert(
+            "rect_overlap",
+            SdkFunction {
+                name: "rect_overlap",
+                kind: Library,
+                category: Sprite,
+                param_count: 8,
+                has_return: true,
             },
         );
     }
@@ -1061,6 +1140,127 @@ impl SdkRegistry {
                 category: Psg,
                 param_count: 1,
                 has_return: true,
+            },
+        );
+    }
+    fn register_util_functions(map: &mut HashMap<&'static str, SdkFunction>) {
+        use SdkCategory::Util;
+        use SdkFunctionKind::{Inline, Library};
+
+        map.insert(
+            "abs_val",
+            SdkFunction {
+                name: "abs_val",
+                kind: Inline,
+                category: Util,
+                param_count: 1,
+                has_return: true,
+            },
+        );
+        map.insert(
+            "mem_copy",
+            SdkFunction {
+                name: "mem_copy",
+                kind: Library,
+                category: Util,
+                param_count: 3,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "mem_set",
+            SdkFunction {
+                name: "mem_set",
+                kind: Library,
+                category: Util,
+                param_count: 3,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "rand_next",
+            SdkFunction {
+                name: "rand_next",
+                kind: Library,
+                category: Util,
+                param_count: 0,
+                has_return: true,
+            },
+        );
+        map.insert(
+            "rand_seed",
+            SdkFunction {
+                name: "rand_seed",
+                kind: Library,
+                category: Util,
+                param_count: 1,
+                has_return: false,
+            },
+        );
+    }
+
+    fn register_sram_functions(map: &mut HashMap<&'static str, SdkFunction>) {
+        use SdkCategory::Sram;
+        use SdkFunctionKind::{Inline, Library};
+
+        map.insert(
+            "sram_enable",
+            SdkFunction {
+                name: "sram_enable",
+                kind: Inline,
+                category: Sram,
+                param_count: 0,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "sram_disable",
+            SdkFunction {
+                name: "sram_disable",
+                kind: Inline,
+                category: Sram,
+                param_count: 0,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "sram_read_byte",
+            SdkFunction {
+                name: "sram_read_byte",
+                kind: Inline,
+                category: Sram,
+                param_count: 1,
+                has_return: true,
+            },
+        );
+        map.insert(
+            "sram_write_byte",
+            SdkFunction {
+                name: "sram_write_byte",
+                kind: Inline,
+                category: Sram,
+                param_count: 2,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "sram_read",
+            SdkFunction {
+                name: "sram_read",
+                kind: Library,
+                category: Sram,
+                param_count: 3,
+                has_return: false,
+            },
+        );
+        map.insert(
+            "sram_write",
+            SdkFunction {
+                name: "sram_write",
+                kind: Library,
+                category: Sram,
+                param_count: 3,
+                has_return: false,
             },
         );
     }

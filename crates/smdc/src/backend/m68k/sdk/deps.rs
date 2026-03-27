@@ -72,6 +72,13 @@ pub fn needs_frame_counter(functions: &HashSet<String>) -> bool {
     })
 }
 
+/// Check if any functions need the random state variable
+pub fn needs_rand_state(functions: &HashSet<String>) -> bool {
+    functions
+        .iter()
+        .any(|f| matches!(f.as_str(), "rand_next" | "rand_seed"))
+}
+
 /// Check if any functions need the operator offset table
 pub fn needs_op_offsets(functions: &HashSet<String>) -> bool {
     functions
@@ -83,13 +90,19 @@ pub fn needs_op_offsets(functions: &HashSet<String>) -> bool {
 pub fn generate_static_data(functions: &HashSet<String>) -> Vec<M68kInst> {
     let mut insts = Vec::new();
 
-    if needs_frame_counter(functions) || needs_op_offsets(functions) {
+    if needs_frame_counter(functions) || needs_op_offsets(functions) || needs_rand_state(functions)
+    {
         insts.push(M68kInst::Directive(".section .bss".to_string()));
         insts.push(M68kInst::Directive(".align 4".to_string()));
     }
 
     if needs_frame_counter(functions) {
         insts.push(M68kInst::Label("__sdk_frame_count".to_string()));
+        insts.push(M68kInst::Directive(".space 4".to_string()));
+    }
+
+    if needs_rand_state(functions) {
+        insts.push(M68kInst::Label("__sdk_rand_state".to_string()));
         insts.push(M68kInst::Directive(".space 4".to_string()));
     }
 
