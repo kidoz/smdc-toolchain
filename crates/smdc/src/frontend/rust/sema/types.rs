@@ -13,7 +13,23 @@ impl TypeChecker {
 
     /// Check if two types are compatible for assignment
     pub fn is_assignable(&self, target: &RustType, source: &RustType) -> bool {
-        self.types_match(target, source)
+        if self.types_match(target, source) {
+            return true;
+        }
+        // &T coerces to *const T, &mut T coerces to *mut T or *const T
+        if let RustTypeKind::Pointer { inner: pi, .. } = &target.kind {
+            if let RustTypeKind::Reference { inner: ri, .. } = &source.kind {
+                // Direct: &T -> *const T
+                if self.types_match(pi, ri) {
+                    return true;
+                }
+                // &(x as *const T) produces &*const T; coerce to *const T
+                if self.types_match(target, ri) {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     /// Check if two types match (structural equality)

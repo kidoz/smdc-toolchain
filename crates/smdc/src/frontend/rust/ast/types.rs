@@ -181,6 +181,7 @@ pub enum PrimitiveType {
     F64,
     Bool,
     Char,
+    Str,
 }
 
 impl PrimitiveType {
@@ -195,6 +196,7 @@ impl PrimitiveType {
             PrimitiveType::F64 => 8,
             PrimitiveType::Bool => 1,
             PrimitiveType::Char => 4, // Unicode scalar value
+            PrimitiveType::Str => 4,  // Unsized, but &str is a pointer on M68k
         }
     }
 
@@ -234,6 +236,7 @@ impl std::fmt::Display for PrimitiveType {
             PrimitiveType::F64 => write!(f, "f64"),
             PrimitiveType::Bool => write!(f, "bool"),
             PrimitiveType::Char => write!(f, "char"),
+            PrimitiveType::Str => write!(f, "str"),
         }
     }
 }

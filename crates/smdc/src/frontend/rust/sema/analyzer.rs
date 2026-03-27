@@ -305,10 +305,7 @@ impl RustAnalyzer {
             ExprKind::StringLiteral(_) => {
                 // &'static str
                 RustType::reference(
-                    RustType::new(
-                        RustTypeKind::Named(TypePath::simple("str".to_string())),
-                        expr.span,
-                    ),
+                    RustType::new(RustTypeKind::Primitive(PrimitiveType::Str), expr.span),
                     false,
                     expr.span,
                 )

@@ -497,9 +497,12 @@ impl MirLowerer {
                 // Simplified: generate a switch for integer patterns
                 let mut targets = Vec::new();
                 let mut default_block = None;
+                // Save arm block IDs as they are created
+                let mut arm_blocks = Vec::new();
 
                 for arm in arms {
                     let arm_bb = self.body.add_block();
+                    arm_blocks.push(arm_bb);
 
                     // Check pattern type
                     match &arm.pattern.kind {
@@ -530,14 +533,9 @@ impl MirLowerer {
                     default,
                 });
 
-                // Generate arm bodies
+                // Generate arm bodies using saved block IDs
                 for (i, arm) in arms.iter().enumerate() {
-                    let arm_bb = if i < self.body.blocks.len() {
-                        BlockId(self.current_block.0 + 1 + i)
-                    } else {
-                        continue;
-                    };
-
+                    let arm_bb = arm_blocks[i];
                     self.current_block = arm_bb;
 
                     // Bind pattern variables

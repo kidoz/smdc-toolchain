@@ -567,6 +567,7 @@ impl<'a> RustParser<'a> {
             RustTokenKind::F64 => Some(PrimitiveType::F64),
             RustTokenKind::Bool => Some(PrimitiveType::Bool),
             RustTokenKind::Char => Some(PrimitiveType::Char),
+            RustTokenKind::Str => Some(PrimitiveType::Str),
             _ => None,
         };
 
@@ -675,20 +676,25 @@ impl<'a> RustParser<'a> {
     }
 
     fn is_item_start(&mut self) -> CompileResult<bool> {
-        Ok(matches!(
-            &self.lexer.peek()?.kind,
+        let kind = &self.lexer.peek()?.kind;
+        Ok(match kind {
             RustTokenKind::Fn
-                | RustTokenKind::Struct
-                | RustTokenKind::Enum
-                | RustTokenKind::Impl
-                | RustTokenKind::Type
-                | RustTokenKind::Const
-                | RustTokenKind::Static
-                | RustTokenKind::Mod
-                | RustTokenKind::Use
-                | RustTokenKind::Pub
-                | RustTokenKind::Unsafe
-        ))
+            | RustTokenKind::Struct
+            | RustTokenKind::Enum
+            | RustTokenKind::Impl
+            | RustTokenKind::Type
+            | RustTokenKind::Const
+            | RustTokenKind::Static
+            | RustTokenKind::Mod
+            | RustTokenKind::Use
+            | RustTokenKind::Pub => true,
+            // `unsafe` is an item start only when followed by `fn` (unsafe fn)
+            // otherwise it's an unsafe block expression
+            RustTokenKind::Unsafe => {
+                matches!(self.lexer.peek_at(1)?.kind, RustTokenKind::Fn)
+            }
+            _ => false,
+        })
     }
 
     fn parse_let_stmt(&mut self) -> CompileResult<Stmt> {
@@ -1822,6 +1828,149 @@ mod tests {
                 assert_eq!(i.items.len(), 1);
             }
             _ => panic!("expected impl"),
+        }
+    }
+
+    #[test]
+    fn test_parse_unsafe_block() {
+        let source = r"
+            fn main() {
+                unsafe {
+                    let x: i32 = 42;
+                }
+            }
+        ";
+        let mut parser = RustParser::new(source);
+        let module = parser.parse_module().unwrap();
+
+        assert_eq!(module.items.len(), 1);
+        if let ItemKind::Fn(f) = &module.items[0].kind {
+            let body = f.body.as_ref().unwrap();
+            // The unsafe block is either a statement or trailing expression
+            assert!(
+                !body.stmts.is_empty() || body.expr.is_some(),
+                "unsafe block should produce a statement or expression"
+            );
+        } else {
+            panic!("expected function");
+        }
+    }
+
+    #[test]
+    fn test_parse_unsafe_fn() {
+        let source = "unsafe fn danger() { }";
+        let mut parser = RustParser::new(source);
+        let module = parser.parse_module().unwrap();
+
+        assert_eq!(module.items.len(), 1);
+        if let ItemKind::Fn(f) = &module.items[0].kind {
+            assert_eq!(f.name, "danger");
+            assert!(f.is_unsafe);
+        } else {
+            panic!("expected unsafe fn");
+        }
+    }
+
+    #[test]
+    fn test_parse_unsafe_block_not_confused_with_unsafe_fn() {
+        // Inside a function body, `unsafe { }` is an expression, not an item
+        let source = r"
+            fn main() {
+                unsafe { }
+                let x: i32 = 1;
+            }
+        ";
+        let mut parser = RustParser::new(source);
+        let module = parser.parse_module().unwrap();
+
+        if let ItemKind::Fn(f) = &module.items[0].kind {
+            let body = f.body.as_ref().unwrap();
+            // Should have 2 statements: unsafe block + let
+            assert_eq!(body.stmts.len(), 2);
+        } else {
+            panic!("expected function");
+        }
+    }
+
+    #[test]
+    fn test_parse_match_with_wildcard() {
+        let source = r"
+            fn main() {
+                match x {
+                    0 => 10,
+                    1 => 20,
+                    _ => 99,
+                }
+            }
+        ";
+        let mut parser = RustParser::new(source);
+        let module = parser.parse_module().unwrap();
+
+        if let ItemKind::Fn(f) = &module.items[0].kind {
+            let body = f.body.as_ref().unwrap();
+            // Match is the trailing expression
+            assert!(body.expr.is_some());
+            if let Some(expr) = &body.expr {
+                if let ExprKind::Match { arms, .. } = &expr.kind {
+                    assert_eq!(arms.len(), 3);
+                } else {
+                    panic!("expected match expression");
+                }
+            }
+        } else {
+            panic!("expected function");
+        }
+    }
+
+    #[test]
+    fn test_parse_raw_pointer_type() {
+        let source = "fn main() { let p: *const i32 = 0 as *const i32; }";
+        let mut parser = RustParser::new(source);
+        let module = parser.parse_module().unwrap();
+        assert_eq!(module.items.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_raw_pointer_mut_type() {
+        let source = "fn main() { let p: *mut i32 = 0 as *mut i32; }";
+        let mut parser = RustParser::new(source);
+        let module = parser.parse_module().unwrap();
+        assert_eq!(module.items.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_as_cast() {
+        let source = "fn main() { let x: i32 = 300; let c: i8 = x as i8; }";
+        let mut parser = RustParser::new(source);
+        let module = parser.parse_module().unwrap();
+        assert_eq!(module.items.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_str_type() {
+        let source = r#"fn main() { let _s: &str = "hello"; }"#;
+        let mut parser = RustParser::new(source);
+        let module = parser.parse_module().unwrap();
+
+        if let ItemKind::Fn(f) = &module.items[0].kind {
+            let body = f.body.as_ref().unwrap();
+            assert_eq!(body.stmts.len(), 1);
+            if let StmtKind::Let { ty: Some(ty), .. } = &body.stmts[0].kind {
+                // Should be &str (Reference to Primitive(Str))
+                if let RustTypeKind::Reference { inner, .. } = &ty.kind {
+                    assert!(
+                        matches!(inner.kind, RustTypeKind::Primitive(PrimitiveType::Str)),
+                        "inner type should be Primitive(Str), got {:?}",
+                        inner.kind
+                    );
+                } else {
+                    panic!("expected reference type, got {:?}", ty.kind);
+                }
+            } else {
+                panic!("expected let with type annotation");
+            }
+        } else {
+            panic!("expected function");
         }
     }
 }
