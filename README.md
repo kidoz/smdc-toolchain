@@ -45,8 +45,14 @@ Key modules:
 
 ## Examples
 
-See `examples/` for minimal C and Rust programs.
+Example output generated with the compiler:
+
+![Pong ROM generated with smdc](docs/screenshots/pong.png)
+
+## Author
+
+Aleksandr Pavlov <ckidoz@gmail.com>
 
 ## License
 
-MIT. See `LICENSE`.
+MIT. See [LICENSE](./LICENSE).
