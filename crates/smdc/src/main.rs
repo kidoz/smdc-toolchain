@@ -3,9 +3,7 @@
 //! Usage: smdc [OPTIONS] <input> -o <output>
 
 use clap::{Parser as ClapParser, ValueEnum};
-use smd_compiler::backend::{
-    Backend, BackendConfig, M68kBackend, OutputFormat, RomBackend, RomConfig,
-};
+use smd_compiler::backend::{BackendConfig, M68kBackend, OutputFormat, RomBackend, RomConfig};
 use smd_compiler::common::DiagnosticReporter;
 use smd_compiler::frontend::{CFrontend, CompileContext, Frontend, FrontendConfig, RustFrontend};
 use std::fs;

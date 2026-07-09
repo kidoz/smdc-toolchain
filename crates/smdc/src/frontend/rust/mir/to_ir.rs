@@ -14,8 +14,6 @@ pub struct MirToIr<'a> {
     block_to_label: HashMap<BlockId, Label>,
     /// Next temp ID
     next_temp: u32,
-    /// Next label ID
-    next_label: usize,
     /// Generated instructions
     blocks: Vec<crate::ir::BasicBlock>,
     /// Current function name (for unique labels)
@@ -30,7 +28,6 @@ impl<'a> MirToIr<'a> {
             local_to_temp: HashMap::new(),
             block_to_label: HashMap::new(),
             next_temp: 0,
-            next_label: 0,
             blocks: Vec::new(),
             func_name: String::new(),
             mir_body: None,
@@ -424,12 +421,6 @@ impl<'a> MirToIr<'a> {
         let id = self.next_temp;
         self.next_temp += 1;
         Temp(id)
-    }
-
-    fn new_label(&mut self, prefix: &str) -> Label {
-        let id = self.next_label;
-        self.next_label += 1;
-        Label(format!(".L{}_{}{}", self.func_name, prefix, id))
     }
 
     fn emit(&mut self, inst: Inst) {

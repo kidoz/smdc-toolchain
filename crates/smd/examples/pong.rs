@@ -10,8 +10,6 @@ const CTRL_CTRL: i32 = 0xA10009;
 const PSG_PORT: i32 = 0xC00011;
 
 // Game constants
-const SCREEN_WIDTH: i32 = 320;
-const SCREEN_HEIGHT: i32 = 224;
 const PADDLE_HEIGHT: i32 = 32;
 const PADDLE_SPEED: i32 = 4;
 const BALL_SIZE: i32 = 8;
