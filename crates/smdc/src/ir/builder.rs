@@ -806,10 +806,9 @@ impl IrBuilder {
         match &expr.kind {
             ExprKind::IntLiteral(n) => Ok(Value::IntConst(*n)),
 
-            ExprKind::FloatLiteral(_) => {
-                // TODO: Handle floats
-                Ok(Value::IntConst(0))
-            }
+            ExprKind::FloatLiteral(_) => Err(CompileError::codegen(
+                "floating-point expressions are not supported yet",
+            )),
 
             ExprKind::CharLiteral(c) => Ok(Value::IntConst(*c as i64)),
 
@@ -1295,10 +1294,9 @@ impl IrBuilder {
                 Ok(last)
             }
 
-            ExprKind::CompoundLiteral { .. } => {
-                // TODO: Compound literals
-                Ok(Value::IntConst(0))
-            }
+            ExprKind::CompoundLiteral { .. } => Err(CompileError::codegen(
+                "compound literals are not supported yet",
+            )),
         }
     }
 

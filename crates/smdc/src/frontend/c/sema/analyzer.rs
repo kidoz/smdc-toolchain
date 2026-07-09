@@ -50,6 +50,7 @@ impl SemanticAnalyzer {
     fn analyze_var_decl(&mut self, var: &mut VarDecl) -> CompileResult<()> {
         // Resolve struct type if needed
         self.resolve_struct_type(&mut var.ty)?;
+        Self::reject_unsupported_type(&var.ty, var.span)?;
 
         // Define the variable in current scope
         let symbol = Symbol {
@@ -78,7 +79,7 @@ impl SemanticAnalyzer {
             } if members.is_empty() => {
                 // Look up the struct definition
                 if let Some(def) = self.scope.lookup_struct(struct_name) {
-                    *members = def.members.clone();
+                    members.clone_from(&def.members);
                 }
             }
             TypeKind::Union {
@@ -87,7 +88,7 @@ impl SemanticAnalyzer {
             } if members.is_empty() => {
                 // Look up the union definition
                 if let Some(def) = self.scope.lookup_union(union_name) {
-                    *members = def.members.clone();
+                    members.clone_from(&def.members);
                 }
             }
             TypeKind::Pointer(inner) => {
@@ -137,6 +138,7 @@ impl SemanticAnalyzer {
             for param in &mut func.params {
                 // Resolve struct types in parameter types
                 self.resolve_struct_type(&mut param.ty)?;
+                Self::reject_unsupported_type(&param.ty, param.span)?;
 
                 if let Some(name) = &param.name {
                     let symbol = Symbol {
@@ -151,6 +153,7 @@ impl SemanticAnalyzer {
             }
 
             // Set current function return type for return statement checking
+            Self::reject_unsupported_type(&func.return_type, func.span)?;
             self.current_function_return_type = Some(func.return_type.clone());
 
             // Analyze body
@@ -361,10 +364,35 @@ impl SemanticAnalyzer {
                 }
             }
             StmtKind::Return(expr) => {
-                if let Some(expr) = expr {
-                    self.analyze_expr(expr)?;
+                let return_ty = self.current_function_return_type.clone().ok_or_else(|| {
+                    CompileError::semantic("return statement outside function", stmt.span)
+                })?;
+
+                match (expr, return_ty.is_void()) {
+                    (Some(expr), true) => {
+                        self.analyze_expr(expr)?;
+                        return Err(CompileError::type_error(
+                            "void function should not return a value",
+                            stmt.span,
+                        ));
+                    }
+                    (None, false) => {
+                        return Err(CompileError::type_error(
+                            "non-void function must return a value",
+                            stmt.span,
+                        ));
+                    }
+                    (Some(expr), false) => {
+                        let expr_ty = self.analyze_expr(expr)?;
+                        if !Self::is_assignable(&return_ty, &expr_ty) {
+                            return Err(CompileError::type_error(
+                                "return value is not compatible with function return type",
+                                expr.span,
+                            ));
+                        }
+                    }
+                    (None, true) => {}
                 }
-                // TODO: Check return type matches function return type
             }
             StmtKind::Goto(label) => {
                 // Reference the label (will be checked at end of function)
@@ -387,7 +415,12 @@ impl SemanticAnalyzer {
     fn analyze_expr(&mut self, expr: &mut Expr) -> CompileResult<CType> {
         let ty = match &mut expr.kind {
             ExprKind::IntLiteral(_) => CType::int(expr.span),
-            ExprKind::FloatLiteral(_) => CType::new(TypeKind::Double, expr.span),
+            ExprKind::FloatLiteral(_) => {
+                return Err(CompileError::semantic(
+                    "floating-point expressions are not supported yet",
+                    expr.span,
+                ));
+            }
             ExprKind::CharLiteral(_) => CType::char(expr.span),
             ExprKind::StringLiteral(_) => CType::pointer_to(CType::char(expr.span), expr.span),
 
@@ -414,7 +447,7 @@ impl SemanticAnalyzer {
 
             ExprKind::Assign { target, value, .. } => {
                 let target_ty = self.analyze_expr(target)?;
-                let _value_ty = self.analyze_expr(value)?;
+                self.analyze_expr(value)?;
                 target_ty
             }
 
@@ -430,6 +463,13 @@ impl SemanticAnalyzer {
             }
 
             ExprKind::Call { callee, args } => {
+                if !matches!(callee.kind, ExprKind::Identifier(_)) {
+                    return Err(CompileError::semantic(
+                        "indirect calls are not supported yet",
+                        callee.span,
+                    ));
+                }
+
                 let callee_ty = self.analyze_expr(callee)?;
                 for arg in args {
                     self.analyze_expr(arg)?;
@@ -512,6 +552,7 @@ impl SemanticAnalyzer {
             }
 
             ExprKind::Cast { ty, expr: inner } => {
+                Self::reject_unsupported_type(ty, expr.span)?;
                 self.analyze_expr(inner)?;
                 ty.clone()
             }
@@ -558,10 +599,14 @@ impl SemanticAnalyzer {
             }
 
             ExprKind::CompoundLiteral { ty, initializers } => {
+                Self::reject_unsupported_type(ty, expr.span)?;
                 for init in initializers {
                     self.analyze_initializer(init, ty)?;
                 }
-                ty.clone()
+                return Err(CompileError::semantic(
+                    "compound literals are not supported yet",
+                    expr.span,
+                ));
             }
         };
 
@@ -572,27 +617,142 @@ impl SemanticAnalyzer {
     fn analyze_initializer(
         &mut self,
         init: &mut Initializer,
-        _expected_ty: &CType,
+        expected_ty: &CType,
     ) -> CompileResult<()> {
         match init {
             Initializer::Expr(expr) => {
-                self.analyze_expr(expr)?;
+                let init_ty = self.analyze_expr(expr)?;
+                let element_ty = Self::initializer_element_type(expected_ty);
+                if Self::should_check_initializer(element_ty, &init_ty)
+                    && !Self::is_assignable(element_ty, &init_ty)
+                {
+                    return Err(CompileError::type_error(
+                        "initializer is not compatible with declared type",
+                        expr.span,
+                    ));
+                }
             }
             Initializer::List(items) => {
                 for item in items {
-                    self.analyze_initializer(item, _expected_ty)?;
+                    self.analyze_initializer(item, expected_ty)?;
                 }
             }
             Initializer::Designated { value, .. } => {
-                self.analyze_initializer(value, _expected_ty)?;
+                self.analyze_initializer(value, expected_ty)?;
             }
         }
         Ok(())
+    }
+
+    fn reject_unsupported_type(ty: &CType, span: crate::common::Span) -> CompileResult<()> {
+        if Self::contains_floating_type(ty) {
+            return Err(CompileError::semantic(
+                "floating-point types are not supported yet",
+                span,
+            ));
+        }
+        Ok(())
+    }
+
+    fn contains_floating_type(ty: &CType) -> bool {
+        match &ty.kind {
+            TypeKind::Float | TypeKind::Double => true,
+            TypeKind::Pointer(inner) => Self::contains_floating_type(inner),
+            TypeKind::Array { element, .. } => Self::contains_floating_type(element),
+            TypeKind::Function {
+                return_type,
+                params,
+                ..
+            } => {
+                Self::contains_floating_type(return_type)
+                    || params
+                        .iter()
+                        .any(|(_, ty)| Self::contains_floating_type(ty))
+            }
+            TypeKind::Struct { members, .. } | TypeKind::Union { members, .. } => members
+                .iter()
+                .any(|(_, ty)| Self::contains_floating_type(ty)),
+            _ => false,
+        }
+    }
+
+    fn is_assignable(dst: &CType, src: &CType) -> bool {
+        if dst == src {
+            return true;
+        }
+
+        if dst.is_void() || src.is_void() {
+            return false;
+        }
+
+        if dst.is_integer() && src.is_integer() {
+            return true;
+        }
+
+        if dst.is_pointer() && src.is_pointer() {
+            return true;
+        }
+
+        dst.is_pointer() && src.is_integer()
+    }
+
+    fn initializer_element_type(ty: &CType) -> &CType {
+        match &ty.kind {
+            TypeKind::Array { element, .. } => element,
+            _ => ty,
+        }
+    }
+
+    fn should_check_initializer(expected: &CType, init: &CType) -> bool {
+        (expected.is_integer() || expected.is_pointer()) && (init.is_integer() || init.is_pointer())
     }
 }
 
 impl Default for SemanticAnalyzer {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::frontend::c::Parser;
+
+    fn analyze(source: &str) -> CompileResult<()> {
+        let mut parser = Parser::new(source)?;
+        let mut tu = parser.parse()?;
+        let mut analyzer = SemanticAnalyzer::new();
+        analyzer.analyze(&mut tu)
+    }
+
+    #[test]
+    fn rejects_floating_point_literal() {
+        let err = analyze("int f(void) { return 1.5; }").unwrap_err();
+        assert!(err.to_string().contains("floating-point"));
+    }
+
+    #[test]
+    fn rejects_floating_point_type() {
+        let err = analyze("double x;").unwrap_err();
+        assert!(err.to_string().contains("floating-point"));
+    }
+
+    #[test]
+    fn rejects_value_return_from_void_function() {
+        let err = analyze("void f(void) { return 1; }").unwrap_err();
+        assert!(err.to_string().contains("void function"));
+    }
+
+    #[test]
+    fn rejects_empty_return_from_non_void_function() {
+        let err = analyze("int f(void) { return; }").unwrap_err();
+        assert!(err.to_string().contains("non-void function"));
+    }
+
+    #[test]
+    fn rejects_incompatible_initializer() {
+        let err = analyze("int x = \"hello\";").unwrap_err();
+        assert!(err.to_string().contains("initializer"));
     }
 }
