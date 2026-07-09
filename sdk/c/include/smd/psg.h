@@ -167,6 +167,9 @@
 #define PSG_NOTE_B4_HZ      494
 #define PSG_NOTE_C5_HZ      523
 
+/* Legacy aliases used by older examples. These are PSG divider values. */
+#define PSG_NOTE_A4         PSG_A4
+
 /* ========================================================================== */
 /* Core Functions                                                             */
 /* ========================================================================== */
