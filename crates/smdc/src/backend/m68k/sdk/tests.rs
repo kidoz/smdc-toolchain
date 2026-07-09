@@ -450,7 +450,7 @@ fn inline_all_registered_inline_functions_generate() {
 #[test]
 fn library_generate_vdp_init_starts_with_label() {
     let mut libgen = SdkLibraryGenerator::new();
-    let insts = libgen.generate("vdp_init");
+    let insts = libgen.generate("vdp_init").unwrap();
     assert!(matches!(
         &insts[0],
         M68kInst::Label(name) if name == "vdp_init"
@@ -462,7 +462,7 @@ fn library_generate_vdp_init_starts_with_label() {
 #[test]
 fn library_generate_vdp_vsync_tail_calls_vblank_start() {
     let mut libgen = SdkLibraryGenerator::new();
-    let insts = libgen.generate("vdp_vsync");
+    let insts = libgen.generate("vdp_vsync").unwrap();
     assert_eq!(insts.len(), 2);
     assert!(matches!(
         &insts[1],
@@ -473,7 +473,7 @@ fn library_generate_vdp_vsync_tail_calls_vblank_start() {
 #[test]
 fn library_generate_psg_stop_silences_all_channels() {
     let mut libgen = SdkLibraryGenerator::new();
-    let insts = libgen.generate("psg_stop");
+    let insts = libgen.generate("psg_stop").unwrap();
     // Should write 4 silence bytes (0x9F, 0xBF, 0xDF, 0xFF)
     let psg_writes: Vec<_> = insts
         .iter()
@@ -488,22 +488,18 @@ fn library_generate_psg_stop_silences_all_channels() {
 }
 
 #[test]
-fn library_generate_unknown_produces_stub() {
+fn library_generate_unknown_returns_error() {
     let mut libgen = SdkLibraryGenerator::new();
-    let insts = libgen.generate("unknown_function");
-    assert!(matches!(
-        &insts[0],
-        M68kInst::Label(name) if name == "unknown_function"
-    ));
-    assert!(matches!(insts.last(), Some(M68kInst::Rts)));
+    let err = libgen.generate("unknown_function").unwrap_err();
+    assert!(err.to_string().contains("not implemented"));
 }
 
 #[test]
 fn library_generate_unique_labels() {
     let mut libgen = SdkLibraryGenerator::new();
     // Generate two functions that both use labels
-    let insts1 = libgen.generate("vdp_wait_vblank_start");
-    let insts2 = libgen.generate("vdp_wait_vblank_end");
+    let insts1 = libgen.generate("vdp_wait_vblank_start").unwrap();
+    let insts2 = libgen.generate("vdp_wait_vblank_end").unwrap();
 
     // Collect all internal labels (not function-name labels)
     let labels1: Vec<_> = insts1
@@ -604,7 +600,7 @@ fn library_all_registered_library_functions_generate() {
             SdkFunctionKind::Library,
             "'{name}' should be Library"
         );
-        let insts = libgen.generate(name);
+        let insts = libgen.generate(name).unwrap();
         assert!(
             !insts.is_empty(),
             "library generation for '{name}' returned empty"
@@ -620,7 +616,7 @@ fn library_all_registered_library_functions_generate() {
 #[test]
 fn library_default_trait() {
     let mut libgen = SdkLibraryGenerator::default();
-    let insts = libgen.generate("psg_stop");
+    let insts = libgen.generate("psg_stop").unwrap();
     assert!(!insts.is_empty());
 }
 
@@ -858,7 +854,7 @@ fn inline_generate_vdp_set_window_x() {
 #[test]
 fn library_generate_mem_copy_has_loop() {
     let mut libgen = SdkLibraryGenerator::new();
-    let insts = libgen.generate("mem_copy");
+    let insts = libgen.generate("mem_copy").unwrap();
     assert!(matches!(&insts[0], M68kInst::Label(name) if name == "mem_copy"));
     assert!(insts.iter().any(|i| matches!(i, M68kInst::Dbf(..))));
     assert!(matches!(insts.last(), Some(M68kInst::Rts)));
@@ -867,7 +863,7 @@ fn library_generate_mem_copy_has_loop() {
 #[test]
 fn library_generate_rand_next() {
     let mut libgen = SdkLibraryGenerator::new();
-    let insts = libgen.generate("rand_next");
+    let insts = libgen.generate("rand_next").unwrap();
     assert!(matches!(&insts[0], M68kInst::Label(name) if name == "rand_next"));
     assert!(insts.iter().any(|i| matches!(i, M68kInst::Mulu(..))));
 }
@@ -875,7 +871,7 @@ fn library_generate_rand_next() {
 #[test]
 fn library_generate_vdp_dma_transfer() {
     let mut libgen = SdkLibraryGenerator::new();
-    let insts = libgen.generate("vdp_dma_transfer");
+    let insts = libgen.generate("vdp_dma_transfer").unwrap();
     assert!(matches!(&insts[0], M68kInst::Label(name) if name == "vdp_dma_transfer"));
     assert!(matches!(insts.last(), Some(M68kInst::Rts)));
 }
@@ -883,7 +879,7 @@ fn library_generate_vdp_dma_transfer() {
 #[test]
 fn library_generate_rect_overlap() {
     let mut libgen = SdkLibraryGenerator::new();
-    let insts = libgen.generate("rect_overlap");
+    let insts = libgen.generate("rect_overlap").unwrap();
     assert!(matches!(&insts[0], M68kInst::Label(name) if name == "rect_overlap"));
     assert!(insts.iter().any(|i| matches!(i, M68kInst::Cmp(..))));
 }
@@ -891,7 +887,7 @@ fn library_generate_rect_overlap() {
 #[test]
 fn library_generate_sram_read() {
     let mut libgen = SdkLibraryGenerator::new();
-    let insts = libgen.generate("sram_read");
+    let insts = libgen.generate("sram_read").unwrap();
     assert!(matches!(&insts[0], M68kInst::Label(name) if name == "sram_read"));
     assert!(insts.iter().any(|i| matches!(i, M68kInst::Dbf(..))));
 }

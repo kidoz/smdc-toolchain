@@ -2,6 +2,7 @@
 
 use super::{PSG_PORT, SRAM_BASE, VDP_CTRL, VDP_DATA, YM_ADDR0};
 use crate::backend::m68k::m68k::*;
+use crate::common::{CompileError, CompileResult};
 
 /// Generates full M68k function bodies for complex SDK functions
 pub struct SdkLibraryGenerator {
@@ -20,8 +21,8 @@ impl SdkLibraryGenerator {
     }
 
     /// Generate a complete function with prologue/epilogue
-    pub fn generate(&mut self, func_name: &str) -> Vec<M68kInst> {
-        match func_name {
+    pub fn generate(&mut self, func_name: &str) -> CompileResult<Vec<M68kInst>> {
+        let insts = match func_name {
             // VDP library functions
             "vdp_init" => self.gen_vdp_init(),
             "vdp_vsync" => self.gen_vdp_vsync(),
@@ -104,14 +105,13 @@ impl SdkLibraryGenerator {
             "sram_write" => self.gen_sram_write(),
 
             _ => {
-                // For unimplemented functions, generate a stub
-                vec![
-                    M68kInst::Label(func_name.to_string()),
-                    M68kInst::Comment(format!("TODO: implement {func_name}")),
-                    M68kInst::Rts,
-                ]
+                return Err(CompileError::backend(format!(
+                    "SDK library function '{func_name}' is registered but not implemented"
+                )));
             }
-        }
+        };
+
+        Ok(insts)
     }
 
     // -------------------------------------------------------------------------

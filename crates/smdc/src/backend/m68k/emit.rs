@@ -113,7 +113,7 @@ impl CodeGenerator {
         }
 
         // Emit SDK library functions that were used
-        self.emit_sdk_library_functions();
+        self.emit_sdk_library_functions()?;
 
         // Emit data section with ROM initial values and RAM references
         if !module.globals.is_empty() || !module.strings.is_empty() {
@@ -1086,9 +1086,9 @@ impl CodeGenerator {
     }
 
     /// Emit SDK library functions that were used
-    fn emit_sdk_library_functions(&mut self) {
+    fn emit_sdk_library_functions(&mut self) -> CompileResult<()> {
         if self.pending_sdk_functions.is_empty() {
-            return;
+            return Ok(());
         }
 
         // Resolve all dependencies
@@ -1112,11 +1112,13 @@ impl CodeGenerator {
         let mut generator = SdkLibraryGenerator::new();
         for func_name in library_functions {
             self.emit(M68kInst::Comment(format!("SDK function: {func_name}")));
-            let code = generator.generate(&func_name);
+            let code = generator.generate(&func_name)?;
             for inst in code {
                 self.emit(inst);
             }
         }
+
+        Ok(())
     }
 
     /// Emit SDK static data (frame counter, operator offsets, etc.)
