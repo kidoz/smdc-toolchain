@@ -115,53 +115,51 @@ impl CodeGenerator {
         // Emit SDK library functions that were used
         self.emit_sdk_library_functions()?;
 
-        // Emit data section with ROM initial values and RAM references
-        if !module.globals.is_empty() || !module.strings.is_empty() {
-            // Emit label for ROM location BEFORE switching to data section
-            // This label gets a ROM address (where initial values are stored)
-            self.emit(M68kInst::Directive(".align 2".to_string()));
-            self.emit(M68kInst::Label("__data_rom_start".to_string()));
+        // Emit data section with ROM initial values and RAM references.
+        // The startup stub always references these symbols, so an empty module
+        // still needs zero-length section boundaries.
+        self.emit(M68kInst::Directive(".align 2".to_string()));
+        self.emit(M68kInst::Label("__data_rom_start".to_string()));
 
-            // Now switch to data section - labels get RAM addresses
-            self.emit(M68kInst::Directive(".section .data".to_string()));
-            self.emit(M68kInst::Directive(".align 2".to_string()));
+        // Now switch to data section - labels get RAM addresses
+        self.emit(M68kInst::Directive(".section .data".to_string()));
+        self.emit(M68kInst::Directive(".align 2".to_string()));
 
-            // Mark start of data in RAM
-            self.emit(M68kInst::Label("__data_ram_start".to_string()));
+        // Mark start of data in RAM
+        self.emit(M68kInst::Label("__data_ram_start".to_string()));
 
-            for global in &module.globals {
-                self.emit(M68kInst::Label(global.name.clone()));
-                if let Some(init_bytes) = &global.init {
-                    // Emit initialized data
-                    self.emit_data_bytes(init_bytes);
-                } else {
-                    // Zero-initialized
-                    let size = global.ty.size;
-                    match size {
-                        1 => self.emit(M68kInst::Directive(".byte 0".to_string())),
-                        2 => self.emit(M68kInst::Directive(".word 0".to_string())),
-                        _ => self.emit(M68kInst::Directive(format!(".space {size}"))),
-                    }
+        for global in &module.globals {
+            self.emit(M68kInst::Label(global.name.clone()));
+            if let Some(init_bytes) = &global.init {
+                // Emit initialized data
+                self.emit_data_bytes(init_bytes);
+            } else {
+                // Zero-initialized
+                let size = global.ty.size;
+                match size {
+                    1 => self.emit(M68kInst::Directive(".byte 0".to_string())),
+                    2 => self.emit(M68kInst::Directive(".word 0".to_string())),
+                    _ => self.emit(M68kInst::Directive(format!(".space {size}"))),
                 }
             }
-
-            for (label, string) in &module.strings {
-                self.emit(M68kInst::Label(label.0.clone()));
-                // Escape the string for assembly
-                let escaped = string
-                    .replace('\\', "\\\\")
-                    .replace('"', "\\\"")
-                    .replace('\n', "\\n")
-                    .replace('\r', "\\r")
-                    .replace('\t', "\\t")
-                    .replace('\0', "\\0");
-                self.emit(M68kInst::Directive(format!(".asciz \"{escaped}\"")));
-            }
-
-            // Mark end of data in RAM
-            self.emit(M68kInst::Directive(".align 2".to_string()));
-            self.emit(M68kInst::Label("__data_ram_end".to_string()));
         }
+
+        for (label, string) in &module.strings {
+            self.emit(M68kInst::Label(label.0.clone()));
+            // Escape the string for assembly
+            let escaped = string
+                .replace('\\', "\\\\")
+                .replace('"', "\\\"")
+                .replace('\n', "\\n")
+                .replace('\r', "\\r")
+                .replace('\t', "\\t")
+                .replace('\0', "\\0");
+            self.emit(M68kInst::Directive(format!(".asciz \"{escaped}\"")));
+        }
+
+        // Mark end of data in RAM
+        self.emit(M68kInst::Directive(".align 2".to_string()));
+        self.emit(M68kInst::Label("__data_ram_end".to_string()));
 
         // Emit SDK static data (frame counter, operator offsets, etc.)
         self.emit_sdk_static_data();
@@ -1141,5 +1139,26 @@ impl CodeGenerator {
 impl Default for CodeGenerator {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_module_emits_data_section_boundaries() {
+        let instructions = CodeGenerator::new()
+            .generate_instructions(&IrModule::new())
+            .unwrap();
+
+        for expected in ["__data_rom_start", "__data_ram_start", "__data_ram_end"] {
+            assert!(
+                instructions
+                    .iter()
+                    .any(|inst| matches!(inst, M68kInst::Label(label) if label == expected)),
+                "missing required startup symbol {expected}"
+            );
+        }
     }
 }
