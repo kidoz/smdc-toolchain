@@ -13,6 +13,8 @@ pub struct IrBuilder {
     label_counter: u32,
     string_counter: u32,
     locals: HashMap<String, Temp>,
+    /// Enum constants, usable as immediate values
+    enum_consts: HashMap<String, i64>,
     break_label: Option<Label>,
     continue_label: Option<Label>,
     /// Current source span — automatically attached to emitted instructions
@@ -28,6 +30,7 @@ impl IrBuilder {
             label_counter: 0,
             string_counter: 0,
             locals: HashMap::new(),
+            enum_consts: HashMap::new(),
             break_label: None,
             continue_label: None,
             current_span: None,
@@ -90,7 +93,26 @@ impl IrBuilder {
                 }
                 Ok(())
             }
-            _ => Ok(()), // Skip struct/union/enum/typedef for now
+            DeclKind::Enum(decl) => {
+                self.collect_enum_consts(decl);
+                Ok(())
+            }
+            _ => Ok(()), // Skip struct/union/typedef for now
+        }
+    }
+
+    /// Register enum variants as immediate constants
+    fn collect_enum_consts(&mut self, decl: &EnumDecl) {
+        let Some(variants) = &decl.variants else {
+            return;
+        };
+        let mut next = 0i64;
+        for variant in variants {
+            if let Some(v) = variant.value.as_ref().and_then(|e| e.eval_const()) {
+                next = v;
+            }
+            self.enum_consts.insert(variant.name.clone(), next);
+            next += 1;
         }
     }
 
@@ -149,6 +171,11 @@ impl IrBuilder {
         match &expr.kind {
             ExprKind::IntLiteral(n) => Ok(*n),
             ExprKind::CharLiteral(c) => Ok(*c as i64),
+            ExprKind::Identifier(name) => {
+                self.enum_consts.get(name).copied().ok_or_else(|| {
+                    CompileError::codegen("non-constant expression in global initializer")
+                })
+            }
             ExprKind::Unary { op, operand } => {
                 let val = self.evaluate_const_expr(operand)?;
                 Ok(match op {
@@ -417,6 +444,7 @@ impl IrBuilder {
                             self.build_local_var(var)?;
                         }
                     }
+                    DeclKind::Enum(decl) => self.collect_enum_consts(decl),
                     _ => {}
                 },
             }
@@ -981,6 +1009,8 @@ impl IrBuilder {
                         signed,
                     });
                     Ok(Value::Temp(dst))
+                } else if let Some(&value) = self.enum_consts.get(name) {
+                    Ok(Value::IntConst(value))
                 } else {
                     // Global variable or function
                     // Arrays decay to pointers (their address) in expressions

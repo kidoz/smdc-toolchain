@@ -85,3 +85,73 @@ fn initialized_global_builds_rom() {
 
     assert_valid_rom(&rom);
 }
+
+#[test]
+fn c_control_flow_builds_rom() {
+    let module = compile_c(
+        "int sum_to(int n) {\n\
+             int total = 0;\n\
+             int i;\n\
+             for (i = 1; i <= n; i++) {\n\
+                 if (i % 2 == 0) total += i; else total += i * 2;\n\
+             }\n\
+             while (total > 100) total -= 10;\n\
+             return total;\n\
+         }\n\
+         void main(void) { sum_to(10); }",
+    );
+    let rom = build_rom(&module);
+
+    assert_valid_rom(&rom);
+}
+
+#[test]
+fn c_structs_and_pointers_build_rom() {
+    let module = compile_c(
+        "struct Vec { int x; int y; };\n\
+         static struct Vec pos;\n\
+         void move_by(struct Vec *v, int dx, int dy) { v->x += dx; v->y += dy; }\n\
+         void main(void) {\n\
+             struct Vec local = {3, 4};\n\
+             pos.x = local.x;\n\
+             move_by(&pos, 1, 2);\n\
+         }",
+    );
+    let rom = build_rom(&module);
+
+    assert_valid_rom(&rom);
+}
+
+#[test]
+fn c_sdk_call_builds_rom() {
+    let module = compile_c(
+        "void vdp_init(void);\n\
+         void vdp_set_color(int index, int color);\n\
+         void main(void) { vdp_init(); vdp_set_color(0, 0x0E00); }",
+    );
+    let rom = build_rom(&module);
+
+    assert_valid_rom(&rom);
+}
+
+#[test]
+fn c_enum_and_const_array_size_build_rom() {
+    let module = compile_c(
+        "enum Flags { A = 1 << 0, B = 1 << 1, AB = A | B };\n\
+         void main(void) { int buf[4 * 4]; buf[15] = AB; (void)buf; }",
+    );
+    let rom = build_rom(&module);
+
+    assert_valid_rom(&rom);
+}
+
+#[test]
+fn rust_function_call_builds_rom() {
+    let module = compile_rust(
+        "fn add(a: i32, b: i32) -> i32 { a + b }\n\
+         fn main() { let _x = add(2, 3); }",
+    );
+    let rom = build_rom(&module);
+
+    assert_valid_rom(&rom);
+}
