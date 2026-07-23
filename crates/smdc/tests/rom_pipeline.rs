@@ -69,6 +69,16 @@ fn rust_program_without_globals_builds_rom() {
 }
 
 #[test]
+fn initialized_local_array_builds_rom() {
+    let module = compile_c(
+        "void main(void) { int a[3] = {1, 2, 3}; char s[6] = \"hi\"; (void)a; (void)s; }",
+    );
+    let rom = build_rom(&module);
+
+    assert_valid_rom(&rom);
+}
+
+#[test]
 fn initialized_global_builds_rom() {
     let module = compile_c("int counter = 7; void main(void) {}");
     let rom = build_rom(&module);

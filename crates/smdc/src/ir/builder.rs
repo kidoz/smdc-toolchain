@@ -439,19 +439,167 @@ impl IrBuilder {
         });
 
         // Handle initializer
-        if let Some(init) = &var.init
-            && let Initializer::Expr(expr) = init
-        {
-            let value = self.build_expr(expr)?;
-            self.emit(Inst::Store {
-                addr: Value::Temp(temp),
-                src: value,
-                size,
-                volatile: false,
-            });
+        if let Some(init) = &var.init {
+            self.build_local_init(temp, init, &var.ty)?;
         }
 
         Ok(())
+    }
+
+    /// Emit runtime initialization for a local variable whose address is in `base`.
+    fn build_local_init(&mut self, base: Temp, init: &Initializer, ty: &CType) -> CompileResult<()> {
+        if Self::contains_designated(init) {
+            return Err(CompileError::codegen(
+                "designated initializers are not supported for local variables",
+            ));
+        }
+        self.build_local_init_at(base, 0, init, ty)
+    }
+
+    fn contains_designated(init: &Initializer) -> bool {
+        match init {
+            Initializer::Designated { .. } => true,
+            Initializer::List(items) => items.iter().any(Self::contains_designated),
+            Initializer::Expr(_) => false,
+        }
+    }
+
+    /// Initialize the value of type `ty` at `base + offset`.
+    fn build_local_init_at(
+        &mut self,
+        base: Temp,
+        offset: usize,
+        init: &Initializer,
+        ty: &CType,
+    ) -> CompileResult<()> {
+        // char buf[] = "str" copies the bytes (including NUL), not the string address
+        if ty.is_array()
+            && let Initializer::Expr(expr) = init
+            && let ExprKind::StringLiteral(s) = &expr.kind
+        {
+            let mut bytes = s.as_bytes().to_vec();
+            bytes.push(0);
+            // Clamp to the array size (an exact-fit literal drops the NUL);
+            // unsized arrays take the literal length including the NUL
+            let total = if ty.size() > 0 { ty.size() } else { bytes.len() };
+            bytes.resize(total, 0);
+            self.store_const_bytes(base, offset, &bytes);
+            return Ok(());
+        }
+
+        // Fully-constant initializers lower to immediate stores of the evaluated
+        // bytes; this also zero-fills padding and omitted trailing elements.
+        if let Ok(bytes) = self.evaluate_initializer(init, ty) {
+            self.store_const_bytes(base, offset, &bytes);
+            return Ok(());
+        }
+
+        match init {
+            Initializer::Expr(expr) => {
+                if ty.is_array() {
+                    return Err(CompileError::codegen(
+                        "unsupported initializer for local array",
+                    ));
+                }
+                let value = self.build_expr(expr)?;
+                let addr = self.addr_at(base, offset);
+                self.emit(Inst::Store {
+                    addr,
+                    src: value,
+                    size: ty.size(),
+                    volatile: false,
+                });
+                Ok(())
+            }
+            Initializer::List(items) => match &ty.kind {
+                TypeKind::Array { element, size } => {
+                    let elem_size = element.size();
+                    let count = size.unwrap_or(items.len());
+                    for i in 0..count {
+                        let elem_offset = offset + i * elem_size;
+                        if let Some(item) = items.get(i) {
+                            self.build_local_init_at(base, elem_offset, item, element)?;
+                        } else {
+                            self.store_const_bytes(base, elem_offset, &vec![0u8; elem_size]);
+                        }
+                    }
+                    Ok(())
+                }
+                TypeKind::Struct { members, .. } => {
+                    // Same member-offset walk as evaluate_init_list_to_bytes
+                    let mut member_offset = 0;
+                    for (i, (_name, member_ty)) in members.iter().enumerate() {
+                        let align = member_ty.alignment();
+                        member_offset = (member_offset + align - 1) & !(align - 1);
+                        if let Some(item) = items.get(i) {
+                            self.build_local_init_at(base, offset + member_offset, item, member_ty)?;
+                        } else {
+                            self.store_const_bytes(
+                                base,
+                                offset + member_offset,
+                                &vec![0u8; member_ty.size()],
+                            );
+                        }
+                        member_offset += member_ty.size();
+                    }
+                    Ok(())
+                }
+                _ => {
+                    if let Some(first) = items.first() {
+                        self.build_local_init_at(base, offset, first, ty)
+                    } else {
+                        self.store_const_bytes(base, offset, &vec![0u8; ty.size()]);
+                        Ok(())
+                    }
+                }
+            },
+            Initializer::Designated { .. } => Err(CompileError::codegen(
+                "designated initializers are not supported for local variables",
+            )),
+        }
+    }
+
+    /// Store constant bytes at `base + start` using the widest stores the
+    /// offset parity allows. Alloca storage is 4-byte aligned in the frame,
+    /// so even offsets are safe for word/long accesses on the 68000.
+    fn store_const_bytes(&mut self, base: Temp, start: usize, bytes: &[u8]) {
+        let mut off = 0;
+        while off < bytes.len() {
+            let remaining = bytes.len() - off;
+            let even = (start + off).is_multiple_of(2);
+            let (size, value) = if even && remaining >= 4 {
+                let v = i32::from_be_bytes(bytes[off..off + 4].try_into().unwrap());
+                (4, i64::from(v))
+            } else if even && remaining >= 2 {
+                let v = i16::from_be_bytes(bytes[off..off + 2].try_into().unwrap());
+                (2, i64::from(v))
+            } else {
+                (1, i64::from(bytes[off]))
+            };
+            let addr = self.addr_at(base, start + off);
+            self.emit(Inst::Store {
+                addr,
+                src: Value::IntConst(value),
+                size,
+                volatile: false,
+            });
+            off += size;
+        }
+    }
+
+    /// Address of `base + offset` as a Value, avoiding the add when offset is 0.
+    fn addr_at(&mut self, base: Temp, offset: usize) -> Value {
+        if offset == 0 {
+            return Value::Temp(base);
+        }
+        let addr = self.new_temp();
+        self.emit(Inst::Binary {
+            dst: addr,
+            op: BinOp::Add,
+            left: Value::Temp(base),
+            right: Value::IntConst(offset as i64),
+        });
+        Value::Temp(addr)
     }
 
     fn build_stmt(&mut self, stmt: &Stmt) -> CompileResult<()> {

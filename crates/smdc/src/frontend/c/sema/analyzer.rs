@@ -622,6 +622,24 @@ impl SemanticAnalyzer {
         match init {
             Initializer::Expr(expr) => {
                 let init_ty = self.analyze_expr(expr)?;
+
+                // String literal initializing a char array: char s[N] = "str"
+                if let TypeKind::Array { element, size } = &expected_ty.kind
+                    && matches!(element.kind, TypeKind::Char { .. })
+                    && let ExprKind::StringLiteral(s) = &expr.kind
+                {
+                    // The literal may exactly fill the array (dropping the NUL)
+                    if let Some(n) = size
+                        && s.len() > *n
+                    {
+                        return Err(CompileError::type_error(
+                            "string literal is too long for array",
+                            expr.span,
+                        ));
+                    }
+                    return Ok(());
+                }
+
                 let element_ty = Self::initializer_element_type(expected_ty);
                 if Self::should_check_initializer(element_ty, &init_ty)
                     && !Self::is_assignable(element_ty, &init_ty)
