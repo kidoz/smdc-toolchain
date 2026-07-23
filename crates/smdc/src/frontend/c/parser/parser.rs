@@ -575,9 +575,21 @@ impl<'a> Parser<'a> {
 
                 let value = if self.match_token(&TokenKind::Eq)? {
                     let expr = self.parse_constant_expression()?;
-                    // TODO: Evaluate constant expression
-                    if let ExprKind::IntLiteral(v) = expr.kind {
-                        next_value = v;
+                    // Earlier variants of this enum are valid constants here
+                    let resolve = |name: &str| {
+                        variants
+                            .iter()
+                            .find(|(n, _)| n == name)
+                            .and_then(|(_, v): &(String, Option<i64>)| *v)
+                    };
+                    match expr.eval_const_with(&resolve) {
+                        Some(v) => next_value = v,
+                        None => {
+                            return Err(CompileError::parser(
+                                "enum value must be a constant expression",
+                                expr.span,
+                            ));
+                        }
                     }
                     Some(next_value)
                 } else {
@@ -681,10 +693,20 @@ impl<'a> Parser<'a> {
                 None
             } else {
                 let expr = self.parse_constant_expression()?;
-                if let ExprKind::IntLiteral(n) = expr.kind {
-                    Some(n as usize)
-                } else {
-                    None // VLA or unsupported
+                match expr.eval_const() {
+                    Some(n) if n > 0 => Some(n as usize),
+                    Some(_) => {
+                        return Err(CompileError::parser(
+                            "array size must be positive",
+                            expr.span,
+                        ));
+                    }
+                    None => {
+                        return Err(CompileError::parser(
+                            "array size must be a constant expression",
+                            expr.span,
+                        ));
+                    }
                 }
             };
             self.expect(TokenKind::RBracket)?;

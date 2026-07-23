@@ -25,6 +25,80 @@ impl Expr {
         self.ty = Some(ty);
         self
     }
+
+    /// Evaluate an integer constant expression without symbol information.
+    /// Returns None for anything that is not a compile-time constant
+    /// (identifiers, calls, floats, string literals, ...).
+    pub fn eval_const(&self) -> Option<i64> {
+        self.eval_const_with(&|_| None)
+    }
+
+    /// Evaluate an integer constant expression, resolving identifiers
+    /// (e.g. previously-seen enum variants) through `resolve`.
+    pub fn eval_const_with(&self, resolve: &dyn Fn(&str) -> Option<i64>) -> Option<i64> {
+        match &self.kind {
+            ExprKind::IntLiteral(n) => Some(*n),
+            ExprKind::CharLiteral(c) => Some(*c as i64),
+            ExprKind::Identifier(name) => resolve(name),
+            ExprKind::Unary { op, operand } => {
+                let v = operand.eval_const_with(resolve)?;
+                Some(match op {
+                    UnaryOp::Neg => v.wrapping_neg(),
+                    UnaryOp::Not => i64::from(v == 0),
+                    UnaryOp::BitNot => !v,
+                })
+            }
+            ExprKind::Binary { op, left, right } => {
+                let l = left.eval_const_with(resolve)?;
+                let r = right.eval_const_with(resolve)?;
+                Some(match op {
+                    BinaryOp::Add => l.wrapping_add(r),
+                    BinaryOp::Sub => l.wrapping_sub(r),
+                    BinaryOp::Mul => l.wrapping_mul(r),
+                    BinaryOp::Div => {
+                        if r == 0 {
+                            return None;
+                        }
+                        l.wrapping_div(r)
+                    }
+                    BinaryOp::Mod => {
+                        if r == 0 {
+                            return None;
+                        }
+                        l.wrapping_rem(r)
+                    }
+                    BinaryOp::BitAnd => l & r,
+                    BinaryOp::BitOr => l | r,
+                    BinaryOp::BitXor => l ^ r,
+                    BinaryOp::Shl => l.wrapping_shl(r as u32),
+                    BinaryOp::Shr => l.wrapping_shr(r as u32),
+                    BinaryOp::Eq => i64::from(l == r),
+                    BinaryOp::Ne => i64::from(l != r),
+                    BinaryOp::Lt => i64::from(l < r),
+                    BinaryOp::Le => i64::from(l <= r),
+                    BinaryOp::Gt => i64::from(l > r),
+                    BinaryOp::Ge => i64::from(l >= r),
+                    BinaryOp::LogAnd => i64::from(l != 0 && r != 0),
+                    BinaryOp::LogOr => i64::from(l != 0 || r != 0),
+                })
+            }
+            ExprKind::Ternary {
+                condition,
+                then_expr,
+                else_expr,
+            } => {
+                if condition.eval_const_with(resolve)? != 0 {
+                    then_expr.eval_const_with(resolve)
+                } else {
+                    else_expr.eval_const_with(resolve)
+                }
+            }
+            ExprKind::Cast { expr, .. } => expr.eval_const_with(resolve),
+            ExprKind::Sizeof(SizeofArg::Type(ty)) => Some(ty.size() as i64),
+            ExprKind::Sizeof(SizeofArg::Expr(e)) => e.ty.as_ref().map(|t| t.size() as i64),
+            _ => None,
+        }
+    }
 }
 
 /// Expression kinds

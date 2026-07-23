@@ -435,12 +435,11 @@ impl SemanticAnalyzer {
                 }
             }
 
-            ExprKind::Binary { left, right, .. } => {
+            ExprKind::Binary { op, left, right } => {
+                let op = *op;
                 let left_ty = self.analyze_expr(left)?;
-                let _right_ty = self.analyze_expr(right)?;
-                // Simplified: just return left type
-                // TODO: Proper type coercion
-                left_ty
+                let right_ty = self.analyze_expr(right)?;
+                Self::binary_result_type(op, &left_ty, &right_ty, expr.span)?
             }
 
             ExprKind::Unary { operand, .. } => self.analyze_expr(operand)?,
@@ -694,6 +693,133 @@ impl SemanticAnalyzer {
         }
     }
 
+    /// Array-to-pointer decay for use in expressions
+    fn decay(ty: &CType) -> CType {
+        if let TypeKind::Array { element, .. } = &ty.kind {
+            CType::pointer_to((**element).clone(), ty.span)
+        } else {
+            ty.clone()
+        }
+    }
+
+    /// Integer promotion: types narrower than int promote to int
+    fn promote(ty: &CType, span: crate::common::Span) -> CType {
+        if ty.is_integer() && ty.size() < 4 {
+            CType::int(span)
+        } else {
+            ty.clone()
+        }
+    }
+
+    /// Usual arithmetic conversions for two integer operands
+    fn arith_result_type(
+        lhs: &CType,
+        rhs: &CType,
+        span: crate::common::Span,
+    ) -> CompileResult<CType> {
+        if !lhs.is_integer() || !rhs.is_integer() {
+            return Err(CompileError::type_error(
+                "invalid operands to arithmetic operator",
+                span,
+            ));
+        }
+        let l = Self::promote(lhs, span);
+        let r = Self::promote(rhs, span);
+        Ok(if l.size() > r.size() {
+            l
+        } else if r.size() > l.size() {
+            r
+        } else if !l.is_signed() {
+            // Same size: unsigned wins
+            l
+        } else {
+            r
+        })
+    }
+
+    /// Result type of a binary expression, with pointer arithmetic rules
+    fn binary_result_type(
+        op: BinaryOp,
+        lhs: &CType,
+        rhs: &CType,
+        span: crate::common::Span,
+    ) -> CompileResult<CType> {
+        let l = Self::decay(lhs);
+        let r = Self::decay(rhs);
+
+        match op {
+            BinaryOp::Eq
+            | BinaryOp::Ne
+            | BinaryOp::Lt
+            | BinaryOp::Le
+            | BinaryOp::Gt
+            | BinaryOp::Ge
+            | BinaryOp::LogAnd
+            | BinaryOp::LogOr => Ok(CType::int(span)),
+
+            BinaryOp::Shl | BinaryOp::Shr => {
+                if l.is_pointer() || r.is_pointer() {
+                    return Err(CompileError::type_error(
+                        "invalid pointer operand to shift operator",
+                        span,
+                    ));
+                }
+                Ok(Self::promote(&l, span))
+            }
+
+            BinaryOp::Add | BinaryOp::Sub => match (l.is_pointer(), r.is_pointer()) {
+                (true, true) => {
+                    if op == BinaryOp::Sub {
+                        Ok(CType::int(span))
+                    } else {
+                        Err(CompileError::type_error("cannot add two pointers", span))
+                    }
+                }
+                (true, false) => {
+                    if r.is_integer() {
+                        Ok(l)
+                    } else {
+                        Err(CompileError::type_error(
+                            "pointer arithmetic requires an integer operand",
+                            span,
+                        ))
+                    }
+                }
+                (false, true) => {
+                    if op == BinaryOp::Sub {
+                        Err(CompileError::type_error(
+                            "cannot subtract a pointer from an integer",
+                            span,
+                        ))
+                    } else if l.is_integer() {
+                        Ok(r)
+                    } else {
+                        Err(CompileError::type_error(
+                            "pointer arithmetic requires an integer operand",
+                            span,
+                        ))
+                    }
+                }
+                (false, false) => Self::arith_result_type(&l, &r, span),
+            },
+
+            BinaryOp::Mul
+            | BinaryOp::Div
+            | BinaryOp::Mod
+            | BinaryOp::BitAnd
+            | BinaryOp::BitOr
+            | BinaryOp::BitXor => {
+                if l.is_pointer() || r.is_pointer() {
+                    return Err(CompileError::type_error(
+                        "invalid pointer operand to arithmetic operator",
+                        span,
+                    ));
+                }
+                Self::arith_result_type(&l, &r, span)
+            }
+        }
+    }
+
     fn is_assignable(dst: &CType, src: &CType) -> bool {
         if dst == src {
             return true;
@@ -772,5 +898,55 @@ mod tests {
     fn rejects_incompatible_initializer() {
         let err = analyze("int x = \"hello\";").unwrap_err();
         assert!(err.to_string().contains("initializer"));
+    }
+
+    #[test]
+    fn accepts_string_initializer_for_char_array() {
+        analyze("void f(void) { char s[6] = \"hi\"; }").unwrap();
+    }
+
+    #[test]
+    fn rejects_adding_two_pointers() {
+        let err = analyze("int f(int *a, int *b) { return (int)(a + b); }").unwrap_err();
+        assert!(err.to_string().contains("two pointers"));
+    }
+
+    #[test]
+    fn accepts_pointer_difference_and_offset() {
+        analyze("int f(int *a, int *b) { int d = b - a; int *p = a + 2; return d + (int)p; }")
+            .unwrap();
+    }
+
+    #[test]
+    fn rejects_pointer_multiplication() {
+        let err = analyze("int f(int *a) { return (int)(a * 2); }").unwrap_err();
+        assert!(err.to_string().contains("pointer"));
+    }
+
+    #[test]
+    fn comparison_yields_int() {
+        analyze("int f(char a, char b) { return a < b; }").unwrap();
+    }
+
+    #[test]
+    fn parses_enum_with_constant_expressions() {
+        analyze("enum Flags { A = 1 << 0, B = 1 << 1, C = A | B };").unwrap();
+    }
+
+    #[test]
+    fn rejects_non_constant_array_size() {
+        let result = analyze("void f(int n) { int a[n]; }");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn accepts_constant_expression_array_size() {
+        analyze("void f(void) { int a[4 * 2]; a[7] = 1; }").unwrap();
+    }
+
+    #[test]
+    fn rejects_zero_array_size() {
+        let result = analyze("void f(void) { int a[0]; }");
+        assert!(result.is_err());
     }
 }
