@@ -141,6 +141,17 @@ static struct {
 
 } snd_state;
 
+/* SFX playback state (parallel arrays keep struct access simple) */
+static unsigned char *snd_sfx_data[SND_TOTAL_CHANNELS];
+static unsigned char snd_sfx_len[SND_TOTAL_CHANNELS];
+static unsigned char snd_sfx_pos[SND_TOTAL_CHANNELS];
+
+/* Channel preference for SND_CH_ANY: FM6..FM4 first (usually free of
+ * melody), then PSG3..PSG1, noise, then the remaining FM channels */
+static const unsigned char snd_sfx_ch_order[SND_TOTAL_CHANNELS] = {
+    5, 4, 3, 8, 7, 6, 9, 2, 1, 0
+};
+
 /* ============================================================================
  * YM2612 Low-Level Functions
  * ============================================================================ */
@@ -584,6 +595,125 @@ static void snd_update_channels(void) {
 }
 
 /* ============================================================================
+ * Internal: SFX Engine
+ * ============================================================================ */
+
+/* Cut whatever is sounding on a channel */
+static void snd_sfx_silence_channel(int ch_idx) {
+    if (ch_idx < SND_FM_CHANNELS) {
+        snd_fm_key_off(ch_idx);
+    } else {
+        snd_psg_set_volume(ch_idx, 0);
+    }
+}
+
+/* Release a channel back to the music engine */
+static void snd_sfx_end(int ch_idx) {
+    struct SndChannelState *ch_ptr;
+    ch_ptr = &snd_state.ch[ch_idx];
+    ch_ptr->sfx_active = 0;
+    ch_ptr->sfx_priority = 0;
+    snd_sfx_data[ch_idx] = 0;
+    snd_sfx_len[ch_idx] = 0;
+    snd_sfx_pos[ch_idx] = 0;
+    snd_sfx_silence_channel(ch_idx);
+    /* Music retriggers on this channel at its next note */
+}
+
+static void snd_sfx_apply_frame(int ch_idx, int note, int vol) {
+    int block;
+    int fnum;
+
+    if (note == SND_NOTE_OFF || note == SND_NOTE_CUT) {
+        snd_sfx_silence_channel(ch_idx);
+    } else if (note != SND_NOTE_NONE) {
+        if (ch_idx < SND_FM_CHANNELS) {
+            snd_note_to_fm(note, &block, &fnum);
+            snd_fm_key_off(ch_idx);
+            snd_fm_set_freq(ch_idx, block, fnum);
+            snd_fm_key_on(ch_idx);
+        } else if (ch_idx == SND_CH_NOISE) {
+            snd_psg_set_noise(note & 0x07);
+        } else {
+            snd_psg_set_freq(ch_idx, snd_note_to_psg(note));
+        }
+    }
+
+    if (vol != 255) {
+        if (ch_idx < SND_FM_CHANNELS) {
+            snd_fm_set_volume(ch_idx, (vol * snd_state.master_volume) >> 7);
+        } else {
+            snd_psg_set_volume(ch_idx, (vol * snd_state.master_volume) >> 7);
+        }
+    }
+}
+
+/* Advance all active sound effects by one frame */
+static void snd_update_sfx(void) {
+    struct SndChannelState *ch_ptr;
+    unsigned char *frame;
+    int i;
+
+    for (i = 0; i < SND_TOTAL_CHANNELS; i++) {
+        ch_ptr = &snd_state.ch[i];
+        if (!ch_ptr->sfx_active) continue;
+
+        if (snd_sfx_pos[i] >= snd_sfx_len[i]) {
+            snd_sfx_end(i);
+            continue;
+        }
+
+        frame = snd_sfx_data[i] + snd_sfx_pos[i] * 2;
+        snd_sfx_apply_frame(i, frame[0], frame[1]);
+        snd_sfx_pos[i]++;
+    }
+}
+
+static int snd_sfx_pick_channel(struct SndSfx *sfx) {
+    struct SndChannelState *ch_ptr;
+    int i;
+    int ch_idx;
+    int best;
+    int best_pri;
+
+    /* Explicit channel request: honor it unless a more important SFX holds it */
+    if (sfx->channel != SND_CH_ANY) {
+        if (sfx->channel >= SND_TOTAL_CHANNELS) return -1;
+        ch_ptr = &snd_state.ch[sfx->channel];
+        if (ch_ptr->sfx_active && sfx->priority < ch_ptr->sfx_priority) return -1;
+        return sfx->channel;
+    }
+
+    /* Pass 1: an idle channel (no SFX, no music note) */
+    for (i = 0; i < SND_TOTAL_CHANNELS; i++) {
+        ch_idx = snd_sfx_ch_order[i];
+        ch_ptr = &snd_state.ch[ch_idx];
+        if (!ch_ptr->sfx_active && !ch_ptr->playing) return ch_idx;
+    }
+
+    /* Pass 2: mask a music channel without active SFX */
+    for (i = 0; i < SND_TOTAL_CHANNELS; i++) {
+        ch_idx = snd_sfx_ch_order[i];
+        ch_ptr = &snd_state.ch[ch_idx];
+        if (!ch_ptr->sfx_active) return ch_idx;
+    }
+
+    /* Pass 3: steal the lowest-priority SFX we outrank or match */
+    best = -1;
+    best_pri = 255;
+    for (i = 0; i < SND_TOTAL_CHANNELS; i++) {
+        ch_idx = snd_sfx_ch_order[i];
+        ch_ptr = &snd_state.ch[ch_idx];
+        if (ch_ptr->sfx_priority < best_pri) {
+            best_pri = ch_ptr->sfx_priority;
+            best = ch_idx;
+        }
+    }
+    if (best >= 0 && best_pri <= sfx->priority) return best;
+    return -1;
+}
+
+/* ============================================================================
  * Public API Implementation
  * ============================================================================ */
 
@@ -631,6 +761,10 @@ void snd_init(void) {
         ch_ptr->vib_phase = 0;
         ch_ptr->env_pos = 0;
         ch_ptr->env_tick = 0;
+
+        snd_sfx_data[i] = 0;
+        snd_sfx_len[i] = 0;
+        snd_sfx_pos[i] = 0;
     }
 
     /* Initialize YM2612 */
@@ -675,6 +809,9 @@ void snd_update(void) {
             }
         }
     }
+
+    /* Advance sound effects (they run even when no song is playing) */
+    snd_update_sfx();
 
     /* Don't process if not playing or paused */
     if (!snd_state.playing || snd_state.paused || !snd_state.song) {
@@ -804,15 +941,38 @@ int snd_get_row(void) {
 }
 
 int snd_play_sfx(struct SndSfx *sfx) {
-    /* TODO: Implement SFX system */
-    return -1;
+    struct SndChannelState *ch_ptr;
+    int ch_idx;
+
+    if (!sfx) return -1;
+    if (sfx->length == 0) return -1;
+    if (!sfx->data) return -1;
+
+    ch_idx = snd_sfx_pick_channel(sfx);
+    if (ch_idx < 0) return -1;
+
+    ch_ptr = &snd_state.ch[ch_idx];
+    ch_ptr->sfx_active = 1;
+    ch_ptr->sfx_priority = sfx->priority;
+
+    snd_sfx_data[ch_idx] = sfx->data;
+    snd_sfx_len[ch_idx] = sfx->length;
+    snd_sfx_pos[ch_idx] = 0;
+
+    /* Cut any note sounding on the channel; the first SFX frame is
+     * applied by the next snd_update call */
+    snd_sfx_silence_channel(ch_idx);
+
+    return ch_idx;
 }
 
 void snd_stop_sfx(int channel) {
     struct SndChannelState *ch_ptr;
     if (channel >= 0 && channel < SND_TOTAL_CHANNELS) {
         ch_ptr = &snd_state.ch[channel];
-        ch_ptr->sfx_active = 0;
+        if (ch_ptr->sfx_active) {
+            snd_sfx_end(channel);
+        }
     }
 }
 
@@ -821,7 +981,9 @@ void snd_stop_all_sfx(void) {
     int i;
     for (i = 0; i < SND_TOTAL_CHANNELS; i++) {
         ch_ptr = &snd_state.ch[i];
-        ch_ptr->sfx_active = 0;
+        if (ch_ptr->sfx_active) {
+            snd_sfx_end(i);
+        }
     }
 }
 

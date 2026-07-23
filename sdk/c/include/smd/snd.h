@@ -35,6 +35,7 @@
 #define SND_ROWS_PER_PATTERN 64
 
 /* Channel indices */
+#define SND_CH_ANY      255 /* Let the driver pick an SFX channel */
 #define SND_CH_FM1      0
 #define SND_CH_FM2      1
 #define SND_CH_FM3      2
@@ -205,12 +206,22 @@ struct SndSong {
 
 /*
  * Sound Effect
+ *
+ * Frame data: 2 bytes per frame, played one frame per snd_update call.
+ *   byte 0: note  - 0-127 (re)triggers the note; SND_NOTE_OFF keys off;
+ *                   SND_NOTE_CUT silences instantly; SND_NOTE_NONE keeps
+ *                   the previous pitch. On SND_CH_NOISE the low 3 bits
+ *                   select the noise mode instead of a pitch.
+ *   byte 1: volume - 0-127 sets the channel volume; 255 = no change.
+ *
+ * FM sound effects use whatever patch is currently loaded on the channel;
+ * set one with snd_fm_set_patch() before triggering if needed.
  */
 struct SndSfx {
     unsigned char channel;      /* Preferred channel (or SND_CH_ANY) */
-    unsigned char priority;     /* Priority level */
+    unsigned char priority;     /* Priority level (SND_PRIORITY_*) */
     unsigned char length;       /* Number of frames */
-    unsigned char *data;        /* Frame data (varies by channel type) */
+    unsigned char *data;        /* Frame data: length * 2 bytes */
 };
 
 /* ============================================================================
