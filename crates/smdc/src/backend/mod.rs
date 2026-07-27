@@ -31,6 +31,7 @@ pub enum OutputFormat {
 #[derive(Debug, Clone, Default)]
 pub struct BackendConfig {
     pub output_format: OutputFormat,
+    /// Optimization level (0-3). Currently inert: no backend reads this yet.
     pub optimize_level: u8,
     pub debug_info: bool,
     pub dump_ir: bool,
