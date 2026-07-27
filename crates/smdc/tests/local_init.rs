@@ -2,9 +2,9 @@
 //! initializers must produce runtime stores, not silently-uninitialized
 //! stack memory.
 
+use smd_compiler::DiagnosticReporter;
 use smd_compiler::frontend::{CFrontend, CompileContext, Frontend, FrontendConfig};
 use smd_compiler::ir::{Inst, IrModule, Value};
-use smd_compiler::DiagnosticReporter;
 
 fn try_compile_c(source: &str) -> smd_compiler::common::CompileResult<IrModule> {
     let mut reporter = DiagnosticReporter::new();

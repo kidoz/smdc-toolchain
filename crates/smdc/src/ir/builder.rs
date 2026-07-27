@@ -171,11 +171,9 @@ impl IrBuilder {
         match &expr.kind {
             ExprKind::IntLiteral(n) => Ok(*n),
             ExprKind::CharLiteral(c) => Ok(*c as i64),
-            ExprKind::Identifier(name) => {
-                self.enum_consts.get(name).copied().ok_or_else(|| {
-                    CompileError::codegen("non-constant expression in global initializer")
-                })
-            }
+            ExprKind::Identifier(name) => self.enum_consts.get(name).copied().ok_or_else(|| {
+                CompileError::codegen("non-constant expression in global initializer")
+            }),
             ExprKind::Unary { op, operand } => {
                 let val = self.evaluate_const_expr(operand)?;
                 Ok(match op {
@@ -475,7 +473,12 @@ impl IrBuilder {
     }
 
     /// Emit runtime initialization for a local variable whose address is in `base`.
-    fn build_local_init(&mut self, base: Temp, init: &Initializer, ty: &CType) -> CompileResult<()> {
+    fn build_local_init(
+        &mut self,
+        base: Temp,
+        init: &Initializer,
+        ty: &CType,
+    ) -> CompileResult<()> {
         if Self::contains_designated(init) {
             return Err(CompileError::codegen(
                 "designated initializers are not supported for local variables",
@@ -509,7 +512,11 @@ impl IrBuilder {
             bytes.push(0);
             // Clamp to the array size (an exact-fit literal drops the NUL);
             // unsized arrays take the literal length including the NUL
-            let total = if ty.size() > 0 { ty.size() } else { bytes.len() };
+            let total = if ty.size() > 0 {
+                ty.size()
+            } else {
+                bytes.len()
+            };
             bytes.resize(total, 0);
             self.store_const_bytes(base, offset, &bytes);
             return Ok(());
@@ -560,7 +567,12 @@ impl IrBuilder {
                         let align = member_ty.alignment();
                         member_offset = (member_offset + align - 1) & !(align - 1);
                         if let Some(item) = items.get(i) {
-                            self.build_local_init_at(base, offset + member_offset, item, member_ty)?;
+                            self.build_local_init_at(
+                                base,
+                                offset + member_offset,
+                                item,
+                                member_ty,
+                            )?;
                         } else {
                             self.store_const_bytes(
                                 base,
