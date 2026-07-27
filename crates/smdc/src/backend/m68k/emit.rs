@@ -32,7 +32,32 @@ pub struct CodeGenerator {
     debug_filename: String,
     /// Source text for byte-offset → line mapping
     debug_source: String,
+
+    // ---- Block-local register cache (D2-D7) ----
+    // Maps an IR temp id to a cached data register holding its current value.
+    // The stack slot in `temp_offsets` remains the authoritative home location;
+    // the cache only avoids redundant load/store traffic within a basic block.
+    // It is flushed (written back + cleared) at every block and call boundary.
+    reg_cache: HashMap<u32, DataReg>,
+    // LRU-ordered list of cached temps (most-recently-used at the back) for eviction.
+    reg_cache_lru: Vec<u32>,
+    // Free callee-saved data registers available for caching (D2-D7).
+    // D0 and D1 stay reserved as scratch; A0/A1 as address scratch.
+    free_data_regs: Vec<DataReg>,
 }
+
+/// Callee-saved data registers usable by the block-local cache, in preference order.
+/// D0/D1 are caller-saved scratch and intentionally excluded.
+/// The MOVEM prologue already saves/restores these, so caching in them needs no
+/// prologue change.
+const CACHE_REGS: [DataReg; 6] = [
+    DataReg::D2,
+    DataReg::D3,
+    DataReg::D4,
+    DataReg::D5,
+    DataReg::D6,
+    DataReg::D7,
+];
 
 impl CodeGenerator {
     pub fn new() -> Self {
@@ -48,6 +73,9 @@ impl CodeGenerator {
             debug_enabled: false,
             debug_filename: String::new(),
             debug_source: String::new(),
+            reg_cache: HashMap::new(),
+            reg_cache_lru: Vec::new(),
+            free_data_regs: CACHE_REGS.to_vec(),
         }
     }
 
@@ -477,6 +505,10 @@ impl CodeGenerator {
         // Reset state
         self.temp_offsets.clear();
         self.next_offset = -4;
+        // Reset the block-local register cache (should already be empty between fns).
+        self.reg_cache.clear();
+        self.reg_cache_lru.clear();
+        self.free_data_regs = CACHE_REGS.to_vec();
 
         // Count how many temps we need
         let mut max_temp = 0u32;
@@ -566,6 +598,62 @@ impl CodeGenerator {
         }
     }
 
+    // ---- Block-local register cache (D2-D7) helpers ----
+
+    /// Write back every cached register to its home stack slot and clear the cache.
+    /// Called at every block and call boundary so the stack is authoritative
+    /// across basic blocks and across calls (matching the original stack model).
+    fn flush_cache(&mut self) {
+        // Iterate in LRU order (oldest first) for determinism.
+        let lru = std::mem::take(&mut self.reg_cache_lru);
+        for temp in &lru {
+            if let Some(&reg) = self.reg_cache.get(temp) {
+                let offset = self.temp_offsets.get(temp).copied().unwrap_or(0);
+                self.emit(M68kInst::Move(
+                    Size::Long,
+                    Operand::DataReg(reg),
+                    Operand::Disp(offset, AddrReg::A6),
+                ));
+                self.free_data_regs.push(reg);
+            }
+        }
+        self.reg_cache.clear();
+        // Restore canonical preference order so allocation is deterministic.
+        self.free_data_regs = CACHE_REGS.to_vec();
+    }
+
+    /// Move `temp` to the most-recently-used position in the LRU list.
+    fn cache_touch(&mut self, temp: u32) {
+        self.reg_cache_lru.retain(|&t| t != temp);
+        self.reg_cache_lru.push(temp);
+    }
+
+    /// Allocate a callee-saved data register for caching `temp`.
+    /// Pops a free register if available; otherwise LRU-evicts the coldest
+    /// cached temp (writing it back to its home slot) and reuses its register.
+    fn alloc_cache_reg(&mut self, _temp: u32) -> DataReg {
+        if let Some(reg) = self.free_data_regs.pop() {
+            return reg;
+        }
+        // Evict the least-recently-used temp (front of the LRU list).
+        let victim = self.reg_cache_lru.first().copied();
+        if let Some(victim) = victim {
+            if let Some(&vreg) = self.reg_cache.get(&victim) {
+                let offset = self.temp_offsets.get(&victim).copied().unwrap_or(0);
+                self.emit(M68kInst::Move(
+                    Size::Long,
+                    Operand::DataReg(vreg),
+                    Operand::Disp(offset, AddrReg::A6),
+                ));
+                self.reg_cache.remove(&victim);
+                self.reg_cache_lru.retain(|&t| t != victim);
+                return vreg;
+            }
+        }
+        // Unreachable: the cache is non-empty whenever free_data_regs is empty.
+        DataReg::D7
+    }
+
     fn load_value(&mut self, value: &Value, reg: DataReg) -> CompileResult<()> {
         match value {
             Value::IntConst(n) => {
@@ -580,12 +668,22 @@ impl CodeGenerator {
                 }
             }
             Value::Temp(t) => {
-                let offset = self.get_temp_offset(*t);
-                self.emit(M68kInst::Move(
-                    Size::Long,
-                    Operand::Disp(offset, AddrReg::A6),
-                    Operand::DataReg(reg),
-                ));
+                if let Some(&cached) = self.reg_cache.get(&t.0) {
+                    // Cache hit: copy register-to-register instead of a stack load.
+                    self.cache_touch(t.0);
+                    self.emit(M68kInst::Move(
+                        Size::Long,
+                        Operand::DataReg(cached),
+                        Operand::DataReg(reg),
+                    ));
+                } else {
+                    let offset = self.get_temp_offset(*t);
+                    self.emit(M68kInst::Move(
+                        Size::Long,
+                        Operand::Disp(offset, AddrReg::A6),
+                        Operand::DataReg(reg),
+                    ));
+                }
             }
             Value::Name(name) => {
                 self.emit(M68kInst::Move(
@@ -624,13 +722,40 @@ impl CodeGenerator {
         Ok(())
     }
 
+    /// Record a temp's new value. When a free cache register is available, the
+    /// value is moved into it and the stack write is deferred until flush/eviction.
+    /// Otherwise (cache full and caller used a scratch reg we can't reuse) we fall
+    /// back to writing straight to the home slot.
     fn store_temp(&mut self, temp: Temp, reg: DataReg) {
-        let offset = self.get_temp_offset(temp);
-        self.emit(M68kInst::Move(
-            Size::Long,
-            Operand::DataReg(reg),
-            Operand::Disp(offset, AddrReg::A6),
-        ));
+        // Ensure the home slot exists (for later write-back on flush/eviction).
+        self.get_temp_offset(temp);
+
+        // If this temp is already cached, update the cached register in place.
+        if self.reg_cache.contains_key(&temp.0) {
+            if let Some(&cached) = self.reg_cache.get(&temp.0) {
+                if cached != reg {
+                    self.emit(M68kInst::Move(
+                        Size::Long,
+                        Operand::DataReg(reg),
+                        Operand::DataReg(cached),
+                    ));
+                }
+                self.cache_touch(temp.0);
+                return;
+            }
+        }
+
+        // Try to park the result in a fresh cache register.
+        let cache_reg = self.alloc_cache_reg(temp.0);
+        if cache_reg != reg {
+            self.emit(M68kInst::Move(
+                Size::Long,
+                Operand::DataReg(reg),
+                Operand::DataReg(cache_reg),
+            ));
+        }
+        self.reg_cache.insert(temp.0, cache_reg);
+        self.reg_cache_lru.push(temp.0);
     }
 
     fn generate_inst(&mut self, inst: &Inst) -> CompileResult<()> {
@@ -865,17 +990,20 @@ impl CodeGenerator {
             }
 
             Inst::Jump(label) => {
+                self.flush_cache();
                 self.emit(M68kInst::Bra(label.0.clone()));
             }
 
             Inst::CondJump { cond, target } => {
                 self.load_value(cond, DataReg::D0)?;
+                self.flush_cache();
                 self.emit(M68kInst::Tst(Size::Long, Operand::DataReg(DataReg::D0)));
                 self.emit(M68kInst::Bcc(Cond::Ne, target.0.clone()));
             }
 
             Inst::CondJumpFalse { cond, target } => {
                 self.load_value(cond, DataReg::D0)?;
+                self.flush_cache();
                 self.emit(M68kInst::Tst(Size::Long, Operand::DataReg(DataReg::D0)));
                 self.emit(M68kInst::Bcc(Cond::Eq, target.0.clone()));
             }
@@ -889,17 +1017,20 @@ impl CodeGenerator {
                     let sdk_func = self.sdk_registry.lookup(func).unwrap();
                     match sdk_func.kind {
                         SdkFunctionKind::Inline => {
-                            // Emit inline code
+                            // Inline SDK calls clobber D0-D3 as argument regs.
+                            self.flush_cache();
                             self.emit_sdk_inline_call(func, args, dst)?;
                         }
                         SdkFunctionKind::Library => {
                             // Mark function as needed, emit normal call
                             self.pending_sdk_functions.insert(func.clone());
+                            self.flush_cache();
                             self.emit_standard_call(func, args, dst)?;
                         }
                     }
                 } else {
                     // Regular user function call
+                    self.flush_cache();
                     self.emit_standard_call(func, args, dst)?;
                 }
             }
@@ -908,6 +1039,7 @@ impl CodeGenerator {
                 if let Some(val) = value {
                     self.load_value(val, DataReg::D0)?;
                 }
+                self.flush_cache();
 
                 // Epilogue
                 // Restore callee-saved registers
