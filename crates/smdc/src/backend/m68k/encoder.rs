@@ -225,7 +225,7 @@ impl InstructionEncoder {
                     Size::Long => 4,
                 }
             }
-            Operand::PcRel(_) | Operand::Label(_) => 4, // Assume long for labels
+            Operand::Label(_) => 4, // Assume long for labels
         }
     }
 
@@ -1074,12 +1074,6 @@ impl InstructionEncoder {
                     Size::Long => ext.extend_from_slice(&(*val as u32).to_be_bytes()),
                 }
                 (0b111, 0b100)
-            }
-            Operand::PcRel(_label) => {
-                // PC-relative with word displacement
-                // TODO: Handle symbol resolution
-                ext.extend_from_slice(&0u16.to_be_bytes()); // Placeholder
-                (0b111, 0b010)
             }
             Operand::Label(label) => {
                 // Treat as absolute long

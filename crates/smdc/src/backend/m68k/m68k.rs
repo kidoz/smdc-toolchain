@@ -123,8 +123,6 @@ pub enum Operand {
     AbsLong(u32),
     /// Immediate: #imm
     Imm(i32),
-    /// PC relative: d(PC)
-    PcRel(String),
     /// Label reference
     Label(String),
     /// Status register
@@ -150,7 +148,6 @@ impl std::fmt::Display for Operand {
                     write!(f, "#-${:X}", -v)
                 }
             }
-            Operand::PcRel(l) => write!(f, "{l}(pc)"),
             Operand::Label(l) => write!(f, "{l}"),
             Operand::Sr => write!(f, "sr"),
         }
