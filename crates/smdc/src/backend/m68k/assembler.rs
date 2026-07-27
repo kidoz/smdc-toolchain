@@ -163,16 +163,9 @@ impl Assembler {
     /// Pass 2: Encode all instructions with resolved addresses
     fn encode_pass(&self, instructions: &[M68kInst]) -> Result<Vec<u8>, AssemblyError> {
         let mut output = Vec::new();
-        let mut encoder = InstructionEncoder::new();
-        encoder.set_base_address(self.base_address);
 
-        // Copy symbol table to encoder
-        for name in self.symbols.keys() {
-            encoder.define_symbol(name);
-            // We need to set the position manually for pre-defined symbols
-        }
-
-        // Create a new encoder with symbols pre-populated
+        // Encoder with the layout-pass symbol table pre-populated, so forward
+        // and backward label references resolve inline during encoding.
         let mut encoder = self.create_encoder_with_symbols();
 
         for inst in instructions {
@@ -336,5 +329,75 @@ mod tests {
         // Verify RTS at the end
         let len = bytes.len();
         assert_eq!(bytes[len - 2..], [0x4E, 0x75]);
+    }
+
+    /// Forward branches resolve via the pre-populated symbol table in encode_pass.
+    /// This path is the one the codegen actually exercises (loops/conditionals),
+    /// but had no byte-level coverage before.
+    #[test]
+    fn test_forward_branch_displacement() {
+        let mut asm = Assembler::new(0x200);
+        let instructions = vec![
+            // 0x200: bra.w target (4 bytes)
+            M68kInst::Bra("target".to_string()),
+            // 0x204: nop (2 bytes, filler so target isn't adjacent)
+            M68kInst::Nop,
+            // 0x206: target label
+            M68kInst::Label("target".to_string()),
+            M68kInst::Rts,
+        ];
+
+        let bytes = asm.assemble(&instructions).unwrap();
+
+        // BRA.W opword: 0x6000. PC ref = opword addr (0x200) + 2 = 0x202.
+        // Target = 0x206, displacement = 0x206 - 0x202 = +4 = 0x0004.
+        assert_eq!(bytes[0..2], [0x60, 0x00]); // BRA.W opword
+        assert_eq!(bytes[2..4], [0x00, 0x04]); // displacement +4
+    }
+
+    /// Forward conditional branch (Bcc). Verifies the condition code is packed
+    /// into the opword and the displacement is computed correctly.
+    #[test]
+    fn test_forward_bcc_displacement() {
+        let mut asm = Assembler::new(0x200);
+        let instructions = vec![
+            // 0x200: bne.w skip (4 bytes)
+            M68kInst::Bcc(Cond::Ne, "skip".to_string()),
+            // 0x204: nop (2 bytes)
+            M68kInst::Nop,
+            // 0x206: skip label
+            M68kInst::Label("skip".to_string()),
+            M68kInst::Rts,
+        ];
+
+        let bytes = asm.assemble(&instructions).unwrap();
+
+        // Bcc opword = 0x6000 | (cond << 8). Cond::Ne = 6 -> 0x6600.
+        // PC ref = 0x200 + 2 = 0x202, target = 0x206, disp = +4 = 0x0004.
+        assert_eq!(bytes[0..2], [0x66, 0x00]); // BNE.W opword
+        assert_eq!(bytes[2..4], [0x00, 0x04]); // displacement +4
+    }
+
+    /// Forward DBF (loop bottom). Verifies the 0x51C8 base + displacement math
+    /// for the resolved-symbol path that the codegen emits for `for`/`while` loops.
+    #[test]
+    fn test_forward_dbf_displacement() {
+        let mut asm = Assembler::new(0x200);
+        let instructions = vec![
+            // 0x200: dbf d0, loop_top (4 bytes)
+            M68kInst::Dbf(DataReg::D0, "loop_top".to_string()),
+            // 0x204: nop (2 bytes, filler)
+            M68kInst::Nop,
+            // 0x206: loop_top label
+            M68kInst::Label("loop_top".to_string()),
+            M68kInst::Rts,
+        ];
+
+        let bytes = asm.assemble(&instructions).unwrap();
+
+        // DBcc opword = 0x51C8 | reg. D0 -> 0x51C8.
+        // PC ref = 0x200 + 2 = 0x202, target = 0x206, disp = +4 = 0x0004.
+        assert_eq!(bytes[0..2], [0x51, 0xC8]); // DBF D0 opword
+        assert_eq!(bytes[2..4], [0x00, 0x04]); // displacement +4
     }
 }
