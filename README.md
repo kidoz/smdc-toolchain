@@ -1,6 +1,7 @@
 # smdc-toolchain
 
-![Language](https://img.shields.io/github/languages/top/kidoz/smdc-toolchain)
+![Language](https://img.shields.io/badge/language-Rust-orange?logo=rust)
+![Edition](https://img.shields.io/badge/edition-2024-blue)
 ![License](https://img.shields.io/github/license/kidoz/smdc-toolchain)
 
 C/Rust compiler and ROM toolchain targeting the Sega Mega Drive/Genesis (Motorola 68000).
