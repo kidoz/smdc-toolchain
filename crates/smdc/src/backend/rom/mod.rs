@@ -16,11 +16,19 @@ pub use checksum::{calculate_checksum, update_checksum, verify_checksum};
 pub use header::RomHeader;
 pub use vectors::VectorTable;
 
-use crate::backend::m68k::{Assembler, CodeGenerator, generate_sym_file};
+use crate::backend::m68k::{Assembler, CodeGenerator, disassemble_listing, generate_sym_file};
 use crate::backend::{Backend, BackendConfig, BackendOutput, OutputFormat, RomConfig};
 use crate::common::{CompileError, CompileResult};
 use crate::ir::IrModule;
 use std::collections::HashMap;
+
+/// Debug artifacts produced alongside a ROM when `-g` is enabled
+pub struct RomDebugArtifacts {
+    /// Assembler symbol table (label -> address)
+    pub symbols: HashMap<String, u32>,
+    /// Disassembly listing of the code section
+    pub listing: String,
+}
 
 /// ROM builder backend
 ///
@@ -49,13 +57,13 @@ impl RomBackend {
 
     /// Build a ROM from the given IR module.
     ///
-    /// Returns the ROM binary and optionally the assembler symbol table
-    /// (when `config.debug_info` is true, for `.sym` file generation).
+    /// Returns the ROM binary and optionally the debug artifacts
+    /// (symbol table + disassembly listing, when `config.debug_info` is true).
     pub fn build_rom(
         &self,
         module: &IrModule,
         config: &BackendConfig,
-    ) -> CompileResult<(Vec<u8>, Option<HashMap<String, u32>>)> {
+    ) -> CompileResult<(Vec<u8>, Option<RomDebugArtifacts>)> {
         // 1. Generate M68k instructions from IR
         let mut codegen = CodeGenerator::new();
         if config.debug_info {
@@ -71,8 +79,20 @@ impl RomBackend {
             .assemble(&instructions)
             .map_err(|e| CompileError::backend(format!("assembly error: {e}")))?;
 
-        let symbols = if config.debug_info {
-            Some(assembler.symbols().clone())
+        let debug = if config.debug_info {
+            let symbols = assembler.symbols().clone();
+            // Inline data starts at data_rom_offset; dump it raw in the listing
+            let data_start = match assembler.data_rom_offset() {
+                0 => None,
+                offset => Some(offset),
+            };
+            let listing = disassemble_listing(
+                &code_binary,
+                self.rom_config.entry_point,
+                &symbols,
+                data_start,
+            );
+            Some(RomDebugArtifacts { symbols, listing })
         } else {
             None
         };
@@ -82,7 +102,7 @@ impl RomBackend {
         builder.set_code(code_binary);
         let rom = builder.build()?;
 
-        Ok((rom, symbols))
+        Ok((rom, debug))
     }
 }
 
@@ -121,7 +141,7 @@ impl Backend for RomBackend {
             eprintln!("Building Sega Megadrive/Genesis ROM...");
         }
 
-        let (rom, symbols) = self.build_rom(module, config)?;
+        let (rom, debug) = self.build_rom(module, config)?;
 
         if config.verbose {
             eprintln!("ROM size: {} bytes ({} KB)", rom.len(), rom.len() / 1024);
@@ -129,10 +149,13 @@ impl Backend for RomBackend {
 
         let mut output = BackendOutput::binary(rom);
 
-        // Generate .sym file when debug info is enabled
-        if let Some(sym_table) = symbols {
-            let sym_content = generate_sym_file(&sym_table);
+        // Generate .sym and .lst files when debug info is enabled
+        if let Some(debug) = debug {
+            let sym_content = generate_sym_file(&debug.symbols);
             output.side_artifacts.push(("sym".to_string(), sym_content));
+            output
+                .side_artifacts
+                .push(("lst".to_string(), debug.listing));
         }
 
         Ok(output)

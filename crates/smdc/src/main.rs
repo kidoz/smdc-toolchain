@@ -3,11 +3,15 @@
 //! Usage: smdc [OPTIONS] <input> -o <output>
 
 use clap::{Parser as ClapParser, ValueEnum};
+use smd_compiler::backend::m68k::{disassemble_listing, parse_sym_file};
+use smd_compiler::backend::rom::verify_checksum;
 use smd_compiler::backend::{BackendConfig, M68kBackend, OutputFormat, RomBackend, RomConfig};
 use smd_compiler::common::DiagnosticReporter;
 use smd_compiler::frontend::{CFrontend, CompileContext, Frontend, FrontendConfig, RustFrontend};
+use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process;
 
 /// Source language
@@ -38,7 +42,7 @@ enum OutputType {
 #[command(version = "0.2.0")]
 #[command(about = "C and Rust compiler for Sega Megadrive/Genesis (M68000)", long_about = None)]
 struct Args {
-    /// Input source file (.c or .rs)
+    /// Input source file (.c or .rs), or a ROM binary with --disasm
     #[arg(required = true)]
     input: PathBuf,
 
@@ -54,7 +58,10 @@ struct Args {
     #[arg(short = 't', long, value_enum, default_value = "asm")]
     output_type: OutputType,
 
-    /// Optimization level (0-3)
+    /// Optimization level (0-3).
+    ///
+    /// NOTE: accepted but currently inert — no optimization passes consume it
+    /// yet. The codegen always emits straightforward stack-based code.
     #[arg(short = 'O', long, default_value = "0")]
     optimize: u8,
 
@@ -86,6 +93,18 @@ struct Args {
     #[arg(short = 'I', long = "include", action = clap::ArgAction::Append)]
     include_paths: Vec<PathBuf>,
 
+    /// Disassemble a ROM binary (.bin) instead of compiling.
+    ///
+    /// Prints header/vector info and an annotated listing. Symbols are
+    /// loaded from --sym or from <input>.sym when present. Writes to
+    /// --output if given, otherwise to stdout.
+    #[arg(long)]
+    disasm: bool,
+
+    /// Symbol map file (.sym) to annotate the disassembly with
+    #[arg(long)]
+    sym: Option<PathBuf>,
+
     // ROM-specific options
     /// Domestic (Japanese) game name for ROM
     #[arg(long, default_value = "SMD GAME")]
@@ -105,7 +124,7 @@ fn main() {
     }
 }
 
-fn detect_language(path: &PathBuf, explicit: Language) -> Language {
+fn detect_language(path: &Path, explicit: Language) -> Language {
     match explicit {
         Language::Auto => match path.extension().and_then(|e| e.to_str()) {
             Some("rs") => Language::Rust,
@@ -120,6 +139,10 @@ fn detect_language(path: &PathBuf, explicit: Language) -> Language {
 }
 
 fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
+    if args.disasm {
+        return run_disasm(args);
+    }
+
     // Read input file
     let source = fs::read_to_string(&args.input)?;
     let filename = args.input.display().to_string();
@@ -256,4 +279,93 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+/// Header/vector offsets in a Megadrive ROM image
+const ROM_HEADER_START: usize = 0x100;
+const ROM_CODE_START: usize = 0x200;
+
+fn run_disasm(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
+    let rom = fs::read(&args.input)?;
+
+    // Load symbols from --sym, or <input>.sym if it exists
+    let sym_path = args
+        .sym
+        .clone()
+        .unwrap_or_else(|| args.input.with_extension("sym"));
+    let symbols = if sym_path.exists() {
+        if args.verbose {
+            eprintln!("Loading symbols from {}", sym_path.display());
+        }
+        parse_sym_file(&fs::read_to_string(&sym_path)?)
+    } else {
+        if args.sym.is_some() {
+            return Err(format!("symbol file not found: {}", sym_path.display()).into());
+        }
+        HashMap::new()
+    };
+
+    let listing = rom_listing(&rom, &args.input.display().to_string(), &symbols);
+
+    match &args.output {
+        Some(path) => {
+            fs::write(path, listing)?;
+            if args.verbose {
+                eprintln!("Disassembly written to {}", path.display());
+            }
+        }
+        None => print!("{listing}"),
+    }
+    Ok(())
+}
+
+/// Build a full disassembly listing for a ROM image: header summary
+/// followed by the decoded code section.
+fn rom_listing(rom: &[u8], name: &str, symbols: &HashMap<String, u32>) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "; Disassembly of {} ({} bytes)", name, rom.len());
+
+    if rom.len() >= ROM_CODE_START {
+        let sp = u32::from_be_bytes([rom[0], rom[1], rom[2], rom[3]]);
+        let pc = u32::from_be_bytes([rom[4], rom[5], rom[6], rom[7]]);
+        let system = header_string(rom, ROM_HEADER_START, 16);
+        let overseas = header_string(rom, 0x150, 48);
+        let checksum = u16::from_be_bytes([rom[0x18E], rom[0x18F]]);
+        let checksum_status = if verify_checksum(rom) { "OK" } else { "BAD" };
+
+        let _ = writeln!(out, "; System:   {system}");
+        let _ = writeln!(out, "; Title:    {overseas}");
+        let _ = writeln!(out, "; Checksum: ${checksum:04X} ({checksum_status})");
+        let _ = writeln!(out, "; Entry:    ${pc:06X}  SP: ${sp:08X}");
+        out.push('\n');
+
+        // Code follows the header; trim the 0xFF fill padding at the end.
+        // Any inline data section will decode as garbage instructions --
+        // compile with -g and use the generated .lst for an exact listing.
+        let code_start = (pc as usize).clamp(ROM_CODE_START, rom.len());
+        let end = rom
+            .iter()
+            .rposition(|&b| b != 0xFF)
+            .map_or(rom.len(), |i| i + 1)
+            .max(code_start);
+        out.push_str(&disassemble_listing(
+            &rom[code_start..end],
+            code_start as u32,
+            symbols,
+            None,
+        ));
+    } else {
+        // Too small for a ROM header: treat as a raw code blob
+        let _ = writeln!(out, "; No ROM header, disassembling as raw code\n");
+        out.push_str(&disassemble_listing(rom, 0, symbols, None));
+    }
+
+    out
+}
+
+/// Read a fixed-size ASCII field from the ROM header.
+fn header_string(rom: &[u8], offset: usize, len: usize) -> String {
+    String::from_utf8_lossy(&rom[offset..offset + len])
+        .trim()
+        .to_string()
 }

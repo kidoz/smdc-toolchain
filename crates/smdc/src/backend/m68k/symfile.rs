@@ -36,6 +36,31 @@ pub fn generate_sym_file(symbols: &HashMap<String, u32>) -> String {
     output
 }
 
+/// Parse a WLADX-format `.sym` file back into a symbol table.
+///
+/// Accepts the format produced by [`generate_sym_file`]: comment lines
+/// (`;`), section headers (`[labels]`), and `BB:AAAAAA name` entries.
+/// Unparseable lines are skipped.
+pub fn parse_sym_file(content: &str) -> HashMap<String, u32> {
+    let mut symbols = HashMap::new();
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with(';') || line.starts_with('[') {
+            continue;
+        }
+        let mut parts = line.split_whitespace();
+        let (Some(addr_str), Some(name)) = (parts.next(), parts.next()) else {
+            continue;
+        };
+        // Strip the bank prefix ("00:000200" -> "000200")
+        let addr_str = addr_str.rsplit(':').next().unwrap_or(addr_str);
+        if let Ok(addr) = u32::from_str_radix(addr_str, 16) {
+            symbols.insert(name.to_string(), addr);
+        }
+    }
+    symbols
+}
+
 fn is_internal_label(name: &str) -> bool {
     // All labels starting with '.' are compiler-internal
     name.starts_with('.') || name.starts_with("__data_") || name.starts_with("__sdk_")
@@ -92,6 +117,24 @@ mod tests {
 
         let output = generate_sym_file(&symbols);
         assert!(output.contains("00:FF8000 score"));
+    }
+
+    #[test]
+    fn sym_file_roundtrip() {
+        let mut symbols = HashMap::new();
+        symbols.insert("main".to_string(), 0x000200u32);
+        symbols.insert("player_x".to_string(), 0xFF8000u32);
+
+        let parsed = parse_sym_file(&generate_sym_file(&symbols));
+        assert_eq!(parsed, symbols);
+    }
+
+    #[test]
+    fn parse_sym_skips_garbage_lines() {
+        let content = "; comment\n[labels]\nnot-an-entry\nZZ main\n00:000200 main\n";
+        let parsed = parse_sym_file(content);
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed["main"], 0x200);
     }
 
     #[test]

@@ -4,6 +4,7 @@
 //! targeting the Sega Megadrive/Genesis console.
 
 mod assembler;
+mod disasm;
 mod emit;
 mod encoder;
 mod m68k;
@@ -11,11 +12,12 @@ pub mod sdk;
 mod symfile;
 
 pub use assembler::Assembler;
+pub use disasm::disassemble_listing;
 pub use emit::CodeGenerator;
 pub use encoder::{EncodeError, InstructionEncoder};
 pub use m68k::*;
 pub use sdk::{SdkFunction, SdkFunctionKind, SdkRegistry};
-pub use symfile::generate_sym_file;
+pub use symfile::{generate_sym_file, parse_sym_file};
 
 use crate::backend::{Backend, BackendConfig, BackendOutput, OutputFormat};
 use crate::common::CompileResult;
