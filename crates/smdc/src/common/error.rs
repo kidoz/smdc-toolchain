@@ -133,7 +133,7 @@ impl DiagnosticReporter {
             CompileError::Io(err) => Diagnostic::error().with_message(format!("IO error: {err}")),
         };
 
-        let _ = term::emit(
+        let _ = term::emit_to_write_style(
             &mut self.writer.lock(),
             &self.config,
             &self.files,

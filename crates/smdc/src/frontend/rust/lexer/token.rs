@@ -20,7 +20,7 @@ impl RustToken {
 /// Rust token kinds
 #[derive(Logos, Debug, Clone, PartialEq)]
 #[logos(skip r"[ \t\n\r\f]+")]
-#[logos(skip r"//[^\n]*")]
+#[logos(skip(r"//[^\n]*", allow_greedy = true))]
 #[logos(skip r"/\*([^*]|\*[^/])*\*/")]
 pub enum RustTokenKind {
     // Keywords - Control Flow

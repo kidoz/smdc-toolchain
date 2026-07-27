@@ -19,7 +19,7 @@ impl Token {
 /// All token kinds in C
 #[derive(Logos, Debug, Clone, PartialEq)]
 #[logos(skip r"[ \t\n\r\f]+")] // Skip whitespace
-#[logos(skip r"//[^\n]*")] // Skip line comments
+#[logos(skip(r"//[^\n]*", allow_greedy = true))] // Skip line comments
 #[logos(skip r"/\*[^*]*\*+(?:[^/*][^*]*\*+)*/")] // Skip block comments
 pub enum TokenKind {
     // === Keywords ===

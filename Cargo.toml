@@ -14,14 +14,14 @@ repository = "https://github.com/smd-sdk/smd-compiler"
 
 [workspace.dependencies]
 # Lexer generator
-logos = "0.14"
+logos = "0.16"
 # CLI argument parsing
 clap = { version = "4", features = ["derive"] }
 # Error handling
-thiserror = "1.0"
+thiserror = "2.0"
 anyhow = "1.0"
 # Error diagnostics with source locations
-codespan-reporting = "0.11"
+codespan-reporting = "0.13"
 # String interning for identifiers
 string-interner = "0.17"
 # Testing
