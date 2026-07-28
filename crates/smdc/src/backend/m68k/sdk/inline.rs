@@ -327,7 +327,12 @@ impl SdkInlineGenerator {
             ),
         ];
         insts.extend(Self::emit_ym_delay());
-        insts.push(M68kInst::Clr(Size::Byte, Operand::AbsLong(YM_DATA0)));
+        // MOVE #0, not CLR: CLR performs a read of the port first (68000 RMW)
+        insts.push(M68kInst::Move(
+            Size::Byte,
+            Operand::Imm(0),
+            Operand::AbsLong(YM_DATA0),
+        ));
         insts.extend(Self::emit_ym_delay());
         insts
     }

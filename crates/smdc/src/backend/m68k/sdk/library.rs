@@ -271,7 +271,8 @@ impl SdkLibraryGenerator {
                 Operand::DataReg(DataReg::D0),
                 Operand::AbsLong(VDP_CTRL),
             ),
-            M68kInst::Clr(Size::Word, Operand::AbsLong(VDP_CTRL)),
+            // CLR would read the port first (68000 read-modify-write); use MOVE #0
+            M68kInst::Move(Size::Word, Operand::Imm(0), Operand::AbsLong(VDP_CTRL)),
             // Load colors pointer and count
             M68kInst::Move(
                 Size::Long,
@@ -504,7 +505,8 @@ impl SdkLibraryGenerator {
                 Operand::DataReg(DataReg::D0),
             ),
             M68kInst::Label(loop_label.clone()),
-            M68kInst::Clr(Size::Word, Operand::AbsLong(VDP_DATA)),
+            // CLR reads the data port first, freezing the VDP mid-write; use MOVE #0
+            M68kInst::Move(Size::Word, Operand::Imm(0), Operand::AbsLong(VDP_DATA)),
             M68kInst::Dbf(DataReg::D0, loop_label),
             M68kInst::Rts,
         ]
@@ -525,7 +527,8 @@ impl SdkLibraryGenerator {
                 Operand::DataReg(DataReg::D0),
             ),
             M68kInst::Label(loop_label.clone()),
-            M68kInst::Clr(Size::Word, Operand::AbsLong(VDP_DATA)),
+            // CLR reads the data port first, freezing the VDP mid-write; use MOVE #0
+            M68kInst::Move(Size::Word, Operand::Imm(0), Operand::AbsLong(VDP_DATA)),
             M68kInst::Dbf(DataReg::D0, loop_label),
             M68kInst::Rts,
         ]
@@ -1564,8 +1567,8 @@ impl SdkLibraryGenerator {
                 Operand::DataReg(DataReg::D0),
                 Operand::AbsLong(VDP_CTRL),
             ),
-            // Y = 0, link = 0 (end sprite list)
-            M68kInst::Clr(Size::Long, Operand::AbsLong(VDP_DATA)),
+            // Y = 0, link = 0 (end sprite list); MOVE #0, not CLR (CLR reads the port)
+            M68kInst::Move(Size::Long, Operand::Imm(0), Operand::AbsLong(VDP_DATA)),
             M68kInst::Rts,
         ]
     }

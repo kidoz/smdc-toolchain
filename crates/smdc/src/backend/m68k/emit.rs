@@ -391,7 +391,13 @@ impl CodeGenerator {
             Operand::DataReg(DataReg::D0),
         ));
         self.emit(M68kInst::Label(".clear_vram".to_string()));
-        self.emit(M68kInst::Clr(Size::Word, Operand::AddrInd(AddrReg::A1)));
+        // CLR performs a read-modify-write on the 68000; reading the VDP data
+        // port while it is set up for writes locks the bus, so use MOVE #0.
+        self.emit(M68kInst::Move(
+            Size::Word,
+            Operand::Imm(0),
+            Operand::AddrInd(AddrReg::A1),
+        ));
         self.emit(M68kInst::Dbf(DataReg::D0, ".clear_vram".to_string()));
 
         // Re-setup A1 for palette write
