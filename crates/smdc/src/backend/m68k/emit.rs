@@ -533,7 +533,8 @@ impl CodeGenerator {
                         max_temp = max_temp.max(dst.0 + 1);
                         alloca_bytes += ((*size as i16) + 3) & !3;
                     }
-                    Inst::Call { dst: Some(dst), .. } => {
+                    Inst::Call { dst: Some(dst), .. }
+                    | Inst::CallIndirect { dst: Some(dst), .. } => {
                         max_temp = max_temp.max(dst.0 + 1);
                     }
                     _ => {}
@@ -696,9 +697,12 @@ impl CodeGenerator {
                 }
             }
             Value::Name(name) => {
+                // A symbol used as a value is its ADDRESS (function pointers,
+                // label references), not the memory at the label.
+                self.emit(M68kInst::Lea(Operand::Label(name.clone()), AddrReg::A0));
                 self.emit(M68kInst::Move(
                     Size::Long,
-                    Operand::Label(name.clone()),
+                    Operand::AddrReg(AddrReg::A0),
                     Operand::DataReg(reg),
                 ));
             }
@@ -1045,6 +1049,50 @@ impl CodeGenerator {
                     // Regular user function call
                     self.flush_cache();
                     self.emit_standard_call(func, args, dst)?;
+                }
+            }
+
+            Inst::CallIndirect { dst, target, args } => {
+                self.flush_cache();
+                // Push arguments right-to-left, same convention as direct calls
+                for arg in args.iter().rev() {
+                    self.load_value(arg, DataReg::D0)?;
+                    self.emit(M68kInst::Move(
+                        Size::Long,
+                        Operand::DataReg(DataReg::D0),
+                        Operand::PreDec(AddrReg::A7),
+                    ));
+                }
+
+                // Call through the pointer value
+                self.load_value(target, DataReg::D0)?;
+                self.emit(M68kInst::Move(
+                    Size::Long,
+                    Operand::DataReg(DataReg::D0),
+                    Operand::AddrReg(AddrReg::A0),
+                ));
+                self.emit(M68kInst::Jsr(Operand::AddrInd(AddrReg::A0)));
+
+                // Clean up stack
+                let stack_size = (args.len() * 4) as i32;
+                if stack_size > 0 {
+                    if stack_size <= 8 {
+                        self.emit(M68kInst::Addq(
+                            Size::Long,
+                            stack_size as u8,
+                            Operand::AddrReg(AddrReg::A7),
+                        ));
+                    } else {
+                        self.emit(M68kInst::Adda(
+                            Size::Long,
+                            Operand::Imm(stack_size),
+                            AddrReg::A7,
+                        ));
+                    }
+                }
+
+                if let Some(d) = dst {
+                    self.store_temp(*d, DataReg::D0);
                 }
             }
 

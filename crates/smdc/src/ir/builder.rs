@@ -1211,18 +1211,47 @@ impl IrBuilder {
                     ir_args.push(self.build_expr(arg)?);
                 }
 
-                let func_name = if let ExprKind::Identifier(name) = &callee.kind {
-                    name.clone()
-                } else {
-                    return Err(CompileError::codegen("indirect calls not supported yet"));
+                let dst = self.new_temp();
+
+                // Direct call when the callee is an identifier naming a
+                // function; a variable of function-pointer type (local or
+                // global) is an indirect call through the stored address.
+                let direct_name = match &callee.kind {
+                    ExprKind::Identifier(name)
+                        if !self.locals.contains_key(name)
+                            && !self.module.globals.iter().any(|g| g.name == *name) =>
+                    {
+                        Some(name.clone())
+                    }
+                    _ => None,
                 };
 
-                let dst = self.new_temp();
-                self.emit(Inst::Call {
-                    dst: Some(dst),
-                    func: func_name,
-                    args: ir_args,
-                });
+                if let Some(func_name) = direct_name {
+                    self.emit(Inst::Call {
+                        dst: Some(dst),
+                        func: func_name,
+                        args: ir_args,
+                    });
+                } else {
+                    // (*op)(...) designates the pointed-to function; the call
+                    // target is the pointer value itself, not a load through it
+                    let target = match &callee.kind {
+                        ExprKind::Deref(inner)
+                            if callee
+                                .ty
+                                .as_ref()
+                                .is_some_and(|t| matches!(t.kind, TypeKind::Function { .. })) =>
+                        {
+                            self.build_expr(inner)?
+                        }
+                        _ => self.build_expr(callee)?,
+                    };
+                    self.emit(Inst::CallIndirect {
+                        dst: Some(dst),
+                        target,
+                        args: ir_args,
+                    });
+                }
 
                 Ok(Value::Temp(dst))
             }

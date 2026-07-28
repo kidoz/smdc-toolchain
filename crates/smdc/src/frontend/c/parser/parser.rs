@@ -662,13 +662,17 @@ impl<'a> Parser<'a> {
             self.advance()?;
             n
         } else if self.check(&TokenKind::LParen) {
-            // Parenthesized declarator
+            // Parenthesized declarator: the inner declarator applies to the
+            // type derived by the OUTER suffix, e.g. `int (*op)(int)` is a
+            // pointer to a function, not a function returning a pointer.
+            // Parse the inner declarator around a placeholder leaf, derive the
+            // outer type, then graft it in at the leaf.
             self.advance()?;
-            let (name, inner_type) = self.parse_declarator(base_type.clone())?;
+            let placeholder = CType::new(TypeKind::Void, self.current.span);
+            let (name, inner_type) = self.parse_declarator(placeholder)?;
             self.expect(TokenKind::RParen)?;
-            // Continue parsing suffix
-            let ty = self.parse_declarator_suffix(inner_type)?;
-            return Ok((name, ty));
+            let outer_type = self.parse_declarator_suffix(base_type)?;
+            return Ok((name, Self::substitute_declarator_base(inner_type, outer_type)));
         } else {
             return Err(CompileError::parser(
                 format!(
@@ -682,6 +686,44 @@ impl<'a> Parser<'a> {
         // Parse suffix (array or function)
         let ty = self.parse_declarator_suffix(base_type)?;
         Ok((name, ty))
+    }
+
+    /// Replace the placeholder leaf of a parenthesized declarator's type with
+    /// the type derived outside the parentheses. The inner type is exactly a
+    /// stack of Pointer/Array/Function wrappers around the placeholder, so the
+    /// first non-wrapper node reached is the leaf.
+    fn substitute_declarator_base(ty: CType, new_base: CType) -> CType {
+        match ty.kind {
+            TypeKind::Pointer(inner) => CType {
+                kind: TypeKind::Pointer(Box::new(Self::substitute_declarator_base(
+                    *inner, new_base,
+                ))),
+                ..ty
+            },
+            TypeKind::Array { element, size } => CType {
+                kind: TypeKind::Array {
+                    element: Box::new(Self::substitute_declarator_base(*element, new_base)),
+                    size,
+                },
+                ..ty
+            },
+            TypeKind::Function {
+                return_type,
+                params,
+                variadic,
+            } => CType {
+                kind: TypeKind::Function {
+                    return_type: Box::new(Self::substitute_declarator_base(
+                        *return_type,
+                        new_base,
+                    )),
+                    params,
+                    variadic,
+                },
+                ..ty
+            },
+            _ => new_base,
+        }
     }
 
     fn parse_declarator_suffix(&mut self, base_type: CType) -> CompileResult<CType> {

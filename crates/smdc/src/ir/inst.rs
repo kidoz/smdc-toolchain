@@ -171,6 +171,13 @@ pub enum Inst {
         args: Vec<Value>,
     },
 
+    /// Indirect function call through a pointer: dst = (*target)(args...)
+    CallIndirect {
+        dst: Option<Temp>,
+        target: Value,
+        args: Vec<Value>,
+    },
+
     /// Return from function
     Return(Option<Value>),
 
@@ -243,6 +250,20 @@ impl std::fmt::Display for Inst {
                     write!(f, "  {d} = call {func}(")?;
                 } else {
                     write!(f, "  call {func}(")?;
+                }
+                for (i, arg) in args.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{arg}")?;
+                }
+                write!(f, ")")
+            }
+            Inst::CallIndirect { dst, target, args } => {
+                if let Some(d) = dst {
+                    write!(f, "  {d} = icall {target}(")?;
+                } else {
+                    write!(f, "  icall {target}(")?;
                 }
                 for (i, arg) in args.iter().enumerate() {
                     if i > 0 {

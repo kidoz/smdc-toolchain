@@ -462,24 +462,28 @@ impl SemanticAnalyzer {
             }
 
             ExprKind::Call { callee, args } => {
-                if !matches!(callee.kind, ExprKind::Identifier(_)) {
-                    return Err(CompileError::semantic(
-                        "indirect calls are not supported yet",
-                        callee.span,
-                    ));
-                }
-
                 let callee_ty = self.analyze_expr(callee)?;
                 for arg in args {
                     self.analyze_expr(arg)?;
                 }
-                if let TypeKind::Function { return_type, .. } = callee_ty.kind {
+                // Calls go through a function type directly or through a
+                // pointer to function (indirect call)
+                let func_ty = match callee_ty.kind {
+                    TypeKind::Function { .. } => callee_ty,
+                    TypeKind::Pointer(inner) if matches!(inner.kind, TypeKind::Function { .. }) => {
+                        *inner
+                    }
+                    _ => {
+                        return Err(CompileError::type_error(
+                            "called object is not a function or function pointer",
+                            expr.span,
+                        ));
+                    }
+                };
+                if let TypeKind::Function { return_type, .. } = func_ty.kind {
                     *return_type
                 } else {
-                    return Err(CompileError::type_error(
-                        "called object is not a function",
-                        expr.span,
-                    ));
+                    unreachable!("func_ty is always a function type")
                 }
             }
 
@@ -837,6 +841,11 @@ impl SemanticAnalyzer {
             return true;
         }
 
+        // Function designators decay to function pointers
+        if dst.is_pointer() && matches!(src.kind, TypeKind::Function { .. }) {
+            return true;
+        }
+
         dst.is_pointer() && src.is_integer()
     }
 
@@ -947,6 +956,40 @@ mod tests {
     #[test]
     fn rejects_zero_array_size() {
         let result = analyze("void f(void) { int a[0]; }");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn accepts_function_pointer_call() {
+        analyze(
+            "int add(int a, int b) { return a + b; }\n\
+             int f(void) { int (*op)(int, int) = add; return op(1, 2); }",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn accepts_deref_function_pointer_call() {
+        analyze(
+            "int add(int a, int b) { return a + b; }\n\
+             int f(void) { int (*op)(int, int) = add; return (*op)(1, 2); }",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn accepts_function_pointer_parameter() {
+        analyze(
+            "int add(int a, int b) { return a + b; }\n\
+             int apply(int (*f)(int, int), int x) { return f(x, x); }\n\
+             int g(void) { return apply(add, 3); }",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn rejects_calling_non_function() {
+        let result = analyze("int f(void) { int x; x = 1; return x(); }");
         assert!(result.is_err());
     }
 }

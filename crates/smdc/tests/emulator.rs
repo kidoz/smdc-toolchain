@@ -251,6 +251,31 @@ fn emulator_structs_and_pointers() {
 }
 
 #[test]
+fn emulator_function_pointers() {
+    require_emulator!();
+    assert_rom_results(
+        "function_pointers",
+        "int add(int a, int b) { return a + b; }\n\
+         int sub(int a, int b) { return a - b; }\n\
+         int apply(int (*f)(int, int), int a, int b) { return f(a, b); }\n\
+         void main(void) {\n\
+             int (*op)(int, int) = add;\n\
+             int (*ops[2])(int, int);\n\
+             ops[0] = add;\n\
+             ops[1] = sub;\n\
+             set_result(0, op(30, 12));\n\
+             op = sub;\n\
+             set_result(1, op(30, 12));\n\
+             set_result(2, (*op)(50, 8));\n\
+             set_result(3, apply(add, 2, 3) + apply(sub, 10, 4));\n\
+             set_result(4, ops[1](9, 4));\n\
+             test_done();\n\
+         }\n",
+        &[42, 18, 42, 11, 5],
+    );
+}
+
+#[test]
 fn emulator_global_data() {
     require_emulator!();
     assert_rom_results(

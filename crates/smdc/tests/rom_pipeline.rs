@@ -146,6 +146,22 @@ fn c_enum_and_const_array_size_build_rom() {
 }
 
 #[test]
+fn c_function_pointers_build_rom() {
+    let module = compile_c(
+        "int add(int a, int b) { return a + b; }\n\
+         int apply(int (*f)(int, int), int x) { return f(x, x); }\n\
+         void main(void) {\n\
+             int (*op)(int, int) = add;\n\
+             int r = op(1, 2) + (*op)(3, 4) + apply(add, 5);\n\
+             (void)r;\n\
+         }",
+    );
+    let rom = build_rom(&module);
+
+    assert_valid_rom(&rom);
+}
+
+#[test]
 fn rust_function_call_builds_rom() {
     let module = compile_rust(
         "fn add(a: i32, b: i32) -> i32 { a + b }\n\
