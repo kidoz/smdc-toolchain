@@ -1,0 +1,271 @@
+//! End-to-end emulator tests: compile C programs to ROMs, run them in
+//! BlastEm (headless via SDL's offscreen driver), and assert on values the
+//! program wrote to work RAM.
+//!
+//! Test programs call `set_result(index, value)` to publish 16-bit results
+//! at RESULT_BASE and `test_done()` when finished. The harness sets a
+//! debugger breakpoint on `test_done` (address taken from the `.sym` map),
+//! lets the ROM run, then reads the result words back through BlastEm's
+//! debugger (`p/x [$addr]`).
+//!
+//! Requires `blastem` and `script` (util-linux, provides the pty BlastEm's
+//! debugger needs) on PATH; each test skips itself when either is missing.
+
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::OnceLock;
+
+const RESULT_BASE: u32 = 0x00FF0100;
+
+const PRELUDE: &str = "void test_done(void) { for (;;) {} }\n\
+void set_result(int index, int value) {\n\
+    volatile unsigned short *base = (volatile unsigned short *)0x00FF0100;\n\
+    base[index] = (unsigned short)value;\n\
+}\n";
+
+fn emulator_available() -> bool {
+    static AVAILABLE: OnceLock<bool> = OnceLock::new();
+    *AVAILABLE.get_or_init(|| {
+        // PATH lookup only: `blastem -v` prints the version but never exits
+        // (0.6.3-pre), so probing by running it would hang.
+        let on_path = |cmd: &str| {
+            std::env::var_os("PATH").is_some_and(|path| {
+                std::env::split_paths(&path).any(|dir| dir.join(cmd).is_file())
+            })
+        };
+        on_path("blastem") && on_path("script")
+    })
+}
+
+macro_rules! require_emulator {
+    () => {
+        if !emulator_available() {
+            eprintln!("skipping: blastem (or script) not on PATH");
+            return;
+        }
+    };
+}
+
+fn compile_rom(dir: &Path, body: &str) -> PathBuf {
+    std::fs::create_dir_all(dir).unwrap();
+    let c_path = dir.join("test.c");
+    let rom_path = dir.join("test.bin");
+    std::fs::write(&c_path, format!("{PRELUDE}\n{body}")).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_smdc"))
+        .arg(&c_path)
+        .args(["-t", "rom", "-g", "-o"])
+        .arg(&rom_path)
+        .output()
+        .expect("failed to run smdc");
+    assert!(
+        output.status.success(),
+        "compile failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    rom_path
+}
+
+/// Look up a label address in the WLADX-format `.sym` map (`00:000304 name`).
+fn symbol_address(sym_path: &Path, name: &str) -> u32 {
+    let text = std::fs::read_to_string(sym_path).unwrap();
+    for line in text.lines() {
+        if let Some((addr, sym)) = line.trim().split_once(' ')
+            && sym == name
+        {
+            let addr = addr.split_once(':').map_or(addr, |(_, a)| a);
+            return u32::from_str_radix(addr, 16).unwrap();
+        }
+    }
+    panic!("symbol {name} not found in {}", sym_path.display());
+}
+
+/// Run the ROM until `test_done` and read `count` result words from RAM.
+fn run_rom(rom: &Path, count: usize) -> Vec<u16> {
+    let done = symbol_address(&rom.with_extension("sym"), "test_done");
+
+    use std::fmt::Write as _;
+    let mut commands = format!("b 0x{done:X}\nc\n");
+    for i in 0..count {
+        let _ = writeln!(commands, "p/x [${:X}]", RESULT_BASE + 2 * i as u32);
+    }
+    commands.push_str("q\n");
+
+    // BlastEm's debugger insists on a tty, so run it under `script`; `timeout`
+    // guards against a ROM that never reaches the breakpoint.
+    let mut child = Command::new("timeout")
+        .args(["-k", "2", "30", "script", "-qec"])
+        .arg(format!("blastem -d -g '{}'", rom.display()))
+        .arg("/dev/null")
+        .env("SDL_VIDEODRIVER", "offscreen")
+        .env("SDL_AUDIODRIVER", "dummy")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn blastem");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(commands.as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        stdout.contains("Breakpoint 0 hit"),
+        "ROM never reached test_done; blastem output:\n{stdout}"
+    );
+
+    (0..count)
+        .map(|i| {
+            let needle = format!("[${:X}]: ", RESULT_BASE + 2 * i as u32);
+            let value = stdout
+                .lines()
+                .find_map(|line| {
+                    let (_, rest) = line.split_once(&needle)?;
+                    Some(rest.trim())
+                })
+                .unwrap_or_else(|| panic!("no value for {needle} in output:\n{stdout}"));
+            u16::from_str_radix(value, 16)
+                .unwrap_or_else(|_| panic!("bad hex {value:?} for {needle}"))
+        })
+        .collect()
+}
+
+fn assert_rom_results(test: &str, body: &str, expected: &[u16]) {
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join("emulator")
+        .join(test);
+    let rom = compile_rom(&dir, body);
+    let words = run_rom(&rom, expected.len());
+    assert_eq!(words, expected);
+}
+
+#[test]
+fn emulator_arithmetic() {
+    require_emulator!();
+    assert_rom_results(
+        "arithmetic",
+        "void main(void) {\n\
+             int a = 21;\n\
+             int b = 4;\n\
+             set_result(0, a + b);\n\
+             set_result(1, a - b);\n\
+             set_result(2, a * b);\n\
+             set_result(3, a / b);\n\
+             set_result(4, a % b);\n\
+             set_result(5, a << 2);\n\
+             set_result(6, a >> 1);\n\
+             set_result(7, (a > b) + (a == 21));\n\
+             test_done();\n\
+         }\n",
+        &[25, 17, 84, 5, 1, 84, 10, 2],
+    );
+}
+
+#[test]
+fn emulator_control_flow() {
+    require_emulator!();
+    assert_rom_results(
+        "control_flow",
+        "void main(void) {\n\
+             int sum = 0;\n\
+             int n = 0;\n\
+             int x = 3;\n\
+             int i;\n\
+             for (i = 1; i <= 10; i = i + 1) { sum = sum + i; }\n\
+             while (n < 100) { n = n + 7; }\n\
+             switch (x) {\n\
+                 case 1: x = 10; break;\n\
+                 case 3: x = 30; break;\n\
+                 default: x = 99; break;\n\
+             }\n\
+             set_result(0, sum);\n\
+             set_result(1, n);\n\
+             set_result(2, x);\n\
+             test_done();\n\
+         }\n",
+        &[55, 105, 30],
+    );
+}
+
+#[test]
+fn emulator_function_calls_and_recursion() {
+    require_emulator!();
+    assert_rom_results(
+        "functions",
+        "int fib(int n) { if (n < 2) { return n; } return fib(n - 1) + fib(n - 2); }\n\
+         int fact(int n) { if (n <= 1) { return 1; } return n * fact(n - 1); }\n\
+         void main(void) {\n\
+             set_result(0, fib(10));\n\
+             set_result(1, fact(5));\n\
+             test_done();\n\
+         }\n",
+        &[55, 120],
+    );
+}
+
+#[test]
+fn emulator_local_initializers() {
+    require_emulator!();
+    assert_rom_results(
+        "local_init",
+        "void main(void) {\n\
+             int a[4] = {10, 20, 30, 40};\n\
+             char s[4] = \"AB\";\n\
+             int sum = 0;\n\
+             int i;\n\
+             for (i = 0; i < 4; i = i + 1) { sum = sum + a[i]; }\n\
+             set_result(0, sum);\n\
+             set_result(1, s[0]);\n\
+             set_result(2, s[1]);\n\
+             set_result(3, s[2] + s[3]);\n\
+             test_done();\n\
+         }\n",
+        &[100, 65, 66, 0],
+    );
+}
+
+#[test]
+fn emulator_structs_and_pointers() {
+    require_emulator!();
+    assert_rom_results(
+        "structs",
+        "struct Point { int x; int y; };\n\
+         void swap(int *a, int *b) { int t = *a; *a = *b; *b = t; }\n\
+         void main(void) {\n\
+             struct Point p = {3, 4};\n\
+             struct Point *pp = &p;\n\
+             int u = 1;\n\
+             int v = 2;\n\
+             swap(&u, &v);\n\
+             set_result(0, pp->x + pp->y);\n\
+             set_result(1, u * 10 + v);\n\
+             test_done();\n\
+         }\n",
+        &[7, 21],
+    );
+}
+
+#[test]
+fn emulator_global_data() {
+    require_emulator!();
+    assert_rom_results(
+        "globals",
+        "int table[5] = {2, 4, 6, 8, 10};\n\
+         int counter = 100;\n\
+         void main(void) {\n\
+             int sum = 0;\n\
+             int i;\n\
+             for (i = 0; i < 5; i = i + 1) { sum = sum + table[i]; }\n\
+             counter = counter + 1;\n\
+             set_result(0, sum);\n\
+             set_result(1, counter);\n\
+             test_done();\n\
+         }\n",
+        &[30, 101],
+    );
+}
