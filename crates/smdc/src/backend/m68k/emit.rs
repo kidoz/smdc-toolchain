@@ -984,13 +984,16 @@ impl CodeGenerator {
             } => {
                 // Note: volatile flag indicates this memory access should not be optimized.
                 // For now, we emit the same code (no optimization pass yet).
+                // Load the source BEFORE moving the address into A0: loading a
+                // Name/StringConst value uses A0 as LEA scratch and would
+                // otherwise clobber the destination address.
+                self.load_value(src, DataReg::D1)?;
                 self.load_value(addr, DataReg::D0)?;
                 self.emit(M68kInst::Move(
                     Size::Long,
                     Operand::DataReg(DataReg::D0),
                     Operand::AddrReg(AddrReg::A0),
                 ));
-                self.load_value(src, DataReg::D1)?;
                 let sz = Size::from_bytes(*size);
                 self.emit(M68kInst::Move(
                     sz,
