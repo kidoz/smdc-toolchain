@@ -1009,6 +1009,10 @@ impl IrBuilder {
 
             ExprKind::Identifier(name) => {
                 if let Some(&temp) = self.locals.get(name) {
+                    // Arrays decay to their address; the alloca temp already is it
+                    if expr.ty.as_ref().is_some_and(|t| t.is_array()) {
+                        return Ok(Value::Temp(temp));
+                    }
                     // Load from local variable
                     let dst = self.new_temp();
                     let size = expr.ty.as_ref().map_or(4, |t| t.size());
