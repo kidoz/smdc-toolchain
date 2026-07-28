@@ -516,8 +516,9 @@ impl CodeGenerator {
         self.reg_cache_lru.clear();
         self.free_data_regs = CACHE_REGS.to_vec();
 
-        // Count how many temps we need
+        // Count how many temps we need and how much alloca storage they reserve
         let mut max_temp = 0u32;
+        let mut alloca_bytes = 0i16;
         for block in &func.blocks {
             for sinst in &block.insts {
                 match &sinst.inst {
@@ -525,9 +526,12 @@ impl CodeGenerator {
                     | Inst::Unary { dst, .. }
                     | Inst::Binary { dst, .. }
                     | Inst::Load { dst, .. }
-                    | Inst::Alloca { dst, .. }
                     | Inst::AddrOf { dst, .. } => {
                         max_temp = max_temp.max(dst.0 + 1);
+                    }
+                    Inst::Alloca { dst, size, .. } => {
+                        max_temp = max_temp.max(dst.0 + 1);
+                        alloca_bytes += ((*size as i16) + 3) & !3;
                     }
                     Inst::Call { dst: Some(dst), .. } => {
                         max_temp = max_temp.max(dst.0 + 1);
@@ -537,8 +541,8 @@ impl CodeGenerator {
             }
         }
 
-        // Calculate frame size (temps + locals + saved regs)
-        self.frame_size = (max_temp as i16) * 4 + 16; // Extra space for saved regs
+        // Calculate frame size (temps + alloca storage + saved regs)
+        self.frame_size = (max_temp as i16) * 4 + alloca_bytes + 16; // Extra space for saved regs
         // Align to 4 bytes
         self.frame_size = (self.frame_size + 3) & !3;
 
@@ -1074,10 +1078,13 @@ impl CodeGenerator {
                 // Allocate on stack by subtracting from SP
                 // But we use frame-relative addressing, so just assign an offset
                 let offset = self.get_temp_offset(*dst);
-                // Reserve additional space for the allocated storage
-                // This prevents other temps from overlapping with alloca storage
-                let storage_offset = self.next_offset;
-                self.next_offset -= ((*size as i16) + 3) & !3; // Align to 4 bytes
+                // Reserve storage BELOW the already-assigned slots. next_offset
+                // is the top of the next free 4-byte slot, so the free region
+                // ends at next_offset + 3; the buffer base (lowest address) is
+                // that end minus the aligned size.
+                let aligned = ((*size as i16) + 3) & !3;
+                let storage_offset = self.next_offset + 4 - aligned;
+                self.next_offset -= aligned;
                 // Store address of allocated space
                 self.emit(M68kInst::Lea(
                     Operand::Disp(storage_offset, AddrReg::A6),
