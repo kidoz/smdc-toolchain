@@ -294,3 +294,30 @@ fn emulator_global_data() {
         &[30, 101],
     );
 }
+
+/// Register-cache boundary stress: values computed inside both arms of an
+/// if/else (the else arm falls through into the join label with no
+/// terminator) must be correct when read after the join, for both branch
+/// orders, and across loop back-edges.
+#[test]
+fn emulator_register_cache_boundaries() {
+    require_emulator!();
+    assert_rom_results(
+        "regcache",
+        "void main(void) {\n\
+             int a = 11;\n\
+             int b = 3;\n\
+             int r = 0;\n\
+             int i;\n\
+             for (i = 0; i < 6; i = i + 1) {\n\
+                 if (i & 1) { r = r + a; } else { r = r - b; }\n\
+             }\n\
+             if (r > 0) { r = r + 100; } else { r = r - 100; }\n\
+             set_result(0, r);\n\
+             set_result(1, a * 2 + b);\n\
+             set_result(2, (r & 1) + ((a - b) & 1));\n\
+             test_done();\n\
+         }\n",
+        &[100 + 3 * 11 - 3 * 3, 25, 0],
+    );
+}
