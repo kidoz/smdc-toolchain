@@ -714,24 +714,6 @@ impl CodeGenerator {
                     Operand::DataReg(reg),
                 ));
             }
-            Value::Mem(addr) => {
-                self.load_value(addr, reg)?;
-                self.emit(M68kInst::Move(
-                    Size::Long,
-                    Operand::AddrReg(AddrReg::A0),
-                    Operand::DataReg(DataReg::D0),
-                ));
-                self.emit(M68kInst::Move(
-                    Size::Long,
-                    Operand::DataReg(DataReg::D0),
-                    Operand::AddrReg(AddrReg::A0),
-                ));
-                self.emit(M68kInst::Move(
-                    Size::Long,
-                    Operand::AddrInd(AddrReg::A0),
-                    Operand::DataReg(reg),
-                ));
-            }
         }
         Ok(())
     }

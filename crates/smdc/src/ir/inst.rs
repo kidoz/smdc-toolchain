@@ -33,8 +33,6 @@ pub enum Value {
     StringConst(Label),
     /// A named variable/parameter
     Name(String),
-    /// Memory location at address
-    Mem(Box<Value>),
 }
 
 impl std::fmt::Display for Value {
@@ -44,7 +42,6 @@ impl std::fmt::Display for Value {
             Value::IntConst(n) => write!(f, "{n}"),
             Value::StringConst(l) => write!(f, "{l}"),
             Value::Name(n) => write!(f, "{n}"),
-            Value::Mem(addr) => write!(f, "[{addr}]"),
         }
     }
 }
