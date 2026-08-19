@@ -576,6 +576,12 @@ impl CodeGenerator {
         // Generate body
         let mut last_debug_line: usize = 0;
         for block in &func.blocks {
+            // Block boundary: write back any cached registers BEFORE the label so
+            // the stores execute on the fall-through path. This keeps the cache
+            // strictly intra-block — blocks reached via jumps (whose runtime
+            // registers don't hold this path's cached values) always load from
+            // the authoritative stack slots.
+            self.flush_cache();
             self.emit(M68kInst::Label(block.label.0.clone()));
             for sinst in &block.insts {
                 // Emit source line comment when the line changes
@@ -620,17 +626,27 @@ impl CodeGenerator {
         let lru = std::mem::take(&mut self.reg_cache_lru);
         for temp in &lru {
             if let Some(&reg) = self.reg_cache.get(temp) {
-                let offset = self.temp_offsets.get(temp).copied().unwrap_or(0);
-                self.emit(M68kInst::Move(
-                    Size::Long,
-                    Operand::DataReg(reg),
-                    Operand::Disp(offset, AddrReg::A6),
-                ));
-                self.free_data_regs.push(reg);
+                if let Some(&offset) = self.temp_offsets.get(temp) {
+                    self.emit(M68kInst::Move(
+                        Size::Long,
+                        Operand::DataReg(reg),
+                        Operand::Disp(offset, AddrReg::A6),
+                    ));
+                }
             }
         }
         self.reg_cache.clear();
         // Restore canonical preference order so allocation is deterministic.
+        self.free_data_regs = CACHE_REGS.to_vec();
+    }
+
+    /// Clear the cache WITHOUT writing values back. Used at `Return`: the frame
+    /// is about to be torn down (and callee-saved registers restored by MOVEM),
+    /// so writebacks would be dead stores — but the compile-time state must
+    /// still be reset so later blocks aren't emitted against stale mappings.
+    fn drop_cache(&mut self) {
+        self.reg_cache.clear();
+        self.reg_cache_lru.clear();
         self.free_data_regs = CACHE_REGS.to_vec();
     }
 
@@ -651,12 +667,13 @@ impl CodeGenerator {
         let victim = self.reg_cache_lru.first().copied();
         if let Some(victim) = victim {
             if let Some(&vreg) = self.reg_cache.get(&victim) {
-                let offset = self.temp_offsets.get(&victim).copied().unwrap_or(0);
-                self.emit(M68kInst::Move(
-                    Size::Long,
-                    Operand::DataReg(vreg),
-                    Operand::Disp(offset, AddrReg::A6),
-                ));
+                if let Some(&offset) = self.temp_offsets.get(&victim) {
+                    self.emit(M68kInst::Move(
+                        Size::Long,
+                        Operand::DataReg(vreg),
+                        Operand::Disp(offset, AddrReg::A6),
+                    ));
+                }
                 self.reg_cache.remove(&victim);
                 self.reg_cache_lru.retain(|&t| t != victim);
                 return vreg;
@@ -723,23 +740,29 @@ impl CodeGenerator {
     /// value is moved into it and the stack write is deferred until flush/eviction.
     /// Otherwise (cache full and caller used a scratch reg we can't reuse) we fall
     /// back to writing straight to the home slot.
+    ///
+    /// `reg` must be a scratch register (D0/D1), never a cache register: caching
+    /// a value whose source is another temp's cache register would alias two
+    /// temps to one register.
     fn store_temp(&mut self, temp: Temp, reg: DataReg) {
+        debug_assert!(
+            !CACHE_REGS.contains(&reg),
+            "store_temp source must be a scratch register"
+        );
         // Ensure the home slot exists (for later write-back on flush/eviction).
         self.get_temp_offset(temp);
 
         // If this temp is already cached, update the cached register in place.
-        if self.reg_cache.contains_key(&temp.0) {
-            if let Some(&cached) = self.reg_cache.get(&temp.0) {
-                if cached != reg {
-                    self.emit(M68kInst::Move(
-                        Size::Long,
-                        Operand::DataReg(reg),
-                        Operand::DataReg(cached),
-                    ));
-                }
-                self.cache_touch(temp.0);
-                return;
+        if let Some(&cached) = self.reg_cache.get(&temp.0) {
+            if cached != reg {
+                self.emit(M68kInst::Move(
+                    Size::Long,
+                    Operand::DataReg(reg),
+                    Operand::DataReg(cached),
+                ));
             }
+            self.cache_touch(temp.0);
+            return;
         }
 
         // Try to park the result in a fresh cache register.
@@ -989,21 +1012,27 @@ impl CodeGenerator {
                 ));
             }
 
+            // Terminators flush BEFORE branching: the jump path exits here, so
+            // this is its only chance to write cached values back for any
+            // successor block that reads them. (Fall-through blocks without a
+            // terminator are covered by the label flush in `generate_function`.)
             Inst::Jump(label) => {
                 self.flush_cache();
                 self.emit(M68kInst::Bra(label.0.clone()));
             }
 
             Inst::CondJump { cond, target } => {
-                self.load_value(cond, DataReg::D0)?;
+                // Flush before the test: MOVE clobbers the Z/N flags on M68k,
+                // so no stores may be emitted between TST and the branch.
                 self.flush_cache();
+                self.load_value(cond, DataReg::D0)?;
                 self.emit(M68kInst::Tst(Size::Long, Operand::DataReg(DataReg::D0)));
                 self.emit(M68kInst::Bcc(Cond::Ne, target.0.clone()));
             }
 
             Inst::CondJumpFalse { cond, target } => {
-                self.load_value(cond, DataReg::D0)?;
                 self.flush_cache();
+                self.load_value(cond, DataReg::D0)?;
                 self.emit(M68kInst::Tst(Size::Long, Operand::DataReg(DataReg::D0)));
                 self.emit(M68kInst::Bcc(Cond::Eq, target.0.clone()));
             }
@@ -1083,7 +1112,10 @@ impl CodeGenerator {
                 if let Some(val) = value {
                     self.load_value(val, DataReg::D0)?;
                 }
-                self.flush_cache();
+                // The frame dies at RTS and MOVEM restores the callee-saved
+                // registers, so writebacks would be dead stores — just drop
+                // the compile-time cache state.
+                self.drop_cache();
 
                 // Epilogue
                 // Restore callee-saved registers
