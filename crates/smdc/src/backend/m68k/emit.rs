@@ -526,6 +526,7 @@ impl CodeGenerator {
                     | Inst::Unary { dst, .. }
                     | Inst::Binary { dst, .. }
                     | Inst::Load { dst, .. }
+                    | Inst::LoadParam { dst, .. }
                     | Inst::AddrOf { dst, .. } => {
                         max_temp = max_temp.max(dst.0 + 1);
                     }
