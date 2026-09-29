@@ -23,7 +23,7 @@ anyhow = "1.0"
 # Error diagnostics with source locations
 codespan-reporting = "0.13"
 # String interning for identifiers
-string-interner = "0.17"
+string-interner = "0.20"
 # Testing
 pretty_assertions = "1.4"
 
