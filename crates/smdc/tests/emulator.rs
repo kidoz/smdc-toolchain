@@ -30,9 +30,8 @@ fn emulator_available() -> bool {
         // PATH lookup only: `blastem -v` prints the version but never exits
         // (0.6.3-pre), so probing by running it would hang.
         let on_path = |cmd: &str| {
-            std::env::var_os("PATH").is_some_and(|path| {
-                std::env::split_paths(&path).any(|dir| dir.join(cmd).is_file())
-            })
+            std::env::var_os("PATH")
+                .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(cmd).is_file()))
         };
         on_path("blastem") && on_path("script")
     })
@@ -92,27 +91,17 @@ fn run_rom(rom: &Path, count: usize) -> Vec<u16> {
     }
     commands.push_str("q\n");
 
-    // BlastEm's debugger insists on a tty, so run it under `script`; `timeout`
-    // guards against a ROM that never reaches the breakpoint.
-    let mut child = Command::new("timeout")
-        .args(["-k", "2", "30", "script", "-qec"])
-        .arg(format!("blastem -d -g '{}'", rom.display()))
-        .arg("/dev/null")
-        .env("SDL_VIDEODRIVER", "offscreen")
-        .env("SDL_AUDIODRIVER", "dummy")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("failed to spawn blastem");
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(commands.as_bytes())
-        .unwrap();
-    let output = child.wait_with_output().unwrap();
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    // BlastEm's x86-64 JIT occasionally fails to place its code buffer
+    // within reach of its own binary (address-space randomization) and
+    // hangs; that is independent of the ROM, so retry those launches
+    const JIT_PLACEMENT_FAILURE: &str = "out of range for a 32-bit displacement";
+    let mut stdout = launch_blastem(rom, &commands);
+    for _ in 0..2 {
+        if !stdout.contains(JIT_PLACEMENT_FAILURE) {
+            break;
+        }
+        stdout = launch_blastem(rom, &commands);
+    }
 
     assert!(
         stdout.contains("Breakpoint 0 hit"),
@@ -133,6 +122,31 @@ fn run_rom(rom: &Path, count: usize) -> Vec<u16> {
                 .unwrap_or_else(|_| panic!("bad hex {value:?} for {needle}"))
         })
         .collect()
+}
+
+/// Run BlastEm's debugger on `rom`, feed it `commands`, and return its output
+fn launch_blastem(rom: &Path, commands: &str) -> String {
+    // BlastEm's debugger insists on a tty, so run it under `script`; `timeout`
+    // guards against a ROM that never reaches the breakpoint.
+    let mut child = Command::new("timeout")
+        .args(["-k", "2", "30", "script", "-qec"])
+        .arg(format!("blastem -d -g '{}'", rom.display()))
+        .arg("/dev/null")
+        .env("SDL_VIDEODRIVER", "offscreen")
+        .env("SDL_AUDIODRIVER", "dummy")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn blastem");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(commands.as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
 fn assert_rom_results(test: &str, body: &str, expected: &[u16]) {
