@@ -1784,7 +1784,10 @@ impl IrBuilder {
             ExprKind::PtrMember { pointer, field } => {
                 Ok(self.build_ptr_member_addr(pointer, field)?.0)
             }
-            _ => Err(CompileError::codegen("invalid lvalue")),
+            _ => Err(CompileError::codegen(format!(
+                "invalid lvalue: {:#?}",
+                expr.kind
+            ))),
         }
     }
 
