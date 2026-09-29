@@ -92,3 +92,12 @@ fn multiply_and_divide_call_runtime_helpers_only_when_needed() {
     assert!(!asm.contains("__mulsi3") && !asm.contains("__udivsi3"));
     assert!(asm.contains("lsl.l") && asm.contains("mulu.w") && asm.contains("lsr.l"));
 }
+
+#[test]
+fn globals_after_byte_data_are_word_aligned() {
+    let asm = assembly("char c = 1;\nint i = 2;\nvoid main(void) {}");
+    let lines: Vec<&str> = asm.lines().map(str::trim).collect();
+    let label = lines.iter().position(|l| *l == "i:").unwrap();
+
+    assert_eq!(lines[label - 1], ".align 2");
+}

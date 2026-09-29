@@ -165,6 +165,11 @@ impl CodeGenerator {
         self.emit(M68kInst::Label("__data_ram_start".to_string()));
 
         for global in &module.globals {
+            // Word and long accesses to an odd address raise an address
+            // error on the 68000, so anything but byte data starts even
+            if global.ty.align >= 2 {
+                self.emit(M68kInst::Directive(".align 2".to_string()));
+            }
             self.emit(M68kInst::Label(global.name.clone()));
             if let Some(init_bytes) = &global.init {
                 // Emit initialized data
