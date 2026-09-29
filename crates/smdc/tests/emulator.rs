@@ -336,6 +336,12 @@ fn emulator_register_cache_boundaries() {
     );
 }
 
+/// High and low result words of a 32-bit value, matching a program that
+/// publishes `set_result(i, v >> 16); set_result(i + 1, v);`
+fn words(value: u32) -> [u16; 2] {
+    [(value >> 16) as u16, value as u16]
+}
+
 /// Stores to char and short members write only their own bytes: a
 /// longword store would clobber the next member, and at an odd offset
 /// raise an address error.
@@ -359,5 +365,54 @@ fn emulator_struct_member_widths() {
              test_done();\n\
          }\n",
         &[1, 0x1234, 7, 3, 4, 9, 11, 13, 14, 25, 16],
+    );
+}
+
+/// 32-bit multiply, divide and modulo (the 68000's MULS/DIVS are only
+/// 16-bit), covering every path of the division helper and C's
+/// truncating signed division.
+#[test]
+fn emulator_32bit_multiply_divide() {
+    require_emulator!();
+    let mut expected = Vec::new();
+    for value in [
+        300_000u32,           // 100000 * 3
+        (-300_000i32) as u32, // -100000 * 3
+        0x3661_76F8,          // 0x12345678 * 0x9ABCDEF1 (mod 2^32)
+        142_857,              // 1000000 / 7 (16-bit divisor)
+        1,                    // 1000000 % 7
+        0x0000_FFFF,          // 0xFFFFFFFF / 0x10001 (loop path)
+        0,                    // 0xFFFFFFFF % 0x10001
+        1,                    // 0xFFFFFFFF / 0x80000000 (divisor >= 2^31)
+        0x7FFF_FFFF,          // 0xFFFFFFFF % 0x80000000
+        (-142_857i32) as u32, // -1000000 / 7
+        (-1i32) as u32,       // -1000000 % 7
+        14,                   // 1000000 / 70000
+        300,                  // 3000 / 10 * 1 via multiply by 1
+    ] {
+        expected.extend(words(value));
+    }
+    assert_rom_results(
+        "mul_div",
+        "int s(int x) { return x; }\n\
+         unsigned int u(unsigned int x) { return x; }\n\
+         void publish(int i, unsigned int v) { set_result(i, v >> 16); set_result(i + 1, v); }\n\
+         void main(void) {\n\
+             publish(0, s(100000) * s(3));\n\
+             publish(2, s(-100000) * 3);\n\
+             publish(4, s(0x12345678) * s(0x9ABCDEF1));\n\
+             publish(6, s(1000000) / s(7));\n\
+             publish(8, s(1000000) % s(7));\n\
+             publish(10, u(0xFFFFFFFF) / u(0x10001));\n\
+             publish(12, u(0xFFFFFFFF) % u(0x10001));\n\
+             publish(14, u(0xFFFFFFFF) / u(0x80000000));\n\
+             publish(16, u(0xFFFFFFFF) % u(0x80000000));\n\
+             publish(18, s(-1000000) / s(7));\n\
+             publish(20, s(-1000000) % s(7));\n\
+             publish(22, s(1000000) / s(70000));\n\
+             publish(24, s(3000) / 10 * 1);\n\
+             test_done();\n\
+         }\n",
+        &expected,
     );
 }

@@ -8,6 +8,7 @@ mod disasm;
 mod emit;
 mod encoder;
 mod m68k;
+mod runtime;
 pub mod sdk;
 mod symfile;
 

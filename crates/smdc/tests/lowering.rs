@@ -5,6 +5,7 @@
 //! runtime behavior is covered by the emulator tests.
 
 use smd_compiler::DiagnosticReporter;
+use smd_compiler::backend::m68k::CodeGenerator;
 use smd_compiler::frontend::{CFrontend, CompileContext, Frontend, FrontendConfig};
 use smd_compiler::ir::{Inst, IrFunction, IrModule, Value};
 
@@ -16,6 +17,10 @@ fn compile_c(source: &str) -> IrModule {
     CFrontend::new()
         .compile(source, &context, &FrontendConfig::default())
         .unwrap()
+}
+
+fn assembly(source: &str) -> String {
+    CodeGenerator::new().generate(&compile_c(source)).unwrap()
 }
 
 fn function<'a>(module: &'a IrModule, name: &str) -> &'a IrFunction {
@@ -63,4 +68,27 @@ fn struct_layout_pads_members_and_size() {
         insts(function(&module, "f"))
             .any(|inst| matches!(inst, Inst::Return(Some(Value::IntConst(10)))))
     );
+}
+
+#[test]
+fn multiply_and_divide_call_runtime_helpers_only_when_needed() {
+    let asm = assembly(
+        "int f(int a, int b) { return a * b; }\n\
+         int g(int a, int b) { return a / b; }",
+    );
+    assert!(asm.contains("jsr     __mulsi3"));
+    assert!(asm.contains("jsr     __divsi3"));
+    // __divsi3 divides magnitudes with __udivsi3
+    for helper in ["__mulsi3:", "__divsi3:", "__udivsi3:"] {
+        assert!(asm.contains(helper), "{helper} not emitted");
+    }
+    assert!(!asm.contains("muls.w") && !asm.contains("divs.w"));
+
+    // Constant multipliers and unsigned power-of-two divisors are inline
+    let asm = assembly(
+        "int f(int a) { return a * 8 + a * 10; }\n\
+         unsigned int g(unsigned int a) { return a / 16 + a % 16; }",
+    );
+    assert!(!asm.contains("__mulsi3") && !asm.contains("__udivsi3"));
+    assert!(asm.contains("lsl.l") && asm.contains("mulu.w") && asm.contains("lsr.l"));
 }

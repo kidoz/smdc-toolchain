@@ -1,13 +1,14 @@
 //! M68k code emitter
 
 use super::m68k::*;
+use super::runtime;
 use super::sdk::{
     SdkFunctionKind, SdkInlineGenerator, SdkLibraryGenerator, SdkRegistry, generate_static_data,
     resolve_dependencies,
 };
 use crate::common::CompileResult;
 use crate::ir::*;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 /// Code generator that converts IR to M68k assembly
 pub struct CodeGenerator {
@@ -26,6 +27,8 @@ pub struct CodeGenerator {
     pending_sdk_functions: HashSet<String>,
     /// Set of user-defined functions (to avoid SDK conflicts)
     defined_functions: HashSet<String>,
+    /// Runtime helpers (32-bit multiply/divide) called so far
+    pending_runtime: BTreeSet<&'static str>,
     /// Whether to emit debug source comments
     debug_enabled: bool,
     /// Source filename for debug comments
@@ -70,6 +73,7 @@ impl CodeGenerator {
             sdk_registry: SdkRegistry::new(),
             pending_sdk_functions: HashSet::new(),
             defined_functions: HashSet::new(),
+            pending_runtime: BTreeSet::new(),
             debug_enabled: false,
             debug_filename: String::new(),
             debug_source: String::new(),
@@ -105,6 +109,7 @@ impl CodeGenerator {
         self.output.clear();
         self.pending_sdk_functions.clear();
         self.defined_functions.clear();
+        self.pending_runtime.clear();
 
         // Debug info is configured externally via set_debug_info() before calling this
 
@@ -142,6 +147,9 @@ impl CodeGenerator {
 
         // Emit SDK library functions that were used
         self.emit_sdk_library_functions()?;
+
+        // Emit runtime helpers that were used
+        self.emit_runtime_helpers();
 
         // Emit data section with ROM initial values and RAM references.
         // The startup stub always references these symbols, so an empty module
@@ -778,6 +786,123 @@ impl CodeGenerator {
         self.reg_cache_lru.push(temp.0);
     }
 
+    /// Call a runtime helper (operands in D0/D1, result in D0) and record
+    /// that it must be emitted
+    fn call_runtime(&mut self, helper: &'static str) {
+        self.pending_runtime.insert(helper);
+        self.emit(M68kInst::Jsr(Operand::Label(helper.to_string())));
+    }
+
+    /// Emit cheaper code for a multiply or unsigned divide/modulo by a
+    /// constant, leaving the result in D0. Returns false (emitting nothing)
+    /// when the operation has no constant special case.
+    fn try_emit_const_binary(
+        &mut self,
+        op: BinOp,
+        left: &Value,
+        right: &Value,
+    ) -> CompileResult<bool> {
+        let as_i32 = |v: &Value| match v {
+            Value::IntConst(n) => i32::try_from(*n).ok(),
+            _ => None,
+        };
+        match op {
+            BinOp::Mul => {
+                let (value, factor) = if let Some(c) = as_i32(right) {
+                    (left, c)
+                } else if let Some(c) = as_i32(left) {
+                    (right, c)
+                } else {
+                    return Ok(false);
+                };
+                self.load_value(value, DataReg::D0)?;
+                self.emit_mul_const(factor);
+                Ok(true)
+            }
+            // Unsigned division/modulo by a power of two is a shift/mask
+            BinOp::UDiv | BinOp::UMod => {
+                let Some(divisor) = as_i32(right)
+                    .and_then(|c| u32::try_from(c).ok())
+                    .filter(|c| c.is_power_of_two())
+                else {
+                    return Ok(false);
+                };
+                self.load_value(left, DataReg::D0)?;
+                if op == BinOp::UDiv {
+                    self.emit_shift_const(divisor.trailing_zeros(), false);
+                } else {
+                    self.emit(M68kInst::Andi(
+                        Size::Long,
+                        (divisor - 1) as i32,
+                        Operand::DataReg(DataReg::D0),
+                    ));
+                }
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+
+    /// D0 = D0 * factor (mod 2^32), using D1 as scratch
+    fn emit_mul_const(&mut self, factor: i32) {
+        let magnitude = factor.unsigned_abs();
+        if magnitude == 0 {
+            self.emit(M68kInst::Moveq(0, DataReg::D0));
+            return;
+        }
+        if magnitude.is_power_of_two() {
+            self.emit_shift_const(magnitude.trailing_zeros(), true);
+        } else if magnitude <= 0xFFFF {
+            // x * m = xl*m + ((xh*m) << 16) for a 16-bit m
+            let m = Operand::Imm(magnitude as i32);
+            self.emit(M68kInst::Move(
+                Size::Long,
+                Operand::DataReg(DataReg::D0),
+                Operand::DataReg(DataReg::D1),
+            ));
+            self.emit(M68kInst::Swap(DataReg::D1));
+            self.emit(M68kInst::Mulu(m.clone(), DataReg::D1));
+            self.emit(M68kInst::Swap(DataReg::D1));
+            self.emit(M68kInst::Clr(Size::Word, Operand::DataReg(DataReg::D1)));
+            self.emit(M68kInst::Mulu(m, DataReg::D0));
+            self.emit(M68kInst::Add(
+                Size::Long,
+                Operand::DataReg(DataReg::D1),
+                Operand::DataReg(DataReg::D0),
+            ));
+        } else {
+            self.emit(M68kInst::Move(
+                Size::Long,
+                Operand::Imm(factor),
+                Operand::DataReg(DataReg::D1),
+            ));
+            self.call_runtime(runtime::MULSI3);
+            return;
+        }
+        if factor < 0 {
+            self.emit(M68kInst::Neg(Size::Long, Operand::DataReg(DataReg::D0)));
+        }
+    }
+
+    /// Shift D0 left (or logically right) by a constant, using D1 as scratch
+    /// for counts the immediate form can't encode
+    fn emit_shift_const(&mut self, count: u32, left: bool) {
+        if count == 0 {
+            return;
+        }
+        let count_op = if count <= 8 {
+            Operand::Imm(count as i32)
+        } else {
+            self.emit(M68kInst::Moveq(count as i8, DataReg::D1));
+            Operand::DataReg(DataReg::D1)
+        };
+        self.emit(if left {
+            M68kInst::Lsl(Size::Long, count_op, DataReg::D0)
+        } else {
+            M68kInst::Lsr(Size::Long, count_op, DataReg::D0)
+        });
+    }
+
     fn generate_inst(&mut self, inst: &Inst) -> CompileResult<()> {
         match inst {
             Inst::Label(label) => {
@@ -818,6 +943,11 @@ impl CodeGenerator {
                 left,
                 right,
             } => {
+                if self.try_emit_const_binary(*op, left, right)? {
+                    self.store_temp(*dst, DataReg::D0);
+                    return Ok(());
+                }
+
                 self.load_value(left, DataReg::D0)?;
                 self.load_value(right, DataReg::D1)?;
 
@@ -836,41 +966,22 @@ impl CodeGenerator {
                             Operand::DataReg(DataReg::D0),
                         ));
                     }
-                    BinOp::Mul => {
-                        // M68000 only has 16x16->32 multiply
-                        self.emit(M68kInst::Muls(Operand::DataReg(DataReg::D1), DataReg::D0));
-                    }
-                    BinOp::Div => {
-                        // 32/16->16r16 signed divide
-                        self.emit(M68kInst::Divs(Operand::DataReg(DataReg::D1), DataReg::D0));
-                        // Quotient is in low word, sign-extend
-                        self.emit(M68kInst::Ext(Size::Long, DataReg::D0));
-                    }
-                    BinOp::Mod => {
-                        // 32/16->16r16 signed divide for remainder
-                        self.emit(M68kInst::Divs(Operand::DataReg(DataReg::D1), DataReg::D0));
-                        // Remainder is in high word
-                        self.emit(M68kInst::Swap(DataReg::D0));
-                        self.emit(M68kInst::Ext(Size::Long, DataReg::D0));
-                    }
-                    BinOp::UDiv => {
-                        // 32/16->16r16 unsigned divide
-                        self.emit(M68kInst::Divu(Operand::DataReg(DataReg::D1), DataReg::D0));
-                        // Quotient is in low word, zero-extend
-                        self.emit(M68kInst::Andi(
+                    // The 68000 only multiplies 16x16 and divides 32/16, so
+                    // full 32-bit operations call the runtime helpers
+                    BinOp::Mul => self.call_runtime(runtime::MULSI3),
+                    BinOp::Div => self.call_runtime(runtime::DIVSI3),
+                    BinOp::UDiv => self.call_runtime(runtime::UDIVSI3),
+                    BinOp::Mod | BinOp::UMod => {
+                        let helper = if *op == BinOp::Mod {
+                            runtime::DIVSI3
+                        } else {
+                            runtime::UDIVSI3
+                        };
+                        self.call_runtime(helper);
+                        // Remainder comes back in D1
+                        self.emit(M68kInst::Move(
                             Size::Long,
-                            0xFFFF,
-                            Operand::DataReg(DataReg::D0),
-                        ));
-                    }
-                    BinOp::UMod => {
-                        // 32/16->16r16 unsigned divide for remainder
-                        self.emit(M68kInst::Divu(Operand::DataReg(DataReg::D1), DataReg::D0));
-                        // Remainder is in high word
-                        self.emit(M68kInst::Swap(DataReg::D0));
-                        self.emit(M68kInst::Andi(
-                            Size::Long,
-                            0xFFFF,
+                            Operand::DataReg(DataReg::D1),
                             Operand::DataReg(DataReg::D0),
                         ));
                     }
@@ -1328,6 +1439,20 @@ impl CodeGenerator {
         }
 
         Ok(())
+    }
+
+    /// Emit the runtime helpers that were called, with their dependencies
+    fn emit_runtime_helpers(&mut self) {
+        let mut helpers = self.pending_runtime.clone();
+        for helper in &self.pending_runtime {
+            helpers.extend(runtime::dependencies(helper));
+        }
+        for helper in helpers {
+            self.emit(M68kInst::Comment(format!("Runtime helper: {helper}")));
+            for inst in runtime::generate(helper) {
+                self.emit(inst);
+            }
+        }
     }
 
     /// Emit SDK static data (frame counter, operator offsets, etc.)
