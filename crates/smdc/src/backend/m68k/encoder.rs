@@ -216,6 +216,7 @@ impl InstructionEncoder {
             | Operand::Sr => 0,
             Operand::Disp(_, _) => 2,
             Operand::Indexed(_, _, _) => 2,
+            Operand::PcIndexed(_, _) => 2, // brief-format extension word
             Operand::AbsShort(_) => 2,
             Operand::AbsLong(_) => 4,
             Operand::Imm(_) => {
@@ -1093,6 +1094,13 @@ impl InstructionEncoder {
                 // SR is not a standard EA mode, it's handled specially in MOVE to/from SR
                 return Err(EncodeError::InvalidOperands(
                     "SR cannot be encoded as EA".to_string(),
+                ));
+            }
+            Operand::PcIndexed(..) => {
+                // Decoder-only operand (foreign ROMs); the encoder emits
+                // absolute addressing instead.
+                return Err(EncodeError::InvalidOperands(
+                    "PcIndexed cannot be encoded".to_string(),
                 ));
             }
         };

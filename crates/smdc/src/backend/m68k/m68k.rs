@@ -117,6 +117,8 @@ pub enum Operand {
     Disp(i16, AddrReg),
     /// Indexed: d(An,Dn)
     Indexed(i8, AddrReg, DataReg),
+    /// PC-relative indexed (decoder-only): base+d(Dn), base pre-resolved
+    PcIndexed(i32, DataReg),
     /// Absolute short: addr.w
     AbsShort(i16),
     /// Absolute long: addr.l
@@ -139,6 +141,7 @@ impl std::fmt::Display for Operand {
             Operand::PreDec(r) => write!(f, "-({r})"),
             Operand::Disp(d, r) => write!(f, "{d}({r})"),
             Operand::Indexed(d, a, d2) => write!(f, "({d},{a},{d2})"),
+            Operand::PcIndexed(base, r) => write!(f, "${base:06X}+{r}"),
             Operand::AbsShort(a) => write!(f, "${a:04X}.w"),
             Operand::AbsLong(a) => write!(f, "${a:08X}"),
             Operand::Imm(v) => {

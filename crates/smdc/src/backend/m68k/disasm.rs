@@ -61,11 +61,15 @@ impl Cursor<'_> {
             5 => Operand::Disp(self.read_u16()? as i16, addr_reg(reg)),
             6 => {
                 let ext = self.read_u16()?;
-                // Encoder only emits brief extension words with a data
-                // register index (D/A = 0, index size = word).
-                if ext & 0x8F00 != 0 {
-                    return None;
+                // Brief-format extension words only (full format has bit 8
+                // set). Accept D/A index selection, index size and scale:
+                // foreign code uses these for jump tables (`jsr (d,an,ix)`).
+                if ext & 0x0100 != 0 {
+                    return None; // full format (68020)
                 }
+                // The index register is rendered as a data register even
+                // when the D/A bit selects an address register: the operand
+                // is informational for decompilation, not re-assembly.
                 Operand::Indexed(ext as u8 as i8, addr_reg(reg), data_reg((ext >> 12) & 7))
             }
             7 => match reg {
@@ -73,6 +77,25 @@ impl Cursor<'_> {
                 1 => {
                     let addr = self.read_u32()?;
                     self.symbolize(addr)
+                }
+                // d(PC): folds to a known absolute address. The reference PC
+                // is the extension word's address + 2.
+                2 => {
+                    let ext_addr = self.addr(self.pos);
+                    let disp = self.read_u16()? as i16 as i32;
+                    let ea = ext_addr.wrapping_add(2).wrapping_add_signed(disp);
+                    self.symbolize(ea)
+                }
+                // d(PC,Xn): brief-format index off a known PC base.
+                3 => {
+                    let ext_addr = self.addr(self.pos);
+                    let ext = self.read_u16()?;
+                    if ext & 0x0100 != 0 {
+                        return None; // full format (68020)
+                    }
+                    let disp = ext as u8 as i8 as i32;
+                    let base = ext_addr.wrapping_add(2).wrapping_add_signed(disp) as i32;
+                    Operand::PcIndexed(base, data_reg((ext >> 12) & 7))
                 }
                 4 => match size {
                     Size::Byte => Operand::Imm((self.read_u16()? & 0xFF) as i32),
