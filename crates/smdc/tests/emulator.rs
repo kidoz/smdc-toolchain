@@ -335,3 +335,29 @@ fn emulator_register_cache_boundaries() {
         &[100 + 3 * 11 - 3 * 3, 25, 0],
     );
 }
+
+/// Stores to char and short members write only their own bytes: a
+/// longword store would clobber the next member, and at an odd offset
+/// raise an address error.
+#[test]
+fn emulator_struct_member_widths() {
+    require_emulator!();
+    assert_rom_results(
+        "member_widths",
+        "struct S { short a; short b; int c; char d; char e; short f; };\n\
+         struct S g;\n\
+         void main(void) {\n\
+             struct S l;\n\
+             struct S *p = &l;\n\
+             g.a = 1; g.b = 0x1234; g.c = 7; g.d = 3; g.e = 4; g.f = 9;\n\
+             l.a = 11; l.b = 12; l.c = 13; l.d = 14; l.e = 15; l.f = 16;\n\
+             p->e = 25; p->b += 1;\n\
+             set_result(0, g.a); set_result(1, g.b); set_result(2, g.c);\n\
+             set_result(3, g.d); set_result(4, g.e); set_result(5, g.f);\n\
+             set_result(6, l.a); set_result(7, l.b); set_result(8, l.d);\n\
+             set_result(9, l.e); set_result(10, l.f);\n\
+             test_done();\n\
+         }\n",
+        &[1, 0x1234, 7, 3, 4, 9, 11, 13, 14, 25, 16],
+    );
+}

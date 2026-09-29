@@ -1524,14 +1524,7 @@ impl<'a> Parser<'a> {
                     // Try to parse as type first
                     if self.current.kind.can_start_declaration() {
                         let (_, ty) = self.parse_declaration_specifiers()?;
-                        // Handle abstract declarator
-                        let ty = if self.check(&TokenKind::Star) || self.check(&TokenKind::LBracket)
-                        {
-                            let (_, ty) = self.parse_declarator(ty)?;
-                            ty
-                        } else {
-                            ty
-                        };
+                        let ty = self.parse_abstract_declarator(ty)?;
                         self.expect(TokenKind::RParen)?;
                         let span = start_span.merge(self.current.span);
                         Ok(Expr::new(ExprKind::Sizeof(SizeofArg::Type(ty)), span))

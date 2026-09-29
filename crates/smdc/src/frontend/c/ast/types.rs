@@ -54,13 +54,59 @@ impl CType {
             TypeKind::Pointer(_) => 4, // 32-bit pointers
             TypeKind::Array { element, size } => element.size() * size.unwrap_or(0),
             TypeKind::Function { .. } => 4, // Function pointer
-            TypeKind::Struct { members, .. } => members.iter().map(|(_, t)| t.size()).sum(),
-            TypeKind::Union { members, .. } => {
-                members.iter().map(|(_, t)| t.size()).max().unwrap_or(0)
+            TypeKind::Struct { .. } | TypeKind::Union { .. } => {
+                // End of the last member, padded to the aggregate's alignment
+                // so array elements stay aligned
+                let end = self
+                    .member_layout()
+                    .iter()
+                    .map(|(_, offset, ty)| offset + ty.size())
+                    .max()
+                    .unwrap_or(0);
+                end.next_multiple_of(self.alignment())
             }
             TypeKind::Enum { .. } => 4,    // Enums are ints
             TypeKind::Typedef(_name) => 4, // Placeholder, resolved during sema
         }
+    }
+
+    /// Member names, byte offsets, and types of a struct or union, in
+    /// declaration order. Each struct member sits at the next offset aligned
+    /// for its type; every union member is at offset 0. Other types have no
+    /// members.
+    pub fn member_layout(&self) -> Vec<(&str, usize, &CType)> {
+        match &self.kind {
+            TypeKind::Struct { members, .. } => {
+                let mut offset = 0usize;
+                members
+                    .iter()
+                    .map(|(name, ty)| {
+                        offset = offset.next_multiple_of(ty.alignment());
+                        let entry = (name.as_str(), offset, ty);
+                        offset += ty.size();
+                        entry
+                    })
+                    .collect()
+            }
+            TypeKind::Union { members, .. } => members
+                .iter()
+                .map(|(name, ty)| (name.as_str(), 0, ty))
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Byte offset and type of the struct or union member named `field`.
+    pub fn member(&self, field: &str) -> Option<(usize, &CType)> {
+        self.member_layout()
+            .into_iter()
+            .find(|(name, _, _)| *name == field)
+            .map(|(_, offset, ty)| (offset, ty))
+    }
+
+    /// Whether this is a struct or union type
+    pub fn is_record(&self) -> bool {
+        matches!(self.kind, TypeKind::Struct { .. } | TypeKind::Union { .. })
     }
 
     /// Get the alignment of this type in bytes
@@ -77,16 +123,14 @@ impl CType {
             TypeKind::Pointer(_) => 2,
             TypeKind::Array { element, .. } => element.alignment(),
             TypeKind::Function { .. } => 2,
-            TypeKind::Struct { members, .. } => members
+            // Structs and unions are at least word-aligned on the 68000 (as
+            // with m68k GCC), so they can be copied with word/long moves
+            TypeKind::Struct { members, .. } | TypeKind::Union { members, .. } => members
                 .iter()
                 .map(|(_, t)| t.alignment())
                 .max()
-                .unwrap_or(1),
-            TypeKind::Union { members, .. } => members
-                .iter()
-                .map(|(_, t)| t.alignment())
-                .max()
-                .unwrap_or(1),
+                .unwrap_or(1)
+                .max(2),
             TypeKind::Enum { .. } => 2,
             TypeKind::Typedef(_) => 2,
         }
@@ -175,20 +219,13 @@ impl CType {
                 params: params.iter().map(|(_, ty)| ty.to_ir_type()).collect(),
                 variadic: *variadic,
             },
-            TypeKind::Struct { name, members } => IrTypeKind::Struct {
+            TypeKind::Struct { name, .. } => IrTypeKind::Struct {
                 name: name.clone(),
-                fields: {
-                    let mut fields = Vec::new();
-                    let mut offset = 0;
-                    for (name, ty) in members {
-                        let ir_ty = ty.to_ir_type();
-                        let align = ir_ty.align;
-                        offset = (offset + align - 1) & !(align - 1);
-                        fields.push((name.clone(), ir_ty.clone(), offset));
-                        offset += ir_ty.size;
-                    }
-                    fields
-                },
+                fields: self
+                    .member_layout()
+                    .into_iter()
+                    .map(|(name, offset, ty)| (name.to_string(), ty.to_ir_type(), offset))
+                    .collect(),
             },
             TypeKind::Union { .. } => {
                 // Approximate unions as array of bytes for now, or just an opaque type

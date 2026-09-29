@@ -178,10 +178,15 @@ impl SemanticAnalyzer {
     fn analyze_struct_decl(&mut self, s: &mut StructDecl) -> CompileResult<()> {
         // Register struct type if it has a name and members
         if let (Some(name), Some(members)) = (&s.name, &s.members) {
-            let struct_members: Vec<(String, CType)> = members
-                .iter()
-                .map(|m| (m.name.clone(), m.ty.clone()))
-                .collect();
+            // Resolve member types now so nested struct members have their
+            // layout; a pointer to this struct itself stays unresolved and is
+            // filled in lazily where it is used
+            let mut struct_members = Vec::with_capacity(members.len());
+            for m in members {
+                let mut ty = m.ty.clone();
+                self.resolve_struct_type(&mut ty)?;
+                struct_members.push((m.name.clone(), ty));
+            }
 
             let def = StructDef {
                 name: name.clone(),
@@ -198,10 +203,12 @@ impl SemanticAnalyzer {
     fn analyze_union_decl(&mut self, u: &mut UnionDecl) -> CompileResult<()> {
         // Register union type if it has a name and members
         if let (Some(name), Some(members)) = (&u.name, &u.members) {
-            let union_members: Vec<(String, CType)> = members
-                .iter()
-                .map(|m| (m.name.clone(), m.ty.clone()))
-                .collect();
+            let mut union_members = Vec::with_capacity(members.len());
+            for m in members {
+                let mut ty = m.ty.clone();
+                self.resolve_struct_type(&mut ty)?;
+                union_members.push((m.name.clone(), ty));
+            }
 
             let def = UnionDef {
                 name: name.clone(),
@@ -504,58 +511,23 @@ impl SemanticAnalyzer {
 
             ExprKind::Member { object, field } => {
                 let obj_ty = self.analyze_expr(object)?;
-                match &obj_ty.kind {
-                    TypeKind::Struct { members, .. } | TypeKind::Union { members, .. } => {
-                        for (name, ty) in members {
-                            if name == field {
-                                return Ok(ty.clone());
-                            }
-                        }
-                        return Err(CompileError::type_error(
-                            format!("no member named '{field}' in struct"),
-                            expr.span,
-                        ));
-                    }
-                    _ => {
-                        return Err(CompileError::type_error(
-                            "member access on non-struct type",
-                            expr.span,
-                        ));
-                    }
-                }
+                Self::member_type(&obj_ty, field, expr.span)?
             }
 
             ExprKind::PtrMember { pointer, field } => {
                 let ptr_ty = self.analyze_expr(pointer)?;
-                if let TypeKind::Pointer(inner) = &ptr_ty.kind {
-                    match &inner.kind {
-                        TypeKind::Struct { members, .. } | TypeKind::Union { members, .. } => {
-                            for (name, ty) in members {
-                                if name == field {
-                                    return Ok(ty.clone());
-                                }
-                            }
-                            return Err(CompileError::type_error(
-                                format!("no member named '{field}' in struct"),
-                                expr.span,
-                            ));
-                        }
-                        _ => {
-                            return Err(CompileError::type_error(
-                                "member access on non-struct type",
-                                expr.span,
-                            ));
-                        }
-                    }
-                }
-                return Err(CompileError::type_error(
-                    "arrow operator on non-pointer type",
-                    expr.span,
-                ));
+                let TypeKind::Pointer(inner) = &ptr_ty.kind else {
+                    return Err(CompileError::type_error(
+                        "arrow operator on non-pointer type",
+                        expr.span,
+                    ));
+                };
+                Self::member_type(inner, field, expr.span)?
             }
 
             ExprKind::Cast { ty, expr: inner } => {
                 Self::reject_unsupported_type(ty, expr.span)?;
+                self.resolve_struct_type(ty)?;
                 self.analyze_expr(inner)?;
                 ty.clone()
             }
@@ -565,7 +537,9 @@ impl SemanticAnalyzer {
                     SizeofArg::Expr(e) => {
                         self.analyze_expr(e)?;
                     }
-                    SizeofArg::Type(_) => {}
+                    SizeofArg::Type(ty) => {
+                        self.resolve_struct_type(ty)?;
+                    }
                 }
                 // sizeof returns size_t, but we'll use unsigned long
                 CType::new(TypeKind::Long { signed: false }, expr.span)
@@ -613,8 +587,33 @@ impl SemanticAnalyzer {
             }
         };
 
+        // Fill in struct members the type only names (e.g. a self-referential
+        // `struct Node *next` recorded before `Node` was complete), so later
+        // stages see real sizes and member offsets
+        let mut ty = ty;
+        self.resolve_struct_type(&mut ty)?;
         expr.ty = Some(ty.clone());
         Ok(ty)
+    }
+
+    /// Type of member `field` of struct or union type `record_ty`
+    fn member_type(
+        record_ty: &CType,
+        field: &str,
+        span: crate::common::Span,
+    ) -> CompileResult<CType> {
+        if !record_ty.is_record() {
+            return Err(CompileError::type_error(
+                "member access on non-struct type",
+                span,
+            ));
+        }
+        record_ty
+            .member(field)
+            .map(|(_, ty)| ty.clone())
+            .ok_or_else(|| {
+                CompileError::type_error(format!("no member named '{field}' in struct"), span)
+            })
     }
 
     fn analyze_initializer(
