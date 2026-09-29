@@ -3,7 +3,7 @@
 //! Usage: smdc [OPTIONS] <input> -o <output>
 
 use clap::{Parser as ClapParser, ValueEnum};
-use smd_compiler::backend::m68k::{disassemble_listing, parse_sym_file};
+use smd_compiler::backend::m68k::{decompile_rom, disassemble_listing, parse_sym_file};
 use smd_compiler::backend::rom::verify_checksum;
 use smd_compiler::backend::{BackendConfig, M68kBackend, OutputFormat, RomBackend, RomConfig};
 use smd_compiler::common::DiagnosticReporter;
@@ -101,7 +101,14 @@ struct Args {
     #[arg(long)]
     disasm: bool,
 
-    /// Symbol map file (.sym) to annotate the disassembly with
+    /// Decompile a ROM binary (.bin) to C-like pseudo-source instead of
+    /// compiling. Functions, parameters and locals are recovered from the
+    /// codegen's frame layout; if/else and loop structure is reconstructed
+    /// where recognizable. Writes to --output if given, otherwise to stdout.
+    #[arg(long)]
+    decompile: bool,
+
+    /// Symbol map file (.sym) to annotate the disassembly/decompilation with
     #[arg(long)]
     sym: Option<PathBuf>,
 
@@ -141,6 +148,9 @@ fn detect_language(path: &Path, explicit: Language) -> Language {
 fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     if args.disasm {
         return run_disasm(args);
+    }
+    if args.decompile {
+        return run_decompile(args);
     }
 
     // Read input file
@@ -315,6 +325,40 @@ fn run_disasm(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         None => print!("{listing}"),
+    }
+    Ok(())
+}
+
+fn run_decompile(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
+    let rom = fs::read(&args.input)?;
+
+    // Load symbols from --sym, or <input>.sym if it exists
+    let sym_path = args
+        .sym
+        .clone()
+        .unwrap_or_else(|| args.input.with_extension("sym"));
+    let symbols = if sym_path.exists() {
+        if args.verbose {
+            eprintln!("Loading symbols from {}", sym_path.display());
+        }
+        parse_sym_file(&fs::read_to_string(&sym_path)?)
+    } else {
+        if args.sym.is_some() {
+            return Err(format!("symbol file not found: {}", sym_path.display()).into());
+        }
+        HashMap::new()
+    };
+
+    let source = decompile_rom(&rom, &symbols, None);
+
+    match &args.output {
+        Some(path) => {
+            fs::write(path, source)?;
+            if args.verbose {
+                eprintln!("Decompiled source written to {}", path.display());
+            }
+        }
+        None => print!("{source}"),
     }
     Ok(())
 }

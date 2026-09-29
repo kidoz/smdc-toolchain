@@ -16,6 +16,73 @@ struct Cursor<'a> {
     rev: &'a HashMap<u32, String>,
 }
 
+/// Decode the single instruction at byte offset `pos`.
+///
+/// Returns the instruction, the offset just past it, and — for static
+/// control transfers (branches, DBF, absolute JSR/JMP) — the target address.
+/// This is the decompiler's reuse seam into the decoder; the listing path
+/// keeps its own cursor.
+pub(crate) fn decode_at(
+    bytes: &[u8],
+    pos: usize,
+    base: u32,
+    rev: &HashMap<u32, String>,
+) -> Option<(M68kInst, usize, Option<u32>)> {
+    let mut cursor = Cursor {
+        bytes,
+        pos,
+        base,
+        rev,
+    };
+    let inst = cursor.decode_inst()?;
+    let next = cursor.pos;
+
+    // Recover the numeric target the decoder folded into a label string.
+    let op = u16::from_be_bytes([*bytes.get(pos)?, *bytes.get(pos + 1)?]);
+    let word = |off: usize| -> Option<i32> {
+        Some(u16::from_be_bytes([
+            *bytes.get(off)?,
+            *bytes.get(off + 1)?,
+        ]) as i16 as i32)
+    };
+    let addr = base + pos as u32;
+    let target = match op >> 12 {
+        0x6 => {
+            let disp8 = op & 0xFF;
+            if disp8 == 0xFF {
+                None // 68020 long form
+            } else {
+                let disp = if disp8 == 0 {
+                    word(pos + 2)?
+                } else {
+                    disp8 as i8 as i32
+                };
+                Some(addr.wrapping_add(2).wrapping_add_signed(disp))
+            }
+        }
+        _ if op & 0xFFF8 == 0x51C8 => {
+            // DBF: displacement word follows the opword.
+            Some(addr.wrapping_add(2).wrapping_add_signed(word(pos + 2)?))
+        }
+        _ if op & 0xFFC0 == 0x4E80 || op & 0xFFC0 == 0x4EC0 => {
+            // JSR/JMP with an absolute-long operand (mode 7, reg 1).
+            if op & 0x3F == 0x39 {
+                Some(u32::from_be_bytes([
+                    *bytes.get(pos + 2)?,
+                    *bytes.get(pos + 3)?,
+                    *bytes.get(pos + 4)?,
+                    *bytes.get(pos + 5)?,
+                ]))
+            } else {
+                None // register/memory indirect: not statically known
+            }
+        }
+        _ => None,
+    };
+
+    Some((inst, next, target))
+}
+
 impl Cursor<'_> {
     fn read_u16(&mut self) -> Option<u16> {
         let b = self.bytes.get(self.pos..self.pos + 2)?;

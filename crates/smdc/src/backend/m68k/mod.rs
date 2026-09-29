@@ -4,6 +4,7 @@
 //! targeting the Sega Megadrive/Genesis console.
 
 mod assembler;
+mod decomp;
 mod disasm;
 mod emit;
 mod encoder;
@@ -13,6 +14,7 @@ pub mod sdk;
 mod symfile;
 
 pub use assembler::Assembler;
+pub use decomp::decompile_rom;
 pub use disasm::disassemble_listing;
 pub use emit::CodeGenerator;
 pub use encoder::{EncodeError, InstructionEncoder};
