@@ -145,7 +145,8 @@ impl std::fmt::Display for Operand {
                 if *v >= 0 {
                     write!(f, "#${v:X}")
                 } else {
-                    write!(f, "#-${:X}", -v)
+                    // unsigned_abs: `-v` would overflow for i32::MIN.
+                    write!(f, "#-${:X}", v.unsigned_abs())
                 }
             }
             Operand::Label(l) => write!(f, "{l}"),
