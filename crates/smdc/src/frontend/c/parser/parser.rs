@@ -1627,6 +1627,27 @@ impl<'a> Parser<'a> {
             ty = CType::pointer_to(ty, span);
         }
 
+        // Abstract function-pointer declarator: `(*)(params)` — pointer to
+        // function, used in casts like `(int (*)(void))addr`.
+        if self.check(&TokenKind::LParen) && self.lexer.peek()?.kind == TokenKind::Star {
+            self.advance()?; // consume '('
+            while self.match_token(&TokenKind::Star)? {}
+            self.expect(TokenKind::RParen)?;
+            if self.match_token(&TokenKind::LParen)? {
+                let (params, variadic) = self.parse_parameter_list()?;
+                self.expect(TokenKind::RParen)?;
+                let func = CType::new(
+                    TypeKind::Function {
+                        return_type: Box::new(ty.clone()),
+                        params,
+                        variadic,
+                    },
+                    span,
+                );
+                ty = CType::pointer_to(func, span);
+            }
+        }
+
         // Handle arrays (like int[10])
         while self.check(&TokenKind::LBracket) {
             self.advance()?;
