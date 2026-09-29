@@ -933,10 +933,7 @@ impl<'a> Parser<'a> {
             None
         };
 
-        self.expect(TokenKind::Semi)?;
-        let span = start_span.merge(self.current.span);
-
-        let mut var = VarDecl::new(name, ty, span);
+        let mut var = VarDecl::new(name, ty.clone(), start_span);
         if let Some(sc) = storage_class {
             var = var.with_storage_class(sc);
         }
@@ -944,7 +941,43 @@ impl<'a> Parser<'a> {
             var = var.with_init(init);
         }
 
-        Ok(Declaration::new(DeclKind::Variable(var), span))
+        let mut declarations = vec![var];
+
+        // Multiple declarators (e.g., `int a, b = 2, c;`) — same shape as
+        // the top-level path in `parse_declaration_rest`.
+        while self.match_token(&TokenKind::Comma)? {
+            let base = self.get_base_type(&ty);
+            let (name, ty) = self.parse_declarator(base)?;
+            let init = if self.match_token(&TokenKind::Eq)? {
+                Some(self.parse_initializer()?)
+            } else {
+                None
+            };
+            let mut var = VarDecl::new(name, ty, start_span);
+            if let Some(sc) = &storage_class {
+                var = var.with_storage_class(*sc);
+            }
+            if let Some(init) = init {
+                var = var.with_init(init);
+            }
+            declarations.push(var);
+        }
+
+        self.expect(TokenKind::Semi)?;
+        let span = start_span.merge(self.current.span);
+
+        if declarations.len() == 1 {
+            let mut var = declarations.remove(0);
+            var.span = span;
+            return Ok(Declaration::new(DeclKind::Variable(var), span));
+        }
+        for var in &mut declarations {
+            var.span = span;
+        }
+        Ok(Declaration::new(
+            DeclKind::MultipleVariables(declarations),
+            span,
+        ))
     }
 
     fn parse_if_statement(&mut self) -> CompileResult<Stmt> {
