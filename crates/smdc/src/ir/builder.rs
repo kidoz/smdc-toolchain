@@ -3,6 +3,7 @@
 use super::inst::*;
 use crate::common::{CompileError, CompileResult};
 use crate::frontend::c::ast::*;
+use crate::frontend::c::sema::{InitValue, layout_initializer};
 use std::collections::HashMap;
 
 /// Builds IR from AST
@@ -13,12 +14,21 @@ pub struct IrBuilder {
     label_counter: u32,
     string_counter: u32,
     locals: HashMap<String, Temp>,
+    /// Static locals of the current function: source name -> global symbol
+    local_statics: HashMap<String, String>,
+    /// Counter keeping static-local symbols unique
+    static_counter: u32,
     /// Enum constants, usable as immediate values
     enum_consts: HashMap<String, i64>,
     break_label: Option<Label>,
     continue_label: Option<Label>,
     /// Current source span — automatically attached to emitted instructions
     current_span: Option<crate::common::Span>,
+    /// Return type of the function being built
+    return_type: Option<CType>,
+    /// Set by `build_expr_discarded`: the next expression's value is unused,
+    /// so an assignment or increment needn't convert its result
+    discard_value: bool,
 }
 
 impl IrBuilder {
@@ -30,10 +40,14 @@ impl IrBuilder {
             label_counter: 0,
             string_counter: 0,
             locals: HashMap::new(),
+            local_statics: HashMap::new(),
+            static_counter: 0,
             enum_consts: HashMap::new(),
             break_label: None,
             continue_label: None,
             current_span: None,
+            return_type: None,
+            discard_value: false,
         }
     }
 
@@ -117,6 +131,15 @@ impl IrBuilder {
     }
 
     fn build_global_var(&mut self, var: &VarDecl) -> CompileResult<()> {
+        // `extern int x;` declares a global defined elsewhere
+        if var.storage_class == Some(StorageClass::Extern) && var.init.is_none() {
+            return Ok(());
+        }
+        self.build_global(var.name.clone(), var)
+    }
+
+    /// Emit global storage named `symbol` for variable `var`
+    fn build_global(&mut self, symbol: String, var: &VarDecl) -> CompileResult<()> {
         let init_bytes = if let Some(init) = &var.init {
             Some(self.evaluate_initializer(init, &var.ty)?)
         } else {
@@ -124,7 +147,7 @@ impl IrBuilder {
         };
 
         let global = IrGlobal {
-            name: var.name.clone(),
+            name: symbol,
             ty: var.ty.to_ir_type(),
             init: init_bytes,
         };
@@ -132,38 +155,63 @@ impl IrBuilder {
         Ok(())
     }
 
-    /// Evaluate a constant initializer to bytes
-    fn evaluate_initializer(&self, init: &Initializer, ty: &CType) -> CompileResult<Vec<u8>> {
-        match init {
-            Initializer::Expr(expr) => self.evaluate_const_expr_to_bytes(expr, ty),
-            Initializer::List(items) => self.evaluate_init_list_to_bytes(items, ty),
-            Initializer::Designated { .. } => {
-                // For designated initializers, return zero-initialized for now
-                Ok(vec![0u8; ty.size()])
-            }
-        }
+    /// Global symbol an identifier refers to: a static local's private
+    /// symbol, or the name itself
+    fn global_symbol(&self, name: &str) -> String {
+        self.local_statics
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| name.to_string())
     }
 
-    /// Evaluate a constant expression to bytes
-    fn evaluate_const_expr_to_bytes(&self, expr: &Expr, ty: &CType) -> CompileResult<Vec<u8>> {
-        let size = ty.size();
-        let value = self.evaluate_const_expr(expr)?;
+    /// Evaluate the constant initializer of an object of type `ty` to its
+    /// bytes; members it doesn't cover are zero
+    fn evaluate_initializer(&self, init: &Initializer, ty: &CType) -> CompileResult<Vec<u8>> {
+        let span = self.current_span.unwrap_or_default();
+        let resolve = |name: &str| self.enum_consts.get(name).copied();
+        let layout = layout_initializer(ty, init, &resolve, span)?;
 
-        // Convert the value to bytes based on size (big-endian for M68k)
-        Ok(match size {
-            1 => vec![value as u8],
-            2 => ((value as i16).to_be_bytes()).to_vec(),
-            4 => ((value as i32).to_be_bytes()).to_vec(),
-            _ => {
-                // For larger types, pad with zeros
-                let mut bytes = { value }.to_be_bytes().to_vec();
-                while bytes.len() < size {
-                    bytes.insert(0, 0);
+        let mut bytes = vec![0u8; ty.size()];
+        for entry in &layout.entries {
+            let value = match entry.value {
+                InitValue::Str(s) => Self::string_bytes(s, entry.ty.size()),
+                InitValue::Expr(expr) => {
+                    if entry.ty.is_record() {
+                        return Err(CompileError::codegen(
+                            "non-constant expression in global initializer",
+                        ));
+                    }
+                    let value = self.evaluate_const_expr(expr)?;
+                    Self::const_bytes(Self::convert_const(value, &entry.ty), entry.ty.size())
                 }
-                bytes.truncate(size);
-                bytes
-            }
-        })
+            };
+            Self::write_image(&mut bytes, entry.offset, &value)?;
+        }
+        Ok(bytes)
+    }
+
+    /// Copy `value` into an initializer image at `offset`
+    fn write_image(image: &mut [u8], offset: usize, value: &[u8]) -> CompileResult<()> {
+        image
+            .get_mut(offset..offset + value.len())
+            .ok_or_else(|| CompileError::codegen("initializer does not fit its object"))?
+            .copy_from_slice(value);
+        Ok(())
+    }
+
+    /// Bytes a string literal puts in a `size`-byte char array: the
+    /// characters, then NUL padding (the NUL is dropped if the literal
+    /// exactly fills the array)
+    fn string_bytes(s: &str, size: usize) -> Vec<u8> {
+        let mut bytes = s.as_bytes().to_vec();
+        bytes.resize(size, 0);
+        bytes
+    }
+
+    /// Big-endian bytes of `value` as a `size`-byte integer
+    fn const_bytes(value: i64, size: usize) -> Vec<u8> {
+        let be = value.to_be_bytes();
+        be[be.len() - size.min(be.len())..].to_vec()
     }
 
     /// Evaluate a constant expression to an integer value
@@ -171,9 +219,15 @@ impl IrBuilder {
         match &expr.kind {
             ExprKind::IntLiteral(n) => Ok(*n),
             ExprKind::CharLiteral(c) => Ok(*c as i64),
-            ExprKind::Identifier(name) => self.enum_consts.get(name).copied().ok_or_else(|| {
-                CompileError::codegen("non-constant expression in global initializer")
-            }),
+            // Only enum constants are constant, and a local of the same name
+            // hides one
+            ExprKind::Identifier(name)
+                if !self.locals.contains_key(name) && !self.local_statics.contains_key(name) =>
+            {
+                self.enum_consts.get(name).copied().ok_or_else(|| {
+                    CompileError::codegen("non-constant expression in global initializer")
+                })
+            }
             ExprKind::Unary { op, operand } => {
                 let val = self.evaluate_const_expr(operand)?;
                 Ok(match op {
@@ -232,9 +286,9 @@ impl IrBuilder {
                     self.evaluate_const_expr(else_expr)
                 }
             }
-            ExprKind::Cast { expr: inner, .. } => {
-                // For now, just pass through (proper casts need type info)
-                self.evaluate_const_expr(inner)
+            ExprKind::Cast { ty, expr: inner } => {
+                let value = self.evaluate_const_expr(inner)?;
+                Ok(Self::convert_const(value, ty))
             }
             ExprKind::Sizeof(arg) => {
                 let size = match arg {
@@ -249,129 +303,343 @@ impl IrBuilder {
         }
     }
 
-    /// Evaluate an initializer list to bytes
-    fn evaluate_init_list_to_bytes(
-        &self,
-        items: &[Initializer],
-        ty: &CType,
-    ) -> CompileResult<Vec<u8>> {
-        match &ty.kind {
-            TypeKind::Array { element, size } => {
-                let elem_size = element.size();
-                let count = size.unwrap_or(items.len());
-                let mut bytes = Vec::with_capacity(elem_size * count);
-
-                for (i, item) in items.iter().enumerate() {
-                    if i >= count {
-                        break;
-                    }
-                    let item_bytes = self.evaluate_initializer(item, element)?;
-                    bytes.extend(item_bytes);
-                }
-
-                // Zero-fill remaining elements
-                while bytes.len() < elem_size * count {
-                    bytes.push(0);
-                }
-
-                Ok(bytes)
-            }
-            TypeKind::Struct { name: _, members } => {
-                let mut bytes = vec![0u8; ty.size()];
-                let mut offset = 0;
-
-                for (i, (_name, member_ty)) in members.iter().enumerate() {
-                    // Align offset
-                    let align = member_ty.alignment();
-                    offset = (offset + align - 1) & !(align - 1);
-
-                    if let Some(item) = items.get(i) {
-                        let item_bytes = self.evaluate_initializer(item, member_ty)?;
-                        let end = (offset + item_bytes.len()).min(bytes.len());
-                        bytes[offset..end].copy_from_slice(&item_bytes[..end - offset]);
-                    }
-
-                    offset += member_ty.size();
-                }
-
-                Ok(bytes)
-            }
-            _ => {
-                // For scalar types with brace-init, use first element
-                if let Some(first) = items.first() {
-                    self.evaluate_initializer(first, ty)
-                } else {
-                    Ok(vec![0u8; ty.size()])
-                }
-            }
-        }
-    }
-
-    /// Get the offset and type of a struct field for member access (obj.field)
-    fn get_struct_field_offset(&self, object: &Expr, field: &str) -> CompileResult<(usize, CType)> {
-        let obj_ty = object
-            .ty
-            .as_ref()
+    /// Offset and type of `field` within the struct or union type `record_ty`
+    fn field_offset(record_ty: Option<&CType>, field: &str) -> CompileResult<(usize, CType)> {
+        let record_ty = record_ty
             .ok_or_else(|| CompileError::codegen("missing type for struct member access"))?;
+        record_ty
+            .member(field)
+            .map(|(offset, ty)| (offset, ty.clone()))
+            .ok_or_else(|| CompileError::codegen(format!("unknown struct field: {field}")))
+    }
 
-        match &obj_ty.kind {
-            TypeKind::Struct { members, .. } => self.calculate_field_offset(members, field),
-            _ => Err(CompileError::codegen(format!(
-                "member access on non-struct type: {:?}",
-                obj_ty.kind
-            ))),
+    /// Whether an operand of type `ty` makes integer arithmetic unsigned
+    /// under the usual arithmetic conversions. Narrower types promote to
+    /// (signed) int, so only unsigned int/long and addresses count.
+    fn is_unsigned_operand(ty: Option<&CType>) -> bool {
+        ty.is_some_and(|t| {
+            t.is_pointer()
+                || t.is_array()
+                || matches!(t.kind, TypeKind::Function { .. })
+                || (t.is_integer() && !t.is_signed() && t.size() >= 4)
+        })
+    }
+
+    /// IR operation for the (non-short-circuit) C operator `op` on operands
+    /// of the given types
+    fn ir_binop(op: BinaryOp, left: Option<&CType>, right: Option<&CType>) -> BinOp {
+        let unsigned = Self::is_unsigned_operand(left) || Self::is_unsigned_operand(right);
+        let pick = |signed_op, unsigned_op| if unsigned { unsigned_op } else { signed_op };
+        match op {
+            BinaryOp::Add => BinOp::Add,
+            BinaryOp::Sub => BinOp::Sub,
+            BinaryOp::Mul => BinOp::Mul,
+            BinaryOp::Div => pick(BinOp::Div, BinOp::UDiv),
+            BinaryOp::Mod => pick(BinOp::Mod, BinOp::UMod),
+            BinaryOp::BitAnd => BinOp::And,
+            BinaryOp::BitOr => BinOp::Or,
+            BinaryOp::BitXor => BinOp::Xor,
+            BinaryOp::Shl => BinOp::Shl,
+            // A shift takes the (promoted) type of its left operand alone
+            BinaryOp::Shr => {
+                if Self::is_unsigned_operand(left) {
+                    BinOp::Shr
+                } else {
+                    BinOp::Sar
+                }
+            }
+            BinaryOp::Eq => BinOp::Eq,
+            BinaryOp::Ne => BinOp::Ne,
+            BinaryOp::Lt => pick(BinOp::Lt, BinOp::ULt),
+            BinaryOp::Le => pick(BinOp::Le, BinOp::ULe),
+            BinaryOp::Gt => pick(BinOp::Gt, BinOp::UGt),
+            BinaryOp::Ge => pick(BinOp::Ge, BinOp::UGe),
+            BinaryOp::LogAnd | BinaryOp::LogOr => {
+                unreachable!("short-circuit operators are built by build_logical_expr")
+            }
         }
     }
 
-    /// Get the offset and type of a struct field for pointer member access (ptr->field)
-    fn get_ptr_struct_field_offset(
-        &self,
+    /// Element size for arithmetic on a pointer (or decayed array) operand;
+    /// None for non-pointer operands. `void *` steps by bytes (GNU C).
+    fn pointee_size(ty: Option<&CType>) -> Option<usize> {
+        match &ty?.kind {
+            TypeKind::Pointer(inner) | TypeKind::Array { element: inner, .. } => {
+                Some(inner.size().max(1))
+            }
+            _ => None,
+        }
+    }
+
+    /// `value * size`, folding constants and skipping the multiply by 1
+    fn scale(&mut self, value: Value, size: usize) -> Value {
+        if size == 1 {
+            return value;
+        }
+        if let Value::IntConst(n) = value {
+            return Value::IntConst(n * size as i64);
+        }
+        let dst = self.new_temp();
+        self.emit(Inst::Binary {
+            dst,
+            op: BinOp::Mul,
+            left: value,
+            right: Value::IntConst(size as i64),
+        });
+        Value::Temp(dst)
+    }
+
+    /// Number of `size`-byte elements between pointers `left` and `right`
+    fn pointer_difference(&mut self, left: Value, right: Value, size: usize) -> Value {
+        let bytes = self.new_temp();
+        self.emit(Inst::Binary {
+            dst: bytes,
+            op: BinOp::Sub,
+            left,
+            right,
+        });
+        if size == 1 {
+            return Value::Temp(bytes);
+        }
+        // The byte distance is an exact multiple of the element size, so a
+        // power-of-two size divides with an arithmetic shift
+        let (op, divisor) = if size.is_power_of_two() {
+            (BinOp::Sar, size.trailing_zeros() as i64)
+        } else {
+            (BinOp::Div, size as i64)
+        };
+        let dst = self.new_temp();
+        self.emit(Inst::Binary {
+            dst,
+            op,
+            left: Value::Temp(bytes),
+            right: Value::IntConst(divisor),
+        });
+        Value::Temp(dst)
+    }
+
+    /// Convert `value` (of type `from`, held as a 32-bit int) to type `to`.
+    /// Integers are computed in 32 bits, so conversion to char or short
+    /// truncates and then sign- or zero-extends back to 32 bits. Other
+    /// conversions leave the bits unchanged.
+    fn convert(&mut self, value: Value, from: Option<&CType>, to: &CType) -> Value {
+        let bits = match to.size() {
+            1 if to.is_integer() => 8,
+            2 if to.is_integer() => 16,
+            _ => return value,
+        };
+        // Values of a narrower type are already extended, so conversions
+        // that preserve every value of `from` need no code
+        if let Some(from) = from
+            && from.is_integer()
+            && (from.size() < to.size() && (!from.is_signed() || to.is_signed())
+                || from.size() == to.size() && from.is_signed() == to.is_signed())
+        {
+            return value;
+        }
+        if let Value::IntConst(n) = value {
+            return Value::IntConst(Self::convert_const(n, to));
+        }
+        let dst = self.new_temp();
+        if to.is_signed() {
+            // Shift the low bits to the top and arithmetic-shift them back
+            let shifted = self.new_temp();
+            let shift = Value::IntConst(32 - bits);
+            self.emit(Inst::Binary {
+                dst: shifted,
+                op: BinOp::Shl,
+                left: value,
+                right: shift.clone(),
+            });
+            self.emit(Inst::Binary {
+                dst,
+                op: BinOp::Sar,
+                left: Value::Temp(shifted),
+                right: shift,
+            });
+        } else {
+            self.emit(Inst::Binary {
+                dst,
+                op: BinOp::And,
+                left: value,
+                right: Value::IntConst((1 << bits) - 1),
+            });
+        }
+        Value::Temp(dst)
+    }
+
+    /// Constant-fold `convert` for integer type `to`
+    fn convert_const(value: i64, to: &CType) -> i64 {
+        match (to.is_integer(), to.size(), to.is_signed()) {
+            (true, 1, true) => i64::from(value as i8),
+            (true, 1, false) => i64::from(value as u8),
+            (true, 2, true) => i64::from(value as i16),
+            (true, 2, false) => i64::from(value as u16),
+            (true, 4, true) => i64::from(value as i32),
+            (true, 4, false) => i64::from(value as u32),
+            _ => value,
+        }
+    }
+
+    /// Values of array, struct, and union type are represented by their
+    /// address: arrays decay, and records are copied through their address.
+    fn is_address_valued(ty: &CType) -> bool {
+        ty.is_array() || ty.is_record()
+    }
+
+    /// Load a value of type `ty` from `addr`, or yield the address itself
+    /// for types represented by their address.
+    fn load_typed(&mut self, addr: Value, ty: &CType, volatile: bool) -> Value {
+        if Self::is_address_valued(ty) {
+            return addr;
+        }
+        let dst = self.new_temp();
+        self.emit(Inst::Load {
+            dst,
+            addr,
+            size: ty.size(),
+            volatile,
+            signed: ty.is_signed(),
+        });
+        Value::Temp(dst)
+    }
+
+    /// Address of `object.field` and the field type
+    fn build_member_addr(&mut self, object: &Expr, field: &str) -> CompileResult<(Value, CType)> {
+        let base = self.build_lvalue(object)?;
+        let (offset, field_ty) = Self::field_offset(object.ty.as_ref(), field)?;
+        Ok((self.offset_addr(base, offset), field_ty))
+    }
+
+    /// Address of `pointer->field` and the field type
+    fn build_ptr_member_addr(
+        &mut self,
         pointer: &Expr,
         field: &str,
-    ) -> CompileResult<(usize, CType)> {
-        let ptr_ty = pointer
-            .ty
-            .as_ref()
-            .ok_or_else(|| CompileError::codegen("missing type for pointer member access"))?;
-
-        match &ptr_ty.kind {
-            TypeKind::Pointer(inner) => match &inner.kind {
-                TypeKind::Struct { members, .. } => self.calculate_field_offset(members, field),
-                _ => Err(CompileError::codegen(format!(
-                    "pointer member access on non-struct pointer: {:?}",
-                    inner.kind
-                ))),
-            },
-            _ => Err(CompileError::codegen(format!(
-                "-> operator on non-pointer type: {:?}",
-                ptr_ty.kind
-            ))),
-        }
+    ) -> CompileResult<(Value, CType)> {
+        let base = self.build_expr(pointer)?;
+        let record_ty = pointer.ty.as_ref().and_then(|t| match &t.kind {
+            TypeKind::Pointer(inner) => Some(inner.as_ref()),
+            _ => None,
+        });
+        let (offset, field_ty) = Self::field_offset(record_ty, field)?;
+        Ok((self.offset_addr(base, offset), field_ty))
     }
 
-    /// Calculate field offset within struct members
-    fn calculate_field_offset(
-        &self,
-        members: &[(String, CType)],
-        field: &str,
-    ) -> CompileResult<(usize, CType)> {
-        let mut offset = 0;
+    /// Address of `array[index]` and the element type
+    fn build_index_addr(
+        &mut self,
+        array: &Expr,
+        index: &Expr,
+    ) -> CompileResult<(Value, Option<CType>)> {
+        let base = self.build_expr(array)?;
+        let idx = self.build_expr(index)?;
 
-        for (name, member_ty) in members {
-            // Align offset for this member
-            let align = member_ty.alignment();
-            offset = (offset + align - 1) & !(align - 1);
+        let elem_ty = array.ty.as_ref().and_then(|t| match &t.kind {
+            TypeKind::Array { element, .. } => Some((**element).clone()),
+            TypeKind::Pointer(inner) => Some((**inner).clone()),
+            _ => None,
+        });
+        let elem_size = elem_ty.as_ref().map_or(4, CType::size);
 
-            if name == field {
-                return Ok((offset, member_ty.clone()));
+        let offset = self.new_temp();
+        self.emit(Inst::Binary {
+            dst: offset,
+            op: BinOp::Mul,
+            left: idx,
+            right: Value::IntConst(elem_size as i64),
+        });
+
+        let addr = self.new_temp();
+        self.emit(Inst::Binary {
+            dst: addr,
+            op: BinOp::Add,
+            left: base,
+            right: Value::Temp(offset),
+        });
+
+        Ok((Value::Temp(addr), elem_ty))
+    }
+
+    /// Copy `size` bytes from `src` to `dst`. Both addresses must be
+    /// word-aligned, which holds for every struct and union.
+    fn emit_copy(&mut self, dst: &Value, src: &Value, size: usize) {
+        // Longer copies loop over longwords instead of unrolling
+        const UNROLL_LIMIT: usize = 32;
+        let longs = size / 4;
+        let mut off = 0;
+
+        if size > UNROLL_LIMIT {
+            let src_p = self.new_temp();
+            let dst_p = self.new_temp();
+            let count = self.new_temp();
+            self.emit(Inst::Copy {
+                dst: src_p,
+                src: src.clone(),
+            });
+            self.emit(Inst::Copy {
+                dst: dst_p,
+                src: dst.clone(),
+            });
+            self.emit(Inst::Copy {
+                dst: count,
+                src: Value::IntConst(longs as i64),
+            });
+            let loop_label = self.new_label("copy");
+            self.emit(Inst::Label(loop_label.clone()));
+            let word = self.new_temp();
+            self.emit(Inst::Load {
+                dst: word,
+                addr: Value::Temp(src_p),
+                size: 4,
+                volatile: false,
+                signed: false,
+            });
+            self.emit(Inst::Store {
+                addr: Value::Temp(dst_p),
+                src: Value::Temp(word),
+                size: 4,
+                volatile: false,
+            });
+            for (ptr, step) in [(src_p, 4), (dst_p, 4), (count, -1)] {
+                self.emit(Inst::Binary {
+                    dst: ptr,
+                    op: BinOp::Add,
+                    left: Value::Temp(ptr),
+                    right: Value::IntConst(step),
+                });
             }
-
-            offset += member_ty.size();
+            self.emit(Inst::CondJump {
+                cond: Value::Temp(count),
+                target: loop_label,
+            });
+            off = longs * 4;
         }
 
-        Err(CompileError::codegen(format!(
-            "unknown struct field: {field}"
-        )))
+        while off < size {
+            let chunk = match size - off {
+                n if n >= 4 => 4,
+                n if n >= 2 => 2,
+                _ => 1,
+            };
+            let from = self.offset_addr(src.clone(), off);
+            let value = self.new_temp();
+            self.emit(Inst::Load {
+                dst: value,
+                addr: from,
+                size: chunk,
+                volatile: false,
+                signed: false,
+            });
+            let to = self.offset_addr(dst.clone(), off);
+            self.emit(Inst::Store {
+                addr: to,
+                src: Value::Temp(value),
+                size: chunk,
+                volatile: false,
+            });
+            off += chunk;
+        }
     }
 
     fn build_function(&mut self, func: &FuncDecl) -> CompileResult<()> {
@@ -392,7 +660,9 @@ impl IrBuilder {
             func.return_type.to_ir_type(),
         ));
         self.locals.clear();
+        self.local_statics.clear();
         self.temp_counter = 0;
+        self.return_type = Some(func.return_type.clone());
 
         // Add parameters to locals and emit code to load them from stack
         // Parameters are passed on the stack at positive offsets from the frame pointer
@@ -400,15 +670,30 @@ impl IrBuilder {
         for (idx, (name, ty)) in params.iter().enumerate() {
             if !name.is_empty() {
                 let temp = self.new_temp();
-                self.locals.insert(name.clone(), temp);
+                // A struct parameter arrives as a pointer to the caller's
+                // copy; that pointer is the parameter's address
+                let is_record = func.params[idx].ty.is_record();
                 // Emit instruction to load parameter from its stack position
                 // We use a special Param pseudo-value that the backend will translate
                 // to the correct stack offset
                 self.emit(Inst::LoadParam {
                     dst: temp,
                     index: idx,
-                    size: ty.size,
+                    size: if is_record { 4 } else { ty.size },
                 });
+                if is_record {
+                    let ptr = self.new_temp();
+                    self.emit(Inst::Load {
+                        dst: ptr,
+                        addr: Value::Temp(temp),
+                        size: 4,
+                        volatile: false,
+                        signed: false,
+                    });
+                    self.locals.insert(name.clone(), ptr);
+                } else {
+                    self.locals.insert(name.clone(), temp);
+                }
             }
         }
 
@@ -452,8 +737,31 @@ impl IrBuilder {
 
     fn build_local_var(&mut self, var: &VarDecl) -> CompileResult<()> {
         self.current_span = Some(var.span);
+
+        match var.storage_class {
+            // A static local is a global with a private symbol, initialized
+            // once at startup rather than on every call
+            Some(StorageClass::Static) => {
+                let func_name = self.current_func.as_ref().map_or("", |f| f.name.as_str());
+                let symbol = format!("__static_{func_name}_{}_{}", var.name, self.static_counter);
+                self.static_counter += 1;
+                self.build_global(symbol.clone(), var)?;
+                self.locals.remove(&var.name);
+                self.local_statics.insert(var.name.clone(), symbol);
+                return Ok(());
+            }
+            // An extern local refers to the global of that name
+            Some(StorageClass::Extern) => {
+                self.locals.remove(&var.name);
+                self.local_statics.remove(&var.name);
+                return Ok(());
+            }
+            _ => {}
+        }
+
         let temp = self.new_temp();
         self.locals.insert(var.name.clone(), temp);
+        self.local_statics.remove(&var.name);
 
         // Allocate stack space
         let size = var.ty.size();
@@ -479,134 +787,89 @@ impl IrBuilder {
         init: &Initializer,
         ty: &CType,
     ) -> CompileResult<()> {
-        if Self::contains_designated(init) {
-            return Err(CompileError::codegen(
-                "designated initializers are not supported for local variables",
-            ));
-        }
-        self.build_local_init_at(base, 0, init, ty)
-    }
-
-    fn contains_designated(init: &Initializer) -> bool {
-        match init {
-            Initializer::Designated { .. } => true,
-            Initializer::List(items) => items.iter().any(Self::contains_designated),
-            Initializer::Expr(_) => false,
-        }
-    }
-
-    /// Initialize the value of type `ty` at `base + offset`.
-    fn build_local_init_at(
-        &mut self,
-        base: Temp,
-        offset: usize,
-        init: &Initializer,
-        ty: &CType,
-    ) -> CompileResult<()> {
-        // char buf[] = "str" copies the bytes (including NUL), not the string address
-        if ty.is_array()
-            && let Initializer::Expr(expr) = init
-            && let ExprKind::StringLiteral(s) = &expr.kind
+        // A single expression for a scalar or struct: store (or copy) it
+        if let Initializer::Expr(expr) = init
+            && !ty.is_array()
         {
-            let mut bytes = s.as_bytes().to_vec();
-            bytes.push(0);
-            // Clamp to the array size (an exact-fit literal drops the NUL);
-            // unsized arrays take the literal length including the NUL
-            let total = if ty.size() > 0 {
-                ty.size()
-            } else {
-                bytes.len()
+            let value = self.build_expr(expr)?;
+            self.store_typed(Value::Temp(base), value, ty);
+            return Ok(());
+        }
+
+        let span = self.current_span.unwrap_or_default();
+        let resolve = |name: &str| self.enum_consts.get(name).copied();
+        let layout = layout_initializer(ty, init, &resolve, span)?;
+
+        // Constant entries and the zero fill form one image; the remaining
+        // entries are evaluated and stored at run time
+        let mut image = vec![0u8; ty.size()];
+        // Bytes a runtime store will write, which the image needn't cover
+        let mut at_runtime = vec![false; ty.size()];
+        let mut runtime = Vec::new();
+        for entry in layout.entries {
+            let value = match entry.value {
+                InitValue::Str(s) => Self::string_bytes(s, entry.ty.size()),
+                InitValue::Expr(expr) => match self.evaluate_const_expr(expr) {
+                    Ok(value) if !entry.ty.is_record() => {
+                        Self::const_bytes(Self::convert_const(value, &entry.ty), entry.ty.size())
+                    }
+                    _ => {
+                        if let Some(bytes) =
+                            at_runtime.get_mut(entry.offset..entry.offset + entry.ty.size())
+                        {
+                            bytes.fill(true);
+                        }
+                        runtime.push((entry.offset, entry.ty, expr));
+                        continue;
+                    }
+                },
             };
-            bytes.resize(total, 0);
-            self.store_const_bytes(base, offset, &bytes);
-            return Ok(());
+            Self::write_image(&mut image, entry.offset, &value)?;
         }
+        self.store_const_bytes(base, &image, &at_runtime);
 
-        // Fully-constant initializers lower to immediate stores of the evaluated
-        // bytes; this also zero-fills padding and omitted trailing elements.
-        if let Ok(bytes) = self.evaluate_initializer(init, ty) {
-            self.store_const_bytes(base, offset, &bytes);
-            return Ok(());
+        for (offset, ty, expr) in runtime {
+            let value = self.build_expr(expr)?;
+            let addr = self.addr_at(base, offset);
+            self.store_typed(addr, value, &ty);
         }
+        Ok(())
+    }
 
-        match init {
-            Initializer::Expr(expr) => {
-                if ty.is_array() {
-                    return Err(CompileError::codegen(
-                        "unsupported initializer for local array",
-                    ));
-                }
-                let value = self.build_expr(expr)?;
-                let addr = self.addr_at(base, offset);
-                self.emit(Inst::Store {
-                    addr,
-                    src: value,
-                    size: ty.size(),
-                    volatile: false,
-                });
-                Ok(())
-            }
-            Initializer::List(items) => match &ty.kind {
-                TypeKind::Array { element, size } => {
-                    let elem_size = element.size();
-                    let count = size.unwrap_or(items.len());
-                    for i in 0..count {
-                        let elem_offset = offset + i * elem_size;
-                        if let Some(item) = items.get(i) {
-                            self.build_local_init_at(base, elem_offset, item, element)?;
-                        } else {
-                            self.store_const_bytes(base, elem_offset, &vec![0u8; elem_size]);
-                        }
-                    }
-                    Ok(())
-                }
-                TypeKind::Struct { members, .. } => {
-                    // Same member-offset walk as evaluate_init_list_to_bytes
-                    let mut member_offset = 0;
-                    for (i, (_name, member_ty)) in members.iter().enumerate() {
-                        let align = member_ty.alignment();
-                        member_offset = (member_offset + align - 1) & !(align - 1);
-                        if let Some(item) = items.get(i) {
-                            self.build_local_init_at(
-                                base,
-                                offset + member_offset,
-                                item,
-                                member_ty,
-                            )?;
-                        } else {
-                            self.store_const_bytes(
-                                base,
-                                offset + member_offset,
-                                &vec![0u8; member_ty.size()],
-                            );
-                        }
-                        member_offset += member_ty.size();
-                    }
-                    Ok(())
-                }
-                _ => {
-                    if let Some(first) = items.first() {
-                        self.build_local_init_at(base, offset, first, ty)
-                    } else {
-                        self.store_const_bytes(base, offset, &vec![0u8; ty.size()]);
-                        Ok(())
-                    }
-                }
-            },
-            Initializer::Designated { .. } => Err(CompileError::codegen(
-                "designated initializers are not supported for local variables",
-            )),
+    /// Store `value` of type `ty` at `addr`, copying structs and unions whole
+    fn store_typed(&mut self, addr: Value, value: Value, ty: &CType) {
+        if ty.is_record() {
+            self.emit_copy(&addr, &value, ty.size());
+        } else {
+            self.emit(Inst::Store {
+                addr,
+                src: value,
+                size: ty.size(),
+                volatile: false,
+            });
         }
     }
 
-    /// Store constant bytes at `base + start` using the widest stores the
-    /// offset parity allows. Alloca storage is 4-byte aligned in the frame,
-    /// so even offsets are safe for word/long accesses on the 68000.
-    fn store_const_bytes(&mut self, base: Temp, start: usize, bytes: &[u8]) {
+    /// Store constant bytes at `base` using the widest stores the offset
+    /// parity allows, leaving out stores whose bytes are all marked `skip`.
+    /// Alloca storage is 4-byte aligned in the frame, so even offsets are
+    /// safe for word/long accesses on the 68000. A large image
+    /// (`int buf[64] = {0}`) is cleared in a loop first, and only its
+    /// non-zero parts are stored.
+    fn store_const_bytes(&mut self, base: Temp, bytes: &[u8], skip: &[bool]) {
+        const UNROLL_LIMIT: usize = 32;
+        let cleared = if bytes.len() > UNROLL_LIMIT {
+            let longs = bytes.len() / 4;
+            self.emit_zero_fill(base, longs);
+            longs * 4
+        } else {
+            0
+        };
+
         let mut off = 0;
         while off < bytes.len() {
             let remaining = bytes.len() - off;
-            let even = (start + off).is_multiple_of(2);
+            let even = off.is_multiple_of(2);
             let (size, value) = if even && remaining >= 4 {
                 let v = i32::from_be_bytes(bytes[off..off + 4].try_into().unwrap());
                 (4, i64::from(v))
@@ -616,27 +879,69 @@ impl IrBuilder {
             } else {
                 (1, i64::from(bytes[off]))
             };
-            let addr = self.addr_at(base, start + off);
-            self.emit(Inst::Store {
-                addr,
-                src: Value::IntConst(value),
-                size,
-                volatile: false,
-            });
+            let needed = value != 0 || off + size > cleared;
+            if needed && !skip[off..off + size].iter().all(|&s| s) {
+                let addr = self.addr_at(base, off);
+                self.emit(Inst::Store {
+                    addr,
+                    src: Value::IntConst(value),
+                    size,
+                    volatile: false,
+                });
+            }
             off += size;
         }
     }
 
+    /// Clear `longs` longwords starting at `base` with a loop
+    fn emit_zero_fill(&mut self, base: Temp, longs: usize) {
+        let ptr = self.new_temp();
+        let count = self.new_temp();
+        self.emit(Inst::Copy {
+            dst: ptr,
+            src: Value::Temp(base),
+        });
+        self.emit(Inst::Copy {
+            dst: count,
+            src: Value::IntConst(longs as i64),
+        });
+        let loop_label = self.new_label("clear");
+        self.emit(Inst::Label(loop_label.clone()));
+        self.emit(Inst::Store {
+            addr: Value::Temp(ptr),
+            src: Value::IntConst(0),
+            size: 4,
+            volatile: false,
+        });
+        for (temp, step) in [(ptr, 4), (count, -1)] {
+            self.emit(Inst::Binary {
+                dst: temp,
+                op: BinOp::Add,
+                left: Value::Temp(temp),
+                right: Value::IntConst(step),
+            });
+        }
+        self.emit(Inst::CondJump {
+            cond: Value::Temp(count),
+            target: loop_label,
+        });
+    }
+
     /// Address of `base + offset` as a Value, avoiding the add when offset is 0.
     fn addr_at(&mut self, base: Temp, offset: usize) -> Value {
+        self.offset_addr(Value::Temp(base), offset)
+    }
+
+    /// Address `base + offset`, avoiding the add when offset is 0.
+    fn offset_addr(&mut self, base: Value, offset: usize) -> Value {
         if offset == 0 {
-            return Value::Temp(base);
+            return base;
         }
         let addr = self.new_temp();
         self.emit(Inst::Binary {
             dst: addr,
             op: BinOp::Add,
-            left: Value::Temp(base),
+            left: base,
             right: Value::IntConst(offset as i64),
         });
         Value::Temp(addr)
@@ -646,7 +951,7 @@ impl IrBuilder {
         self.current_span = Some(stmt.span);
         match &stmt.kind {
             StmtKind::Expr(expr) => {
-                self.build_expr(expr)?;
+                self.build_expr_discarded(expr)?;
             }
             StmtKind::Empty => {}
             StmtKind::Block(block) => {
@@ -675,7 +980,13 @@ impl IrBuilder {
             }
             StmtKind::Return(value) => {
                 let val = if let Some(expr) = value {
-                    Some(self.build_expr(expr)?)
+                    let val = self.build_expr(expr)?;
+                    // A char/short result is returned truncated and extended
+                    let return_type = self.return_type.clone();
+                    Some(match return_type {
+                        Some(ty) => self.convert(val, expr.ty.as_ref(), &ty),
+                        None => val,
+                    })
                 } else {
                     None
                 };
@@ -810,7 +1121,7 @@ impl IrBuilder {
         if let Some(init) = init {
             match &**init {
                 ForInit::Expr(expr) => {
-                    self.build_expr(expr)?;
+                    self.build_expr_discarded(expr)?;
                 }
                 ForInit::Declaration(decl) => match &decl.kind {
                     DeclKind::Variable(var) => self.build_local_var(var)?,
@@ -848,7 +1159,7 @@ impl IrBuilder {
         // Update
         self.emit(Inst::Label(update_label));
         if let Some(update_expr) = update {
-            self.build_expr(update_expr)?;
+            self.build_expr_discarded(update_expr)?;
         }
 
         self.emit(Inst::Jump(start_label));
@@ -989,8 +1300,17 @@ impl IrBuilder {
         Ok(())
     }
 
+    /// Build an expression evaluated only for its side effects
+    fn build_expr_discarded(&mut self, expr: &Expr) -> CompileResult<()> {
+        self.discard_value = true;
+        self.build_expr(expr)?;
+        Ok(())
+    }
+
     fn build_expr(&mut self, expr: &Expr) -> CompileResult<Value> {
         self.current_span = Some(expr.span);
+        // Applies to this expression only, not its operands
+        let discard = std::mem::take(&mut self.discard_value);
         match &expr.kind {
             ExprKind::IntLiteral(n) => Ok(Value::IntConst(*n)),
 
@@ -1009,8 +1329,9 @@ impl IrBuilder {
 
             ExprKind::Identifier(name) => {
                 if let Some(&temp) = self.locals.get(name) {
-                    // Arrays decay to their address; the alloca temp already is it
-                    if expr.ty.as_ref().is_some_and(|t| t.is_array()) {
+                    // Arrays decay to their address and records are handled
+                    // through it; the alloca temp already is that address
+                    if expr.ty.as_ref().is_some_and(Self::is_address_valued) {
                         return Ok(Value::Temp(temp));
                     }
                     // Load from local variable
@@ -1025,17 +1346,19 @@ impl IrBuilder {
                         signed,
                     });
                     Ok(Value::Temp(dst))
-                } else if let Some(&value) = self.enum_consts.get(name) {
+                } else if !self.local_statics.contains_key(name)
+                    && let Some(&value) = self.enum_consts.get(name)
+                {
                     Ok(Value::IntConst(value))
                 } else {
-                    // Global variable or function
+                    // Global variable (or static local) or function
                     // Arrays decay to pointers (their address) in expressions
                     if let Some(ty) = &expr.ty {
-                        if ty.is_array() {
+                        if Self::is_address_valued(ty) {
                             let dst = self.new_temp();
                             self.emit(Inst::AddrOf {
                                 dst,
-                                name: name.clone(),
+                                name: self.global_symbol(name),
                             });
                             return Ok(Value::Temp(dst));
                         }
@@ -1045,7 +1368,7 @@ impl IrBuilder {
                             let addr_temp = self.new_temp();
                             self.emit(Inst::AddrOf {
                                 dst: addr_temp,
-                                name: name.clone(),
+                                name: self.global_symbol(name),
                             });
                             let dst = self.new_temp();
                             self.emit(Inst::Load {
@@ -1063,52 +1386,32 @@ impl IrBuilder {
             }
 
             ExprKind::Binary { op, left, right } => {
-                let l = self.build_expr(left)?;
-                let r = self.build_expr(right)?;
+                if matches!(op, BinaryOp::LogAnd | BinaryOp::LogOr) {
+                    // Short-circuit evaluation
+                    return self.build_logical_expr(op, left, right);
+                }
+
+                let mut l = self.build_expr(left)?;
+                let mut r = self.build_expr(right)?;
+
+                // Pointer arithmetic counts in elements of the pointed-to type
+                let left_elem = Self::pointee_size(left.ty.as_ref());
+                let right_elem = Self::pointee_size(right.ty.as_ref());
+                match (op, left_elem, right_elem) {
+                    (BinaryOp::Add | BinaryOp::Sub, Some(size), None) => {
+                        r = self.scale(r, size);
+                    }
+                    (BinaryOp::Add, None, Some(size)) => l = self.scale(l, size),
+                    (BinaryOp::Sub, Some(size), Some(_)) => {
+                        return Ok(self.pointer_difference(l, r, size));
+                    }
+                    _ => {}
+                }
+
                 let dst = self.new_temp();
-
-                // Check if either operand is unsigned (for div/mod)
-                let is_unsigned = left.ty.as_ref().is_some_and(|t| !t.is_signed())
-                    || right.ty.as_ref().is_some_and(|t| !t.is_signed());
-
-                let ir_op = match op {
-                    BinaryOp::Add => BinOp::Add,
-                    BinaryOp::Sub => BinOp::Sub,
-                    BinaryOp::Mul => BinOp::Mul,
-                    BinaryOp::Div => {
-                        if is_unsigned {
-                            BinOp::UDiv
-                        } else {
-                            BinOp::Div
-                        }
-                    }
-                    BinaryOp::Mod => {
-                        if is_unsigned {
-                            BinOp::UMod
-                        } else {
-                            BinOp::Mod
-                        }
-                    }
-                    BinaryOp::BitAnd => BinOp::And,
-                    BinaryOp::BitOr => BinOp::Or,
-                    BinaryOp::BitXor => BinOp::Xor,
-                    BinaryOp::Shl => BinOp::Shl,
-                    BinaryOp::Shr => BinOp::Shr,
-                    BinaryOp::Eq => BinOp::Eq,
-                    BinaryOp::Ne => BinOp::Ne,
-                    BinaryOp::Lt => BinOp::Lt,
-                    BinaryOp::Le => BinOp::Le,
-                    BinaryOp::Gt => BinOp::Gt,
-                    BinaryOp::Ge => BinOp::Ge,
-                    BinaryOp::LogAnd | BinaryOp::LogOr => {
-                        // Short-circuit evaluation
-                        return self.build_logical_expr(op, left, right);
-                    }
-                };
-
                 self.emit(Inst::Binary {
                     dst,
-                    op: ir_op,
+                    op: Self::ir_binop(*op, left.ty.as_ref(), right.ty.as_ref()),
                     left: l,
                     right: r,
                 });
@@ -1135,12 +1438,39 @@ impl IrBuilder {
             }
 
             ExprKind::Assign { op, target, value } => {
-                let val = self.build_expr(value)?;
+                // The value and the type it is held as
+                let (val, val_ty) = match &value.kind {
+                    // The store truncates, so a cast to a type at least as
+                    // wide as the target needs no conversion code
+                    ExprKind::Cast { ty, expr: inner }
+                        if op.to_binary_op().is_none()
+                            && ty.is_integer()
+                            && target
+                                .ty
+                                .as_ref()
+                                .is_some_and(|t| t.is_integer() && t.size() <= ty.size()) =>
+                    {
+                        (self.build_expr(inner)?, inner.ty.as_ref())
+                    }
+                    _ => (self.build_expr(value)?, value.ty.as_ref()),
+                };
 
                 // Get the address of the target
                 let addr = self.build_lvalue(target)?;
 
-                // Handle compound assignment
+                // Struct assignment copies the whole object; both values
+                // are addresses
+                if let Some(ty) = target.ty.as_ref().filter(|t| t.is_record()) {
+                    self.emit_copy(&addr, &val, ty.size());
+                    return Ok(addr);
+                }
+
+                // Handle compound assignment; its result is computed as int
+                let result_ty = if op.to_binary_op().is_some() {
+                    None
+                } else {
+                    val_ty
+                };
                 let final_val = if let Some(bin_op) = op.to_binary_op() {
                     let old_val = self.new_temp();
                     let size = target.ty.as_ref().map_or(4, |t| t.size());
@@ -1153,39 +1483,16 @@ impl IrBuilder {
                         signed,
                     });
 
-                    // Check if unsigned for div/mod operations
-                    let is_unsigned = !signed;
-
-                    let ir_op = match bin_op {
-                        BinaryOp::Add => BinOp::Add,
-                        BinaryOp::Sub => BinOp::Sub,
-                        BinaryOp::Mul => BinOp::Mul,
-                        BinaryOp::Div => {
-                            if is_unsigned {
-                                BinOp::UDiv
-                            } else {
-                                BinOp::Div
-                            }
-                        }
-                        BinaryOp::Mod => {
-                            if is_unsigned {
-                                BinOp::UMod
-                            } else {
-                                BinOp::Mod
-                            }
-                        }
-                        BinaryOp::BitAnd => BinOp::And,
-                        BinaryOp::BitOr => BinOp::Or,
-                        BinaryOp::BitXor => BinOp::Xor,
-                        BinaryOp::Shl => BinOp::Shl,
-                        BinaryOp::Shr => BinOp::Shr,
-                        _ => unreachable!(),
+                    // p += n and p -= n step in elements
+                    let val = match (bin_op, Self::pointee_size(target.ty.as_ref())) {
+                        (BinaryOp::Add | BinaryOp::Sub, Some(elem)) => self.scale(val, elem),
+                        _ => val,
                     };
 
                     let result = self.new_temp();
                     self.emit(Inst::Binary {
                         dst: result,
-                        op: ir_op,
+                        op: Self::ir_binop(bin_op, target.ty.as_ref(), value.ty.as_ref()),
                         left: Value::Temp(old_val),
                         right: val,
                     });
@@ -1202,13 +1509,32 @@ impl IrBuilder {
                     volatile: false,
                 });
 
-                Ok(final_val)
+                // The assignment's value is the target's new value, so a
+                // char/short target truncates it
+                match target.ty.as_ref() {
+                    Some(ty) if !discard => Ok(self.convert(final_val, result_ty, ty)),
+                    _ => Ok(final_val),
+                }
             }
 
             ExprKind::Call { callee, args } => {
                 let mut ir_args = Vec::new();
                 for arg in args {
-                    ir_args.push(self.build_expr(arg)?);
+                    let value = self.build_expr(arg)?;
+                    // Structs are passed by value as a pointer to a private
+                    // copy, so the callee may modify its parameter freely
+                    if let Some(ty) = arg.ty.as_ref().filter(|t| t.is_record()) {
+                        let copy = self.new_temp();
+                        self.emit(Inst::Alloca {
+                            dst: copy,
+                            size: ty.size(),
+                            align: ty.alignment(),
+                        });
+                        self.emit_copy(&Value::Temp(copy), &value, ty.size());
+                        ir_args.push(Value::Temp(copy));
+                    } else {
+                        ir_args.push(value);
+                    }
                 }
 
                 let dst = self.new_temp();
@@ -1219,6 +1545,7 @@ impl IrBuilder {
                 let direct_name = match &callee.kind {
                     ExprKind::Identifier(name)
                         if !self.locals.contains_key(name)
+                            && !self.local_statics.contains_key(name)
                             && !self.module.globals.iter().any(|g| g.name == *name) =>
                     {
                         Some(name.clone())
@@ -1257,70 +1584,22 @@ impl IrBuilder {
             }
 
             ExprKind::Index { array, index } => {
-                let base = self.build_expr(array)?;
-                let idx = self.build_expr(index)?;
-
-                // Calculate offset: base + index * element_size
-                let (elem_size, elem_signed) = array
-                    .ty
-                    .as_ref()
-                    .and_then(|t| match &t.kind {
-                        TypeKind::Array { element, .. } => {
-                            Some((element.size(), element.is_signed()))
-                        }
-                        TypeKind::Pointer(inner) => Some((inner.size(), inner.is_signed())),
-                        _ => None,
-                    })
-                    .unwrap_or((4, false));
-
-                let offset = self.new_temp();
-                self.emit(Inst::Binary {
-                    dst: offset,
-                    op: BinOp::Mul,
-                    left: idx,
-                    right: Value::IntConst(elem_size as i64),
-                });
-
-                let addr = self.new_temp();
-                self.emit(Inst::Binary {
-                    dst: addr,
-                    op: BinOp::Add,
-                    left: base,
-                    right: Value::Temp(offset),
-                });
-
-                let dst = self.new_temp();
-                self.emit(Inst::Load {
-                    dst,
-                    addr: Value::Temp(addr),
-                    size: elem_size,
-                    volatile: false,
-                    signed: elem_signed,
-                });
-
-                Ok(Value::Temp(dst))
+                let (addr, elem_ty) = self.build_index_addr(array, index)?;
+                let elem_ty = elem_ty.unwrap_or_else(|| CType::int(expr.span));
+                Ok(self.load_typed(addr, &elem_ty, false))
             }
 
             ExprKind::AddrOf(operand) => self.build_lvalue(operand),
 
             ExprKind::Deref(operand) => {
                 let addr = self.build_expr(operand)?;
-                let dst = self.new_temp();
-                let size = expr.ty.as_ref().map_or(4, |t| t.size());
-                let signed = expr.ty.as_ref().is_some_and(|t| t.is_signed());
                 // Check if pointer type is volatile
                 let is_volatile = operand
                     .ty
                     .as_ref()
                     .is_some_and(|t| t.qualifiers.is_volatile);
-                self.emit(Inst::Load {
-                    dst,
-                    addr,
-                    size,
-                    volatile: is_volatile,
-                    signed,
-                });
-                Ok(Value::Temp(dst))
+                let ty = expr.ty.clone().unwrap_or_else(|| CType::int(expr.span));
+                Ok(self.load_typed(addr, &ty, is_volatile))
             }
 
             ExprKind::PreIncrement(operand) | ExprKind::PreDecrement(operand) => {
@@ -1347,12 +1626,14 @@ impl IrBuilder {
                     BinOp::Sub
                 };
 
+                // Pointers step by one element
+                let step = Self::pointee_size(operand.ty.as_ref()).unwrap_or(1);
                 let new_val = self.new_temp();
                 self.emit(Inst::Binary {
                     dst: new_val,
                     op,
                     left: Value::Temp(old),
-                    right: Value::IntConst(1),
+                    right: Value::IntConst(step as i64),
                 });
 
                 self.emit(Inst::Store {
@@ -1362,7 +1643,11 @@ impl IrBuilder {
                     volatile: is_volatile,
                 });
 
-                Ok(Value::Temp(new_val))
+                // The new value wraps like the stored char/short does
+                match operand.ty.as_ref() {
+                    Some(ty) if !discard => Ok(self.convert(Value::Temp(new_val), None, ty)),
+                    _ => Ok(Value::Temp(new_val)),
+                }
             }
 
             ExprKind::PostIncrement(operand) | ExprKind::PostDecrement(operand) => {
@@ -1389,12 +1674,14 @@ impl IrBuilder {
                     BinOp::Sub
                 };
 
+                // Pointers step by one element
+                let step = Self::pointee_size(operand.ty.as_ref()).unwrap_or(1);
                 let new_val = self.new_temp();
                 self.emit(Inst::Binary {
                     dst: new_val,
                     op,
                     left: Value::Temp(old),
-                    right: Value::IntConst(1),
+                    right: Value::IntConst(step as i64),
                 });
 
                 self.emit(Inst::Store {
@@ -1440,9 +1727,9 @@ impl IrBuilder {
                 Ok(Value::Temp(result))
             }
 
-            ExprKind::Cast { expr: inner, .. } => {
-                // For now, just pass through (proper casts need type info)
-                self.build_expr(inner)
+            ExprKind::Cast { ty, expr: inner } => {
+                let value = self.build_expr(inner)?;
+                Ok(self.convert(value, inner.ty.as_ref(), ty))
             }
 
             ExprKind::Sizeof(arg) => {
@@ -1454,59 +1741,13 @@ impl IrBuilder {
             }
 
             ExprKind::Member { object, field } => {
-                // Get the address of the struct object
-                let base_addr = self.build_lvalue(object)?;
-
-                // Get struct type and find the field offset
-                let (offset, field_ty) = self.get_struct_field_offset(object, field)?;
-
-                // Calculate field address
-                let field_addr = self.new_temp();
-                self.emit(Inst::Binary {
-                    dst: field_addr,
-                    op: BinOp::Add,
-                    left: base_addr,
-                    right: Value::IntConst(offset as i64),
-                });
-
-                // Load the field value
-                let dst = self.new_temp();
-                self.emit(Inst::Load {
-                    dst,
-                    addr: Value::Temp(field_addr),
-                    size: field_ty.size(),
-                    volatile: false,
-                    signed: field_ty.is_signed(),
-                });
-                Ok(Value::Temp(dst))
+                let (addr, field_ty) = self.build_member_addr(object, field)?;
+                Ok(self.load_typed(addr, &field_ty, false))
             }
 
             ExprKind::PtrMember { pointer, field } => {
-                // The pointer value is the address of the struct
-                let base_addr = self.build_expr(pointer)?;
-
-                // Get the pointed-to struct type and find the field offset
-                let (offset, field_ty) = self.get_ptr_struct_field_offset(pointer, field)?;
-
-                // Calculate field address
-                let field_addr = self.new_temp();
-                self.emit(Inst::Binary {
-                    dst: field_addr,
-                    op: BinOp::Add,
-                    left: base_addr,
-                    right: Value::IntConst(offset as i64),
-                });
-
-                // Load the field value
-                let dst = self.new_temp();
-                self.emit(Inst::Load {
-                    dst,
-                    addr: Value::Temp(field_addr),
-                    size: field_ty.size(),
-                    volatile: false,
-                    signed: field_ty.is_signed(),
-                });
-                Ok(Value::Temp(dst))
+                let (addr, field_ty) = self.build_ptr_member_addr(pointer, field)?;
+                Ok(self.load_typed(addr, &field_ty, false))
             }
 
             ExprKind::Comma(exprs) => {
@@ -1532,79 +1773,16 @@ impl IrBuilder {
                     let dst = self.new_temp();
                     self.emit(Inst::AddrOf {
                         dst,
-                        name: name.clone(),
+                        name: self.global_symbol(name),
                     });
                     Ok(Value::Temp(dst))
                 }
             }
             ExprKind::Deref(inner) => self.build_expr(inner),
-            ExprKind::Index { array, index } => {
-                let base = self.build_expr(array)?;
-                let idx = self.build_expr(index)?;
-
-                let elem_size = array
-                    .ty
-                    .as_ref()
-                    .and_then(|t| match &t.kind {
-                        TypeKind::Array { element, .. } => Some(element.size()),
-                        TypeKind::Pointer(inner) => Some(inner.size()),
-                        _ => None,
-                    })
-                    .unwrap_or(4);
-
-                let offset = self.new_temp();
-                self.emit(Inst::Binary {
-                    dst: offset,
-                    op: BinOp::Mul,
-                    left: idx,
-                    right: Value::IntConst(elem_size as i64),
-                });
-
-                let addr = self.new_temp();
-                self.emit(Inst::Binary {
-                    dst: addr,
-                    op: BinOp::Add,
-                    left: base,
-                    right: Value::Temp(offset),
-                });
-
-                Ok(Value::Temp(addr))
-            }
-            ExprKind::Member { object, field } => {
-                // Get the address of the struct object
-                let base_addr = self.build_lvalue(object)?;
-
-                // Get struct field offset
-                let (offset, _field_ty) = self.get_struct_field_offset(object, field)?;
-
-                // Calculate field address
-                let field_addr = self.new_temp();
-                self.emit(Inst::Binary {
-                    dst: field_addr,
-                    op: BinOp::Add,
-                    left: base_addr,
-                    right: Value::IntConst(offset as i64),
-                });
-
-                Ok(Value::Temp(field_addr))
-            }
+            ExprKind::Index { array, index } => Ok(self.build_index_addr(array, index)?.0),
+            ExprKind::Member { object, field } => Ok(self.build_member_addr(object, field)?.0),
             ExprKind::PtrMember { pointer, field } => {
-                // The pointer value is the address of the struct
-                let base_addr = self.build_expr(pointer)?;
-
-                // Get struct field offset from pointer type
-                let (offset, _field_ty) = self.get_ptr_struct_field_offset(pointer, field)?;
-
-                // Calculate field address
-                let field_addr = self.new_temp();
-                self.emit(Inst::Binary {
-                    dst: field_addr,
-                    op: BinOp::Add,
-                    left: base_addr,
-                    right: Value::IntConst(offset as i64),
-                });
-
-                Ok(Value::Temp(field_addr))
+                Ok(self.build_ptr_member_addr(pointer, field)?.0)
             }
             _ => Err(CompileError::codegen("invalid lvalue")),
         }

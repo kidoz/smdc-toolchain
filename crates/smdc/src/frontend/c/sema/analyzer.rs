@@ -1,5 +1,6 @@
 //! Semantic analyzer - type checking and validation
 
+use super::initializer::layout_initializer;
 use super::scope::{Scope, StructDef, Symbol, SymbolKind, UnionDef};
 use crate::common::{CompileError, CompileResult};
 use crate::frontend::c::ast::*;
@@ -65,9 +66,35 @@ impl SemanticAnalyzer {
         // Analyze initializer if present
         if let Some(init) = &mut var.init {
             self.analyze_initializer(init, &var.ty)?;
+
+            // Check the initializer's shape against the type, and give an
+            // unsized array (`int a[] = {...}`, `char s[] = "..."`) its length
+            let resolve = |name: &str| self.enum_value(name);
+            let layout = layout_initializer(&var.ty, init, &resolve, var.span)?;
+            if let TypeKind::Array {
+                size: size @ None, ..
+            } = &mut var.ty.kind
+            {
+                if layout.array_len == 0 {
+                    return Err(CompileError::semantic(
+                        "array size cannot be zero",
+                        var.span,
+                    ));
+                }
+                *size = Some(layout.array_len);
+                self.scope.set_local_type(&var.name, var.ty.clone());
+            }
         }
 
         Ok(())
+    }
+
+    /// Value of enum constant `name`, if it names one
+    fn enum_value(&self, name: &str) -> Option<i64> {
+        match self.scope.lookup(name)?.kind {
+            SymbolKind::EnumConstant(value) => Some(value),
+            _ => None,
+        }
     }
 
     /// Resolve struct/union types by looking up definitions and filling in members
@@ -225,14 +252,18 @@ impl SemanticAnalyzer {
     fn analyze_enum_decl(&mut self, e: &mut EnumDecl) -> CompileResult<()> {
         // Register enum constants
         if let Some(variants) = &e.variants {
+            // Constants without a value continue from the previous one
+            let mut next = 0;
             for variant in variants {
-                let value = variant.value.as_ref().map_or(0, |e| {
-                    if let ExprKind::IntLiteral(v) = &e.kind {
-                        *v
-                    } else {
-                        0
-                    }
-                });
+                if let Some(v) = variant
+                    .value
+                    .as_ref()
+                    .and_then(|e| e.eval_const_with(&|name| self.enum_value(name)))
+                {
+                    next = v;
+                }
+                let value = next;
+                next += 1;
 
                 let symbol = Symbol {
                     name: variant.name.clone(),

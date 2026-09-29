@@ -177,7 +177,8 @@ impl CType {
             TypeKind::Int { signed } => *signed,
             TypeKind::Long { signed } => *signed,
             TypeKind::LongLong { signed } => *signed,
-            _ => false, // Pointers, enums, etc. are treated as unsigned
+            TypeKind::Enum { .. } => true, // Enums are ints
+            _ => false,                    // Pointers etc. are treated as unsigned
         }
     }
 

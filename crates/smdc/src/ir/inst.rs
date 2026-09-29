@@ -60,13 +60,18 @@ pub enum BinOp {
     Or,
     Xor,
     Shl,
-    Shr,
+    Shr, // Logical (unsigned) right shift
+    Sar, // Arithmetic (signed) right shift
     Eq,
     Ne,
-    Lt,
+    Lt, // Signed comparisons
     Le,
     Gt,
     Ge,
+    ULt, // Unsigned comparisons
+    ULe,
+    UGt,
+    UGe,
 }
 
 impl std::fmt::Display for BinOp {
@@ -83,13 +88,18 @@ impl std::fmt::Display for BinOp {
             BinOp::Or => write!(f, "|"),
             BinOp::Xor => write!(f, "^"),
             BinOp::Shl => write!(f, "<<"),
-            BinOp::Shr => write!(f, ">>"),
+            BinOp::Shr => write!(f, ">>u"),
+            BinOp::Sar => write!(f, ">>s"),
             BinOp::Eq => write!(f, "=="),
             BinOp::Ne => write!(f, "!="),
             BinOp::Lt => write!(f, "<"),
             BinOp::Le => write!(f, "<="),
             BinOp::Gt => write!(f, ">"),
             BinOp::Ge => write!(f, ">="),
+            BinOp::ULt => write!(f, "<u"),
+            BinOp::ULe => write!(f, "<=u"),
+            BinOp::UGt => write!(f, ">u"),
+            BinOp::UGe => write!(f, ">=u"),
         }
     }
 }

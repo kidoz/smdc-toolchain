@@ -91,6 +91,14 @@ impl Scope {
         self.symbols.get(name)
     }
 
+    /// Replace the type of a symbol in the current scope (e.g. an unsized
+    /// array completed by its initializer)
+    pub fn set_local_type(&mut self, name: &str, ty: CType) {
+        if let Some(sym) = self.symbols.get_mut(name) {
+            sym.ty = ty;
+        }
+    }
+
     /// Define a struct type in the current scope
     pub fn define_struct(&mut self, def: StructDef) -> Result<(), String> {
         if self.structs.contains_key(&def.name) {

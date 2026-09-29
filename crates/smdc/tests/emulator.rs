@@ -368,6 +368,45 @@ fn emulator_struct_member_widths() {
     );
 }
 
+/// Struct assignment, initialization from a struct, and pass-by-value copy
+/// the whole object; nested members, unions, arrays inside structs, and
+/// sizeof use the padded layout.
+#[test]
+fn emulator_struct_copies_and_layout() {
+    require_emulator!();
+    assert_rom_results(
+        "struct_copies",
+        "struct P { int x; int y; short z; };\n\
+         struct In { short a; short b; };\n\
+         struct Out { char k; struct In i; short v[3]; };\n\
+         union U { int i; short s[2]; };\n\
+         struct Node { int v; struct Node *next; };\n\
+         int sum(struct P p) { p.x = 100; return p.x + p.y + p.z; }\n\
+         void main(void) {\n\
+             struct P a; struct P b; struct Out o; union U u;\n\
+             struct Node n1; struct Node n2;\n\
+             a.x = 1; a.y = 2; a.z = 3;\n\
+             b = a;\n\
+             {\n\
+                 struct P c = b;\n\
+                 set_result(0, c.x + c.y * 10 + c.z * 100);\n\
+             }\n\
+             set_result(1, sum(a));\n\
+             set_result(2, a.x);\n\
+             o.i.a = 5; o.i.b = 6; o.v[2] = 7; o.k = 8;\n\
+             set_result(3, o.i.a + o.i.b + o.v[2] + o.k);\n\
+             u.i = 0x12345678;\n\
+             set_result(4, u.s[1]);\n\
+             n1.v = 10; n2.v = 20; n1.next = &n2;\n\
+             set_result(5, n1.next->v);\n\
+             set_result(6, sizeof(struct P));\n\
+             set_result(7, sizeof(struct Out) + sizeof(union U) * 100);\n\
+             test_done();\n\
+         }\n",
+        &[321, 105, 1, 26, 0x5678, 20, 10, 12 + 4 * 100],
+    );
+}
+
 /// 32-bit multiply, divide and modulo (the 68000's MULS/DIVS are only
 /// 16-bit), covering every path of the division helper and C's
 /// truncating signed division.
@@ -414,5 +453,157 @@ fn emulator_32bit_multiply_divide() {
              test_done();\n\
          }\n",
         &expected,
+    );
+}
+
+/// Unsigned int and pointer operands compare unsigned; `>>` is arithmetic
+/// for signed operands and logical for unsigned ones.
+#[test]
+fn emulator_unsigned_compare_and_shift() {
+    require_emulator!();
+    assert_rom_results(
+        "unsigned_shift",
+        "int lt(char *a, char *b) { return a < b; }\n\
+         void main(void) {\n\
+             unsigned int big = 0xFFFFFFFF; unsigned int one = 1;\n\
+             unsigned short us = 65535; int neg = -1; int x = -64;\n\
+             char buf[4];\n\
+             set_result(0, big > one);\n\
+             set_result(1, one < 0x80000000);\n\
+             set_result(2, us > neg);\n\
+             set_result(3, neg < 0);\n\
+             set_result(4, lt(buf, buf + 2));\n\
+             set_result(5, (x >> 3) >> 16);\n\
+             set_result(6, x >> 3);\n\
+             set_result(7, big >> 28);\n\
+             x >>= 1;\n\
+             set_result(8, x);\n\
+             test_done();\n\
+         }\n",
+        &[1, 1, 1, 1, 1, 0xFFFF, 0xFFF8, 0xF, 0xFFE0],
+    );
+}
+
+/// Pointer arithmetic counts in elements of the pointed-to type.
+#[test]
+fn emulator_pointer_arithmetic() {
+    require_emulator!();
+    assert_rom_results(
+        "pointer_arith",
+        "int arr[4] = {10, 20, 30, 40};\n\
+         short sarr[4] = {1, 2, 3, 4};\n\
+         struct P { short a; int b; };\n\
+         struct P ps[3];\n\
+         void main(void) {\n\
+             int *p = arr; int *q; short *s = sarr; struct P *pp = ps;\n\
+             set_result(0, *(p + 2));\n\
+             p++;\n\
+             set_result(1, *p);\n\
+             q = p + 2;\n\
+             set_result(2, q - p);\n\
+             p += 1;\n\
+             set_result(3, *p);\n\
+             s = 3 + s;\n\
+             --s;\n\
+             set_result(4, *s);\n\
+             ps[2].b = 77;\n\
+             pp = pp + 2;\n\
+             set_result(5, pp->b);\n\
+             set_result(6, pp - ps);\n\
+             test_done();\n\
+         }\n",
+        &[30, 20, 2, 30, 3, 77, 2],
+    );
+}
+
+/// Conversions to char and short truncate and re-extend: casts, return
+/// values, the value of an assignment, and pre-increment wrap-around.
+#[test]
+fn emulator_integer_conversions() {
+    require_emulator!();
+    assert_rom_results(
+        "conversions",
+        "unsigned char ret_uc(int v) { return v; }\n\
+         short ret_s(int v) { return v; }\n\
+         unsigned char gtab[2] = { (unsigned char)300, 5 };\n\
+         void main(void) {\n\
+             int x = 300; int y = 200; int m1 = -1; int a;\n\
+             unsigned char c = 255; char s;\n\
+             set_result(0, (unsigned char)x);\n\
+             set_result(1, (char)y);\n\
+             set_result(2, (unsigned short)m1 == 65535);\n\
+             set_result(3, ret_uc(300));\n\
+             set_result(4, ret_s(-70000));\n\
+             set_result(5, gtab[0]);\n\
+             a = (s = 300);\n\
+             set_result(6, a);\n\
+             set_result(7, ++c == 0);\n\
+             test_done();\n\
+         }\n",
+        &[44, 0xFFC8, 1, 44, 0xEE90, 44, 44, 1],
+    );
+}
+
+/// Static locals keep their value between calls and are initialized once;
+/// extern locals name the global.
+#[test]
+fn emulator_static_and_extern_locals() {
+    require_emulator!();
+    assert_rom_results(
+        "static_locals",
+        "int shared = 100;\n\
+         int counter(void) { static int n; n = n + 1; return n; }\n\
+         int counter2(void) { static int k = 10; k++; return k; }\n\
+         int bump(void) { extern int shared; shared = shared + 1; return shared; }\n\
+         int *cell(void) { static int s = 7; return &s; }\n\
+         void main(void) {\n\
+             counter(); counter();\n\
+             set_result(0, counter());\n\
+             counter2();\n\
+             set_result(1, counter2());\n\
+             bump();\n\
+             set_result(2, bump());\n\
+             *cell() = 42;\n\
+             set_result(3, *cell());\n\
+             test_done();\n\
+         }\n",
+        &[3, 12, 102, 42],
+    );
+}
+
+/// Globals after odd-sized data stay word-aligned, and initializers honor
+/// designators, elided braces, string literals and unsized arrays.
+#[test]
+fn emulator_initializers_and_global_alignment() {
+    require_emulator!();
+    assert_rom_results(
+        "initializers",
+        "struct P { int x; short y; char z; };\n\
+         char g1 = 1;\n\
+         int g2 = 5;\n\
+         struct P gp = { .y = 2, .x = 1 };\n\
+         int ga[5] = { [2] = 9, 10 };\n\
+         int gm[2][2] = { 1, 2, 3, 4 };\n\
+         int gu[] = { 5, 6, 7 };\n\
+         char gs[] = \"hey\";\n\
+         void main(void) {\n\
+             int k = 5;\n\
+             struct P lp = { .z = 3, .x = 4 };\n\
+             int lm[2][3] = { {1, 2}, {3} };\n\
+             int la[4] = { [1] = 7, k };\n\
+             int big[16] = { [15] = 1 };\n\
+             set_result(0, g1 + g2);\n\
+             set_result(1, gp.x * 10 + gp.y);\n\
+             set_result(2, ga[2] * 100 + ga[3]);\n\
+             set_result(3, gm[1][0] * 10 + gm[1][1]);\n\
+             set_result(4, sizeof(gu) * 10 + gu[2]);\n\
+             set_result(5, sizeof(gs) * 1000 + gs[1]);\n\
+             set_result(6, lp.x * 100 + lp.y * 10 + lp.z);\n\
+             set_result(7, lm[0][1] * 100 + lm[1][0] * 10 + lm[1][2]);\n\
+             set_result(8, la[1] * 10 + la[2]);\n\
+             set_result(9, big[0] + big[14] * 10 + big[15] * 100);\n\
+             test_done();\n\
+         }\n",
+        &[6, 12, 910, 34, 127, 4101, 403, 230, 75, 100],
     );
 }

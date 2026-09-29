@@ -7,7 +7,7 @@
 use smd_compiler::DiagnosticReporter;
 use smd_compiler::backend::m68k::CodeGenerator;
 use smd_compiler::frontend::{CFrontend, CompileContext, Frontend, FrontendConfig};
-use smd_compiler::ir::{Inst, IrFunction, IrModule, Value};
+use smd_compiler::ir::{BinOp, Inst, IrFunction, IrModule, Value};
 
 fn compile_c(source: &str) -> IrModule {
     let mut reporter = DiagnosticReporter::new();
@@ -44,6 +44,29 @@ fn store_sizes(func: &IrFunction) -> Vec<usize> {
         .collect()
 }
 
+fn binary_ops(func: &IrFunction) -> Vec<BinOp> {
+    insts(func)
+        .filter_map(|inst| match inst {
+            Inst::Binary { op, .. } => Some(*op),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Binary operations with a constant right operand, as (op, constant)
+fn const_binaries(func: &IrFunction) -> Vec<(BinOp, i64)> {
+    insts(func)
+        .filter_map(|inst| match inst {
+            Inst::Binary {
+                op,
+                right: Value::IntConst(c),
+                ..
+            } => Some((*op, *c)),
+            _ => None,
+        })
+        .collect()
+}
+
 #[test]
 fn struct_member_stores_use_the_member_width() {
     let module = compile_c(
@@ -68,6 +91,124 @@ fn struct_layout_pads_members_and_size() {
         insts(function(&module, "f"))
             .any(|inst| matches!(inst, Inst::Return(Some(Value::IntConst(10)))))
     );
+}
+
+#[test]
+fn struct_assignment_copies_every_byte() {
+    let module = compile_c(
+        "struct P { int x; int y; short z; };\n\
+         void f(struct P *a, struct P *b) { *a = *b; }",
+    );
+
+    assert_eq!(store_sizes(function(&module, "f")), vec![4, 4, 2]);
+}
+
+#[test]
+fn large_struct_copy_loops() {
+    let module = compile_c(
+        "struct Big { int v[20]; };\n\
+         void f(struct Big *a, struct Big *b) { *a = *b; }",
+    );
+    let f = function(&module, "f");
+
+    assert_eq!(store_sizes(f), vec![4]);
+    assert!(insts(f).any(|inst| matches!(inst, Inst::CondJump { .. })));
+}
+
+#[test]
+fn pointer_arithmetic_scales_by_element_size() {
+    let module = compile_c(
+        "int f(int *p, int n) { p = p + n; p++; p += 2; return *(p - 1); }\n\
+         int g(short *a, short *b) { return a - b; }",
+    );
+
+    let f = const_binaries(function(&module, "f"));
+    assert!(f.contains(&(BinOp::Mul, 4)), "p + n: {f:?}");
+    assert!(f.contains(&(BinOp::Add, 4)), "p++: {f:?}");
+    assert!(f.contains(&(BinOp::Add, 8)), "p += 2: {f:?}");
+    assert!(f.contains(&(BinOp::Sub, 4)), "p - 1: {f:?}");
+    assert!(const_binaries(function(&module, "g")).contains(&(BinOp::Sar, 1)));
+}
+
+#[test]
+fn unsigned_operands_select_unsigned_operations() {
+    let module = compile_c(
+        "int f(unsigned int a, unsigned int b) { return (a < b) + (a > b) + a / b + a % b + (a >> 1); }\n\
+         int g(int a, int b) { return (a < b) + a / b + a % b + (a >> 1); }\n\
+         int h(unsigned char a, int b) { return (a < b) + a / b; }",
+    );
+
+    let f = binary_ops(function(&module, "f"));
+    for op in [BinOp::ULt, BinOp::UGt, BinOp::UDiv, BinOp::UMod, BinOp::Shr] {
+        assert!(f.contains(&op), "{op:?} missing from {f:?}");
+    }
+    let g = binary_ops(function(&module, "g"));
+    for op in [BinOp::Lt, BinOp::Div, BinOp::Mod, BinOp::Sar] {
+        assert!(g.contains(&op), "{op:?} missing from {g:?}");
+    }
+    // unsigned char promotes to (signed) int
+    let h = binary_ops(function(&module, "h"));
+    assert!(h.contains(&BinOp::Lt) && h.contains(&BinOp::Div), "{h:?}");
+}
+
+#[test]
+fn narrowing_casts_truncate_and_extend() {
+    let module = compile_c(
+        "int f(int x) { return (unsigned char)x; }\n\
+         int g(int x) { return (short)x; }\n\
+         int h(unsigned char x) { return (int)x + (unsigned short)x; }\n\
+         unsigned char r(int x) { return x; }",
+    );
+
+    assert_eq!(
+        const_binaries(function(&module, "f")),
+        vec![(BinOp::And, 0xFF)]
+    );
+    assert_eq!(
+        const_binaries(function(&module, "g")),
+        vec![(BinOp::Shl, 16), (BinOp::Sar, 16)]
+    );
+    // Widening an already-extended value needs no code
+    assert!(!binary_ops(function(&module, "h")).contains(&BinOp::And));
+    assert_eq!(
+        const_binaries(function(&module, "r")),
+        vec![(BinOp::And, 0xFF)]
+    );
+}
+
+#[test]
+fn static_local_is_a_private_global() {
+    let module = compile_c("int f(void) { static int n = 5; n = n + 1; return n; }");
+
+    let global = module
+        .globals
+        .iter()
+        .find(|g| g.name.starts_with("__static_f_n"))
+        .expect("static local not emitted as a global");
+    assert_eq!(global.init.as_deref(), Some(&[0, 0, 0, 5][..]));
+    assert!(!insts(function(&module, "f")).any(|inst| matches!(inst, Inst::Alloca { .. })));
+}
+
+#[test]
+fn global_initializer_honors_designators_and_elided_braces() {
+    let module = compile_c(
+        "struct P { int x; short y; };\n\
+         struct P p = { .y = 2, .x = 1 };\n\
+         short m[2][2] = { 1, 2, [1] = { 3 } };\n\
+         char s[] = \"hi\";",
+    );
+    let init = |name: &str| {
+        module
+            .globals
+            .iter()
+            .find(|g| g.name == name)
+            .and_then(|g| g.init.clone())
+            .unwrap()
+    };
+
+    assert_eq!(init("p"), vec![0, 0, 0, 1, 0, 2]);
+    assert_eq!(init("m"), vec![0, 1, 0, 2, 0, 3, 0, 0]);
+    assert_eq!(init("s"), b"hi\0".to_vec());
 }
 
 #[test]

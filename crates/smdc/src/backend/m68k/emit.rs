@@ -1025,7 +1025,23 @@ impl CodeGenerator {
                             DataReg::D0,
                         ));
                     }
-                    BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
+                    BinOp::Sar => {
+                        self.emit(M68kInst::Asr(
+                            Size::Long,
+                            Operand::DataReg(DataReg::D1),
+                            DataReg::D0,
+                        ));
+                    }
+                    BinOp::Eq
+                    | BinOp::Ne
+                    | BinOp::Lt
+                    | BinOp::Le
+                    | BinOp::Gt
+                    | BinOp::Ge
+                    | BinOp::ULt
+                    | BinOp::ULe
+                    | BinOp::UGt
+                    | BinOp::UGe => {
                         self.emit(M68kInst::Cmp(
                             Size::Long,
                             Operand::DataReg(DataReg::D1),
@@ -1038,6 +1054,10 @@ impl CodeGenerator {
                             BinOp::Le => Cond::Le,
                             BinOp::Gt => Cond::Gt,
                             BinOp::Ge => Cond::Ge,
+                            BinOp::ULt => Cond::Cs,
+                            BinOp::ULe => Cond::Ls,
+                            BinOp::UGt => Cond::Hi,
+                            BinOp::UGe => Cond::Cc,
                             _ => unreachable!(),
                         };
                         self.emit(M68kInst::Scc(cond, Operand::DataReg(DataReg::D0)));
