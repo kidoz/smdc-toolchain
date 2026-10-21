@@ -29,6 +29,11 @@ smdc input.c -t rom --domestic-name "GAME NAME" --overseas-name "GAME NAME" -o g
 smdc input.c -v --dump-ast --dump-ir
 ```
 
+## Documentation
+
+See [docs/](docs/README.md) for tutorials, how-to guides, reference, and
+explanation, organized with the [Diátaxis](https://diataxis.fr/) framework.
+
 ## Architecture
 
 ```
