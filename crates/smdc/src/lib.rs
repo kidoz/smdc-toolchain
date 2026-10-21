@@ -17,6 +17,7 @@ pub mod common;
 pub mod driver;
 pub mod frontend;
 pub mod ir;
+pub mod music;
 pub mod types;
 
 // Re-exports for convenience

@@ -21,6 +21,10 @@ enum Language {
     C,
     /// Rust language
     Rust,
+    /// Standard MIDI file rendered through the Mega Drive music driver
+    Midi,
+    /// Built-in hand-authored music cover demo
+    Cover,
     /// Auto-detect from file extension
     #[default]
     Auto,
@@ -112,6 +116,10 @@ struct Args {
     #[arg(long)]
     sym: Option<PathBuf>,
 
+    /// Also write generated C source when compiling a MIDI file
+    #[arg(long)]
+    emit_music_source: Option<PathBuf>,
+
     // ROM-specific options
     /// Domestic (Japanese) game name for ROM
     #[arg(long, default_value = "SMD GAME")]
@@ -136,6 +144,8 @@ fn detect_language(path: &Path, explicit: Language) -> Language {
         Language::Auto => match path.extension().and_then(|e| e.to_str()) {
             Some("rs") => Language::Rust,
             Some("c" | "h") => Language::C,
+            Some("mid" | "midi") => Language::Midi,
+            Some("cover") => Language::Cover,
             _ => {
                 eprintln!("warning: cannot detect language, defaulting to C");
                 Language::C
@@ -153,16 +163,83 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         return run_decompile(args);
     }
 
-    // Read input file
-    let source = fs::read_to_string(&args.input)?;
-    let filename = args.input.display().to_string();
+    let language = detect_language(&args.input, args.lang);
 
+    if language == Language::Midi {
+        return run_midi(args);
+    }
+    if language == Language::Cover {
+        return run_cover(args);
+    }
+
+    let source = fs::read_to_string(&args.input)?;
+    compile_source(args, source, args.input.display().to_string(), language)
+}
+
+fn run_cover(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
+    let title = args.input.display().to_string();
+    let generated = smd_compiler::music::generate_manual_paranoid_cover(&title);
+
+    if let Some(path) = &args.emit_music_source {
+        fs::write(path, &generated.c_source)?;
+    }
+
+    if args.verbose {
+        eprintln!(
+            "Manual cover render: {} FM channels, {} drum events, {} sequencer events, {} frames",
+            generated.stats.fm_channels,
+            generated.stats.drum_events,
+            generated.stats.rendered_events,
+            generated.stats.song_frames
+        );
+    }
+
+    compile_source(
+        args,
+        generated.c_source,
+        format!("{}.generated.c", args.input.display()),
+        Language::C,
+    )
+}
+
+fn run_midi(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
+    let bytes = fs::read(&args.input)?;
+    let title = args.input.display().to_string();
+    let generated = smd_compiler::music::generate_from_midi(&bytes, &title)?;
+
+    if let Some(path) = &args.emit_music_source {
+        fs::write(path, &generated.c_source)?;
+    }
+
+    if args.verbose {
+        eprintln!(
+            "MIDI render: {} tracks, {} MIDI notes, {} FM channels, {} drum events, {} sequencer events, {} frames",
+            generated.stats.midi_tracks,
+            generated.stats.note_events,
+            generated.stats.fm_channels,
+            generated.stats.drum_events,
+            generated.stats.rendered_events,
+            generated.stats.song_frames
+        );
+    }
+
+    compile_source(
+        args,
+        generated.c_source,
+        format!("{}.generated.c", args.input.display()),
+        Language::C,
+    )
+}
+
+fn compile_source(
+    args: &Args,
+    source: String,
+    filename: String,
+    language: Language,
+) -> Result<(), Box<dyn std::error::Error>> {
     // Set up diagnostic reporter
     let mut reporter = DiagnosticReporter::new();
     let file_id = reporter.add_file(&filename, &source);
-
-    // Detect language
-    let language = detect_language(&args.input, args.lang);
 
     // Determine output extension based on output type
     let default_ext = match args.output_type {
@@ -181,6 +258,8 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         let lang_str = match language {
             Language::C => "C",
             Language::Rust => "Rust",
+            Language::Midi => "MIDI",
+            Language::Cover => "cover",
             Language::Auto => "auto",
         };
         let output_str = match args.output_type {
@@ -200,7 +279,7 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     let frontend: Box<dyn Frontend> = match language {
         Language::C => Box::new(CFrontend::new()),
         Language::Rust => Box::new(RustFrontend::new()),
-        Language::Auto => unreachable!(),
+        Language::Midi | Language::Cover | Language::Auto => unreachable!(),
     };
 
     // Build include paths
