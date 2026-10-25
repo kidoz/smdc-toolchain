@@ -278,7 +278,7 @@ impl CodeGenerator {
         ));
         self.emit(M68kInst::Label(".clear_ram".to_string()));
         self.emit(M68kInst::Clr(Size::Long, Operand::PostInc(AddrReg::A0)));
-        self.emit(M68kInst::Dbf(DataReg::D0, ".clear_ram".to_string()));
+        self.emit(M68kInst::Dbcc(Cond::False, DataReg::D0, ".clear_ram".to_string()));
 
         // Copy initialized data from ROM to RAM
         // Source: __data_rom_start (ROM address)
@@ -411,7 +411,7 @@ impl CodeGenerator {
             Operand::Imm(0),
             Operand::AddrInd(AddrReg::A1),
         ));
-        self.emit(M68kInst::Dbf(DataReg::D0, ".clear_vram".to_string()));
+        self.emit(M68kInst::Dbcc(Cond::False, DataReg::D0, ".clear_vram".to_string()));
 
         // Re-setup A1 for palette write
         self.emit(M68kInst::Lea(Operand::AbsLong(0xC00004), AddrReg::A1));

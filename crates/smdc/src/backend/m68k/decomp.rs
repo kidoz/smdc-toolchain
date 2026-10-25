@@ -181,7 +181,11 @@ impl<'a> Decompiler<'a> {
                     None
                         if matches!(
                             self.insts[&addr].inst,
-                            M68kInst::Rts | M68kInst::Rte | M68kInst::Bra(_)
+                            M68kInst::Rts
+                                | M68kInst::Rte
+                                | M68kInst::Rtr
+                                | M68kInst::Bra(_)
+                                | M68kInst::BraS(_)
                         ) =>
                     {
                         break;
@@ -190,13 +194,15 @@ impl<'a> Decompiler<'a> {
                 }
 
                 // Computed dispatch through a PC-relative jump table:
-                // `jsr/jmp table(pc,dN)`. The table base is static; its word
-                // entries are offsets relative to the table start. Follow
-                // every entry that lands inside the code section.
+                // `jsr/jmp table(pc,dN)`. The instruction address gives the
+                // table base (opword + extension, then +2); its word entries
+                // are offsets relative to the table start. Follow every entry
+                // that lands inside the code section.
                 if let M68kInst::Jsr(op) | M68kInst::Jmp(op) = &self.insts[&addr].inst {
-                    if let Operand::PcIndexed(base, _) = op {
+                    if let Operand::PcIndexed(disp, _) = op {
+                        let base = addr.wrapping_add(4).wrapping_add_signed(*disp as i32);
                         let is_jsr = matches!(self.insts[&addr].inst, M68kInst::Jsr(_));
-                        let table = self.resolve_jump_table(*base);
+                        let table = self.resolve_jump_table(base as i32);
                         for t in table {
                             if is_jsr {
                                 self.func_starts.insert(t);
@@ -356,13 +362,16 @@ impl<'a> Decompiler<'a> {
 }
 
 fn is_unconditional(inst: &M68kInst) -> bool {
-    // DBF is not in this list: it falls through when the loop exits, so the
+    // DBcc is not in this list: it falls through when the loop exits, so the
     // linear walk must continue past it (the target is queued as a label).
-    matches!(inst, M68kInst::Bra(_) | M68kInst::Jmp(_))
+    matches!(
+        inst,
+        M68kInst::Bra(_) | M68kInst::BraS(_) | M68kInst::Jmp(_)
+    )
 }
 
 fn is_call(inst: &M68kInst) -> bool {
-    matches!(inst, M68kInst::Jsr(_) | M68kInst::Bsr(_))
+    matches!(inst, M68kInst::Jsr(_) | M68kInst::Bsr(_) | M68kInst::BsrS(_))
 }
 
 // ---------------------------------------------------------------------------
@@ -670,12 +679,12 @@ impl<'a, 'b> Lifter<'a, 'b> {
                 self.pending = Some((d, CmpRef::Expr(format!("{v}"))));
             }
 
-            M68kInst::Bra(_) => {
+            M68kInst::Bra(_) | M68kInst::BraS(_) => {
                 if let Some(t) = target {
                     self.stmts.push(Stmt::Branch { taken: None, target: t });
                 }
             }
-            M68kInst::Bcc(cond, _) => {
+            M68kInst::Bcc(cond, _) | M68kInst::BccS(cond, _) => {
                 let taken = self.cond_expr(&cond);
                 if let Some(t) = target {
                     self.stmts.push(Stmt::Branch {
@@ -685,16 +694,25 @@ impl<'a, 'b> Lifter<'a, 'b> {
                 }
                 self.pending = None;
             }
-            M68kInst::Dbf(reg, _) => {
+            M68kInst::Dbcc(cond, reg, _) => {
                 if let Some(t) = target {
-                    self.stmts.push(Stmt::Dbf {
-                        reg: format!("{reg}"),
-                        target: t,
-                    });
+                    if matches!(cond, Cond::False) {
+                        self.stmts.push(Stmt::Dbf {
+                            reg: format!("{reg}"),
+                            target: t,
+                        });
+                    } else {
+                        // Foreign-only loop form: render as a plain branch.
+                        let taken = format!("/* dbcc {cond} */ 1");
+                        self.stmts.push(Stmt::Branch {
+                            taken: Some(taken),
+                            target: t,
+                        });
+                    }
                 }
                 self.pending = None;
             }
-            M68kInst::Bsr(_) => {
+            M68kInst::Bsr(_) | M68kInst::BsrS(_) => {
                 if let Some(t) = target {
                     let name = self.target_name(t);
                     self.stmts.push(Stmt::Expr(format!("{name}();")));
@@ -755,6 +773,14 @@ impl<'a, 'b> Lifter<'a, 'b> {
             M68kInst::Pea(op) => {
                 let a = self.operand_addr(&op);
                 self.stmts.push(Stmt::Expr(format!("*--sp = (int)({a});")));
+            }
+
+            // Foreign-ROM instructions without a C-level model yet: keep the
+            // text as a comment so nothing is lost.
+            other => {
+                let text = other.format();
+                self.stmts.push(Stmt::Comment(format!("/*{text}*/")));
+                self.pending = None;
             }
         }
     }
@@ -867,9 +893,10 @@ impl<'a, 'b> Lifter<'a, 'b> {
             Operand::Disp(_, AddrReg::A6) => frame_slot(op).unwrap_or_else(|| "0".into()),
             Operand::Disp(d, r) => format!("*({} *)({d} + {r})", ctype(size)),
             Operand::Indexed(d, r, i) => format!("*({} *)({d} + {r} + {i})", ctype(size)),
-            Operand::PcIndexed(base, r) => {
-                format!("*({} *)({:#X} + {r})", ctype(size), base)
+            Operand::PcIndexed(d, r) => {
+                format!("*({} *)({r} + {d} /*pc*/)", ctype(size))
             }
+            Operand::PcDisp(d) => format!("*({} *)({d} /*pc*/)", ctype(size)),
             Operand::AbsShort(a) => format!("*({} *)0x{:X}", ctype(size), *a as u16),
             Operand::AbsLong(a) => format!("*({} *)0x{a:X}", ctype(size)),
             Operand::Label(name) => format!("*({} *)&{name}", ctype(size)),
@@ -897,7 +924,8 @@ impl<'a, 'b> Lifter<'a, 'b> {
                 .unwrap_or_else(|| "0".into()),
             Operand::Disp(d, r) => format!("({d} + {r})"),
             Operand::Indexed(d, r, i) => format!("({d} + {r} + {i})"),
-            Operand::PcIndexed(base, r) => format!("({:#X} + {r})", base),
+            Operand::PcIndexed(d, r) => format!("({r} + {d} /*pc*/)"),
+            Operand::PcDisp(d) => format!("({d} /*pc*/)"),
             Operand::AbsShort(a) => format!("0x{:X}", *a as u16),
             Operand::AbsLong(a) => format!("0x{a:X}"),
             Operand::Label(name) => format!("&{name}"),
@@ -1070,7 +1098,7 @@ fn ctype(size: &Size) -> &'static str {
     }
 }
 
-fn for_each_operand(inst: &M68kInst, f: &mut impl FnMut(&Operand)) {
+pub(crate) fn for_each_operand(inst: &M68kInst, f: &mut impl FnMut(&Operand)) {
     match inst {
         M68kInst::Move(_, a, b)
         | M68kInst::Add(_, a, b)
@@ -1116,7 +1144,7 @@ fn for_each_operand(inst: &M68kInst, f: &mut impl FnMut(&Operand)) {
         | M68kInst::Scc(_, a) => f(a),
         M68kInst::Moveq(_, r) => f(&Operand::DataReg(*r)),
         M68kInst::Swap(r) | M68kInst::Ext(_, r) => f(&Operand::DataReg(*r)),
-        M68kInst::Dbf(r, _) => f(&Operand::DataReg(*r)),
+        M68kInst::Dbcc(_, r, _) => f(&Operand::DataReg(*r)),
         M68kInst::Lsl(_, c, d)
         | M68kInst::Lsr(_, c, d)
         | M68kInst::Asl(_, c, d)

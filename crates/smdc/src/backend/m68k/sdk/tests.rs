@@ -856,7 +856,7 @@ fn library_generate_mem_copy_has_loop() {
     let mut libgen = SdkLibraryGenerator::new();
     let insts = libgen.generate("mem_copy").unwrap();
     assert!(matches!(&insts[0], M68kInst::Label(name) if name == "mem_copy"));
-    assert!(insts.iter().any(|i| matches!(i, M68kInst::Dbf(..))));
+    assert!(insts.iter().any(|i| matches!(i, M68kInst::Dbcc(..))));
     assert!(matches!(insts.last(), Some(M68kInst::Rts)));
 }
 
@@ -889,7 +889,7 @@ fn library_generate_sram_read() {
     let mut libgen = SdkLibraryGenerator::new();
     let insts = libgen.generate("sram_read").unwrap();
     assert!(matches!(&insts[0], M68kInst::Label(name) if name == "sram_read"));
-    assert!(insts.iter().any(|i| matches!(i, M68kInst::Dbf(..))));
+    assert!(insts.iter().any(|i| matches!(i, M68kInst::Dbcc(..))));
 }
 
 #[test]

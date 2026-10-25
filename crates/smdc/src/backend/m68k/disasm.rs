@@ -60,8 +60,8 @@ pub(crate) fn decode_at(
                 Some(addr.wrapping_add(2).wrapping_add_signed(disp))
             }
         }
-        _ if op & 0xFFF8 == 0x51C8 => {
-            // DBF: displacement word follows the opword.
+        _ if op & 0xF0F8 == 0x50C8 => {
+            // DBcc (any condition): displacement word follows the opword.
             Some(addr.wrapping_add(2).wrapping_add_signed(word(pos + 2)?))
         }
         _ if op & 0xFFC0 == 0x4E80 || op & 0xFFC0 == 0x4EC0 => {
@@ -129,15 +129,18 @@ impl Cursor<'_> {
             6 => {
                 let ext = self.read_u16()?;
                 // Brief-format extension words only (full format has bit 8
-                // set). Accept D/A index selection, index size and scale:
-                // foreign code uses these for jump tables (`jsr (d,an,ix)`).
-                if ext & 0x0100 != 0 {
-                    return None; // full format (68020)
+                // set). Brief format: D/A | reg | 0 0 scale | 0 | disp8.
+                // Reject full format and non-zero scale bits (68020-only);
+                // they fall back to `dc.w`, which preserves the bytes.
+                if ext & 0x0F00 != 0 {
+                    return None;
                 }
-                // The index register is rendered as a data register even
-                // when the D/A bit selects an address register: the operand
-                // is informational for decompilation, not re-assembly.
-                Operand::Indexed(ext as u8 as i8, addr_reg(reg), data_reg((ext >> 12) & 7))
+                let index = if ext & 0x8000 != 0 {
+                    Reg::Addr(addr_reg((ext >> 12) & 7))
+                } else {
+                    Reg::Data(data_reg((ext >> 12) & 7))
+                };
+                Operand::Indexed(ext as u8 as i8, addr_reg(reg), index)
             }
             7 => match reg {
                 0 => Operand::AbsShort(self.read_u16()? as i16),
@@ -145,27 +148,27 @@ impl Cursor<'_> {
                     let addr = self.read_u32()?;
                     self.symbolize(addr)
                 }
-                // d(PC): folds to a known absolute address. The reference PC
-                // is the extension word's address + 2.
-                2 => {
-                    let ext_addr = self.addr(self.pos);
-                    let disp = self.read_u16()? as i16 as i32;
-                    let ea = ext_addr.wrapping_add(2).wrapping_add_signed(disp);
-                    self.symbolize(ea)
-                }
-                // d(PC,Xn): brief-format index off a known PC base.
+                // d(PC): kept as a raw PC-relative displacement so it
+                // re-encodes to the same bytes.
+                2 => Operand::PcDisp(self.read_u16()? as i16),
+                // d(PC,Xn): brief-format index, kept raw for re-encoding.
                 3 => {
-                    let ext_addr = self.addr(self.pos);
                     let ext = self.read_u16()?;
-                    if ext & 0x0100 != 0 {
-                        return None; // full format (68020)
+                    if ext & 0x0F00 != 0 {
+                        return None; // full format (68020) or scaled index
                     }
-                    let disp = ext as u8 as i8 as i32;
-                    let base = ext_addr.wrapping_add(2).wrapping_add_signed(disp) as i32;
-                    Operand::PcIndexed(base, data_reg((ext >> 12) & 7))
+                    let index = if ext & 0x8000 != 0 {
+                        Reg::Addr(addr_reg((ext >> 12) & 7))
+                    } else {
+                        Reg::Data(data_reg((ext >> 12) & 7))
+                    };
+                    Operand::PcIndexed(ext as u8 as i8, index)
                 }
                 4 => match size {
-                    Size::Byte => Operand::Imm((self.read_u16()? & 0xFF) as i32),
+                    // Byte immediates keep the full extension word so the
+                    // bytes re-encode exactly (the high byte is normally 0,
+                    // but foreign data can hold anything).
+                    Size::Byte => Operand::Imm(self.read_u16()? as i32),
                     Size::Word => Operand::Imm(self.read_u16()? as i16 as i32),
                     Size::Long => Operand::Imm(self.read_u32()? as i32),
                 },
@@ -176,9 +179,11 @@ impl Cursor<'_> {
     }
 
     /// Read a sized immediate (word for byte/word ops, long for long ops).
+    /// Byte immediates keep the full extension word (high byte included) so
+    /// garbage encodings re-encode byte-exactly.
     fn read_imm(&mut self, size: Size) -> Option<i32> {
         match size {
-            Size::Byte => Some((self.read_u16()? & 0xFF) as i32),
+            Size::Byte => Some(self.read_u16()? as i32),
             Size::Word => Some(self.read_u16()? as i16 as i32),
             Size::Long => Some(self.read_u32()? as i32),
         }
@@ -221,10 +226,45 @@ impl Cursor<'_> {
         }
     }
 
-    /// Group 0: bit operations and immediate arithmetic/logic.
+    /// Group 0: bit operations, immediate arithmetic/logic, MOVEP.
     fn decode_group0(&mut self, op: u16) -> Option<M68kInst> {
         let mode = (op >> 3) & 7;
         let ea_reg = op & 7;
+
+        // MOVEP Dx,(d16,An) / (d16,An),Dx: bit 8 set with EA mode 001.
+        // Must be checked before the dynamic bit ops, which share bit 8;
+        // mis-decoding MOVEP drops its extension word and desyncs the cursor.
+        if op & 0x0100 != 0 && mode == 1 {
+            let disp = self.read_u16()? as i16;
+            let size = if op & 0x0040 != 0 {
+                Size::Word
+            } else {
+                Size::Long
+            };
+            let to_mem = op & 0x0080 == 0;
+            return Some(M68kInst::Movep(
+                size,
+                to_mem,
+                disp,
+                addr_reg(ea_reg),
+                data_reg((op >> 9) & 7),
+            ));
+        }
+
+        // Immediate-to-CCR/SR forms: single extension word, special opwords.
+        // Reserved encodings (SUBI/ADDI/CMPI to CCR/SR) fall through to None.
+        match ((op >> 8) & 0x0F, op & 0x00FF) {
+            (0x0, 0x3C) => return Some(M68kInst::OriToCcr(self.read_u16()?)),
+            (0x0, 0x7C) => return Some(M68kInst::OriToSr(self.read_u16()?)),
+            (0x2, 0x3C) => return Some(M68kInst::AndiToCcr(self.read_u16()?)),
+            (0x2, 0x7C) => return Some(M68kInst::AndiToSr(self.read_u16()?)),
+            (0xA, 0x3C) => return Some(M68kInst::EoriToCcr(self.read_u16()?)),
+            (0xA, 0x7C) => return Some(M68kInst::EoriToSr(self.read_u16()?)),
+            (0x4, 0x3C) | (0x4, 0x7C) | (0x6, 0x3C) | (0x6, 0x7C) | (0xC, 0x3C) | (0xC, 0x7C) => {
+                return None
+            }
+            _ => {}
+        }
 
         if op & 0x0100 != 0 {
             // Dynamic bit op: bit number in Dn
@@ -284,7 +324,24 @@ impl Cursor<'_> {
             0x4E71 => return Some(M68kInst::Nop),
             0x4E75 => return Some(M68kInst::Rts),
             0x4E73 => return Some(M68kInst::Rte),
+            0x4E77 => return Some(M68kInst::Rtr),
+            0x4E76 => return Some(M68kInst::Trapv),
+            0x4E70 => return Some(M68kInst::Reset),
+            0x4AFC => return Some(M68kInst::Illegal),
             _ => {}
+        }
+        if op & 0xFFF0 == 0x4E40 {
+            return Some(M68kInst::Trap((op & 0xF) as u8));
+        }
+        if op == 0x4E72 {
+            let imm = self.read_u16()?;
+            return Some(M68kInst::Stop(imm));
+        }
+        if op & 0xFFF8 == 0x4E60 {
+            return Some(M68kInst::MoveUspToAddr(addr_reg(op & 7)));
+        }
+        if op & 0xFFF8 == 0x4E68 {
+            return Some(M68kInst::MoveAddrToUsp(addr_reg(op & 7)));
         }
         if op & 0xFFF8 == 0x4E50 {
             let disp = self.read_u16()? as i16;
@@ -309,11 +366,24 @@ impl Cursor<'_> {
             let dst = self.decode_ea(mode, ea_reg, Size::Word)?;
             return Some(M68kInst::Move(Size::Word, Operand::Sr, dst));
         }
+        if op & 0xFFC0 == 0x44C0 {
+            // MOVE <ea>, CCR
+            let src = self.decode_ea(mode, ea_reg, Size::Word)?;
+            return Some(M68kInst::MoveToCcr(src));
+        }
+        if op & 0xF1C0 == 0x4180 {
+            // CHK.W <ea>,Dn
+            let src = self.decode_ea(mode, ea_reg, Size::Word)?;
+            return Some(M68kInst::Chk(src, data_reg((op >> 9) & 7)));
+        }
         if op & 0xFFF8 == 0x4840 {
             return Some(M68kInst::Swap(data_reg(op & 7)));
         }
         if op & 0xFFC0 == 0x4840 {
             return Some(M68kInst::Pea(self.decode_ea(mode, ea_reg, Size::Long)?));
+        }
+        if op & 0xFFC0 == 0x4800 {
+            return Some(M68kInst::Nbcd(self.decode_ea(mode, ea_reg, Size::Byte)?));
         }
         if op & 0xFFF8 == 0x4880 {
             return Some(M68kInst::Ext(Size::Word, data_reg(op & 7)));
@@ -323,6 +393,13 @@ impl Cursor<'_> {
         }
         if op & 0xFB80 == 0x4880 {
             return self.decode_movem(op);
+        }
+        if op & 0xFFC0 == 0x4AC0 {
+            return Some(M68kInst::Tas(self.decode_ea(mode, ea_reg, Size::Byte)?));
+        }
+        if op & 0xFF00 == 0x4000 {
+            let size = decode_size((op >> 6) & 3)?;
+            return Some(M68kInst::Negx(size, self.decode_ea(mode, ea_reg, size)?));
         }
         if op & 0xFF00 == 0x4200 {
             let size = decode_size((op >> 6) & 3)?;
@@ -354,8 +431,16 @@ impl Cursor<'_> {
         } else {
             Size::Long
         };
+        let mode = (op >> 3) & 7;
+        // Valid MOVEM effective addresses are control-alterable modes:
+        // bare registers (0/1), PC-relative (7.2/7.3) and immediate (7.4)
+        // are invalid, and encodings using them are data.
+        let ea_reg = op & 7;
+        if mode == 0 || mode == 1 || (mode == 7 && ea_reg >= 2) {
+            return None;
+        }
         let mask = self.read_u16()?;
-        let ea = self.decode_ea((op >> 3) & 7, op & 7, size)?;
+        let ea = self.decode_ea(mode, op & 7, size)?;
         let reverse = to_mem && matches!(ea, Operand::PreDec(_));
 
         let mut regs = Vec::new();
@@ -377,13 +462,14 @@ impl Cursor<'_> {
         let mode = (op >> 3) & 7;
         if (op >> 6) & 3 == 3 {
             if mode == 1 {
-                // DBcc: encoder only emits DBF (cond = F)
-                if (op >> 8) & 0xF != 1 {
-                    return None;
-                }
+                // DBcc (word displacement only on the 68000)
                 let pc_ref = self.addr(start) + 2;
                 let label = self.read_branch_target(pc_ref)?;
-                return Some(M68kInst::Dbf(data_reg(op & 7), label));
+                return Some(M68kInst::Dbcc(
+                    decode_cond((op >> 8) & 0xF),
+                    data_reg(op & 7),
+                    label,
+                ));
             }
             let cond = decode_cond((op >> 8) & 0xF);
             let ea = self.decode_ea(mode, op & 7, Size::Byte)?;
@@ -403,28 +489,41 @@ impl Cursor<'_> {
         })
     }
 
-    /// Group 6: BRA/BSR/Bcc.
+    /// Group 6: BRA/BSR/Bcc in short (8-bit) and word (16-bit) forms.
     fn decode_branch(&mut self, op: u16, start: usize) -> Option<M68kInst> {
         let disp8 = op & 0xFF;
         let pc_ref = self.addr(start) + 2;
-        let label = if disp8 == 0 {
-            // Word displacement follows (the only form the encoder emits)
-            self.read_branch_target(pc_ref)?
-        } else if disp8 == 0xFF {
+        if disp8 == 0xFF {
             return None; // 68020 long form
+        }
+        let cond = (op >> 8) & 0xF;
+        if disp8 == 0 {
+            // Word displacement follows
+            let label = self.read_branch_target(pc_ref)?;
+            Some(match cond {
+                0 => M68kInst::Bra(label),
+                1 => M68kInst::Bsr(label),
+                c => M68kInst::Bcc(decode_cond(c), label),
+            })
         } else {
             let target = pc_ref.wrapping_add_signed(disp8 as u8 as i8 as i32);
-            self.label_for(target)
-        };
-        Some(match (op >> 8) & 0xF {
-            0 => M68kInst::Bra(label),
-            1 => M68kInst::Bsr(label),
-            c => M68kInst::Bcc(decode_cond(c), label),
-        })
+            let label = self.label_for(target);
+            Some(match cond {
+                0 => M68kInst::BraS(label),
+                1 => M68kInst::BsrS(label),
+                c => M68kInst::BccS(decode_cond(c), label),
+            })
+        }
     }
 
-    /// Group 8: OR, DIVS, DIVU.
+    /// Group 8: OR, DIVS, DIVU, SBCD.
     fn decode_group8(&mut self, op: u16) -> Option<M68kInst> {
+        if op & 0xF1F0 == 0x8100 {
+            // SBCD Dy,Dx (m=0) or -(Ay),-(Ax) (m=1)
+            let src = self.bcd_operand((op & 8) != 0, op & 7)?;
+            let dst = self.bcd_operand((op & 8) != 0, (op >> 9) & 7)?;
+            return Some(M68kInst::Sbcd(src, dst));
+        }
         if op & 0xF1C0 == 0x81C0 {
             let src = self.decode_ea((op >> 3) & 7, op & 7, Size::Word)?;
             return Some(M68kInst::Divs(src, data_reg((op >> 9) & 7)));
@@ -435,6 +534,12 @@ impl Cursor<'_> {
         }
         let size = decode_size((op >> 6) & 3)?;
         let dn = Operand::DataReg(data_reg((op >> 9) & 7));
+        // Dn -> <ea> direction. A register-direct destination in this
+        // direction has a second canonical encoding (ea -> Dn) that the
+        // model cannot distinguish; treat it as data so the bytes survive.
+        if op & 0x0100 != 0 && ((op >> 3) & 7) < 2 {
+            return None;
+        }
         let ea = self.decode_ea((op >> 3) & 7, op & 7, size)?;
         Some(if op & 0x0100 == 0 {
             M68kInst::Or(size, ea, dn)
@@ -457,6 +562,19 @@ impl Cursor<'_> {
                 M68kInst::Adda(size, src, an)
             } else {
                 M68kInst::Suba(size, src, an)
+            });
+        }
+
+        // ADDX/SUBX: memory-direction opmodes (4-6) with EA mode 0 (Dy,Dx)
+        // or mode 1 (-(Ay),-(Ax)), which are invalid as normal EAs.
+        if (4..=6).contains(&opmode) && (ea_mode == 0 || ea_mode == 1) {
+            let size = decode_size(opmode & 3)?;
+            let src = self.bcd_operand(ea_mode == 1, ea_reg)?;
+            let dst = self.bcd_operand(ea_mode == 1, (op >> 9) & 7)?;
+            return Some(if is_add {
+                M68kInst::Addx(size, src, dst)
+            } else {
+                M68kInst::Subx(size, src, dst)
             });
         }
 
@@ -490,6 +608,11 @@ impl Cursor<'_> {
                 Some(M68kInst::Cmpa(size, src, addr_reg(reg9)))
             }
             _ => {
+                // CMPM (Ay)+,(Ax)+: opmode 4-6 with EA mode 001
+                if ea_mode == 1 {
+                    let size = decode_size(opmode & 3)?;
+                    return Some(M68kInst::Cmpm(size, addr_reg(ea_reg), addr_reg(reg9)));
+                }
                 let size = decode_size(opmode & 3)?;
                 let ea = self.decode_ea(ea_mode, ea_reg, size)?;
                 Some(M68kInst::Eor(size, data_reg(reg9), ea))
@@ -497,8 +620,24 @@ impl Cursor<'_> {
         }
     }
 
-    /// Group C: EXG, MULS, MULU, AND.
+    /// Register (m=0) or predecrement (m=1) operand for the BCD and
+    /// extend-flag arithmetic forms.
+    fn bcd_operand(&self, m: bool, reg: u16) -> Option<Operand> {
+        Some(if m {
+            Operand::PreDec(addr_reg(reg))
+        } else {
+            Operand::DataReg(data_reg(reg))
+        })
+    }
+
+    /// Group C: EXG, MULS, MULU, AND, ABCD.
     fn decode_group_c(&mut self, op: u16) -> Option<M68kInst> {
+        if op & 0xF1F0 == 0xC100 {
+            // ABCD Dy,Dx (m=0) or -(Ay),-(Ax) (m=1)
+            let src = self.bcd_operand((op & 8) != 0, op & 7)?;
+            let dst = self.bcd_operand((op & 8) != 0, (op >> 9) & 7)?;
+            return Some(M68kInst::Abcd(src, dst));
+        }
         if op & 0xF1F8 == 0xC140 {
             return Some(M68kInst::Exg(
                 Reg::Data(data_reg((op >> 9) & 7)),
@@ -527,6 +666,11 @@ impl Cursor<'_> {
         }
         let size = decode_size((op >> 6) & 3)?;
         let dn = Operand::DataReg(data_reg((op >> 9) & 7));
+        // Dn -> <ea> direction; register-direct destinations are ambiguous
+        // with the canonical ea -> Dn form, so treat them as data.
+        if op & 0x0100 != 0 && ((op >> 3) & 7) < 2 {
+            return None;
+        }
         let ea = self.decode_ea((op >> 3) & 7, op & 7, size)?;
         Some(if op & 0x0100 == 0 {
             M68kInst::And(size, ea, dn)
@@ -535,9 +679,26 @@ impl Cursor<'_> {
         })
     }
 
-    /// Group E: shifts and rotates (register forms only).
+    /// Group E: shifts and rotates (register and memory forms).
     fn decode_shift(&mut self, op: u16) -> Option<M68kInst> {
-        let size = decode_size((op >> 6) & 3)?; // size 11 = memory form, not emitted
+        // Memory form (size bits 11): shift a word EA by one.
+        // Type is bits 11-9 (0=AS, 1=LS, 2=ROX, 3=RO), direction bit 8.
+        if (op >> 6) & 3 == 3 {
+            let ea = self.decode_ea((op >> 3) & 7, op & 7, Size::Word)?;
+            return match ((op >> 9) & 7, (op >> 8) & 1) {
+                (0, 1) => Some(M68kInst::AslMem(ea)),
+                (0, 0) => Some(M68kInst::AsrMem(ea)),
+                (1, 1) => Some(M68kInst::LslMem(ea)),
+                (1, 0) => Some(M68kInst::LsrMem(ea)),
+                (2, 1) => Some(M68kInst::RoxlMem(ea)),
+                (2, 0) => Some(M68kInst::RoxrMem(ea)),
+                (3, 1) => Some(M68kInst::RolMem(ea)),
+                (3, 0) => Some(M68kInst::RorMem(ea)),
+                _ => None, // reserved encoding
+            };
+        }
+
+        let size = decode_size((op >> 6) & 3)?;
         let left = (op >> 8) & 1 == 1;
         let count_field = (op >> 9) & 7;
         let reg = data_reg(op & 7);
@@ -557,9 +718,11 @@ impl Cursor<'_> {
             (0, false) => M68kInst::Asr(size, count, reg),
             (1, true) => M68kInst::Lsl(size, count, reg),
             (1, false) => M68kInst::Lsr(size, count, reg),
+            (2, true) => M68kInst::Roxl(size, count, reg),
+            (2, false) => M68kInst::Roxr(size, count, reg),
             (3, true) => M68kInst::Rol(size, count, reg),
             (3, false) => M68kInst::Ror(size, count, reg),
-            _ => return None, // ROXd not emitted
+            _ => return None,
         })
     }
 }
@@ -946,6 +1109,146 @@ mod tests {
         roundtrip(M68kInst::Scc(Cond::Lt, Operand::DataReg(DataReg::D3)));
     }
 
+    /// Foreign-ROM instruction extensions: everything added for the byte-exact
+    /// round trip must decode and re-encode to identical bytes.
+    #[test]
+    fn roundtrip_foreign_instruction_extensions() {
+        roundtrip(M68kInst::Negx(Size::Long, Operand::DataReg(DataReg::D0)));
+        roundtrip(M68kInst::Negx(Size::Byte, Operand::AddrInd(AddrReg::A1)));
+        roundtrip(M68kInst::Addx(
+            Size::Long,
+            Operand::DataReg(DataReg::D1),
+            Operand::DataReg(DataReg::D0),
+        ));
+        roundtrip(M68kInst::Subx(
+            Size::Byte,
+            Operand::PreDec(AddrReg::A1),
+            Operand::PreDec(AddrReg::A0),
+        ));
+        roundtrip(M68kInst::Abcd(
+            Operand::DataReg(DataReg::D1),
+            Operand::DataReg(DataReg::D0),
+        ));
+        roundtrip(M68kInst::Sbcd(
+            Operand::PreDec(AddrReg::A2),
+            Operand::PreDec(AddrReg::A0),
+        ));
+        roundtrip(M68kInst::Nbcd(Operand::AddrInd(AddrReg::A0)));
+        roundtrip(M68kInst::Cmpm(Size::Word, AddrReg::A1, AddrReg::A0));
+        roundtrip(M68kInst::Chk(Operand::AddrInd(AddrReg::A0), DataReg::D2));
+        roundtrip(M68kInst::Movep(Size::Word, true, 4, AddrReg::A1, DataReg::D0));
+        roundtrip(M68kInst::Movep(Size::Long, false, -2, AddrReg::A2, DataReg::D3));
+        roundtrip(M68kInst::MoveToCcr(Operand::DataReg(DataReg::D0)));
+        roundtrip(M68kInst::OriToCcr(0x27));
+        roundtrip(M68kInst::AndiToCcr(0xF8));
+        roundtrip(M68kInst::EoriToCcr(0x10));
+        roundtrip(M68kInst::OriToSr(0x0700));
+        roundtrip(M68kInst::AndiToSr(0xF8FF));
+        roundtrip(M68kInst::EoriToSr(0x0001));
+        roundtrip(M68kInst::MoveUspToAddr(AddrReg::A0));
+        roundtrip(M68kInst::MoveAddrToUsp(AddrReg::A3));
+        roundtrip(M68kInst::Tas(Operand::AddrInd(AddrReg::A0)));
+        roundtrip(M68kInst::Rtr);
+        roundtrip(M68kInst::Trapv);
+        roundtrip(M68kInst::Reset);
+        roundtrip(M68kInst::Illegal);
+        roundtrip(M68kInst::Trap(7));
+        roundtrip(M68kInst::Stop(0x2700));
+        roundtrip(M68kInst::Roxl(Size::Word, Operand::Imm(4), DataReg::D1));
+        roundtrip(M68kInst::Roxr(
+            Size::Long,
+            Operand::DataReg(DataReg::D2),
+            DataReg::D0,
+        ));
+        roundtrip(M68kInst::AslMem(Operand::AddrInd(AddrReg::A0)));
+        roundtrip(M68kInst::AsrMem(Operand::PostInc(AddrReg::A3)));
+        roundtrip(M68kInst::LslMem(Operand::Disp(4, AddrReg::A1)));
+        roundtrip(M68kInst::LsrMem(Operand::PreDec(AddrReg::A5)));
+        roundtrip(M68kInst::RolMem(Operand::AbsShort(0x10)));
+        roundtrip(M68kInst::RorMem(Operand::AbsLong(0x00C00000)));
+        roundtrip(M68kInst::RoxlMem(Operand::AddrInd(AddrReg::A2)));
+        roundtrip(M68kInst::RoxrMem(Operand::Disp(-2, AddrReg::A6)));
+    }
+
+    /// PC-relative and indexed operands must survive a decode/encode cycle
+    /// without being folded into absolute addresses.
+    #[test]
+    fn roundtrip_pc_relative_and_indexed_operands() {
+        roundtrip(M68kInst::Move(
+            Size::Byte,
+            Operand::PcDisp(-4),
+            Operand::DataReg(DataReg::D0),
+        ));
+        roundtrip(M68kInst::Move(
+            Size::Word,
+            Operand::PcIndexed(2, Reg::Data(DataReg::D2)),
+            Operand::DataReg(DataReg::D1),
+        ));
+        roundtrip(M68kInst::Lea(
+            Operand::PcIndexed(0, Reg::Addr(AddrReg::A3)),
+            AddrReg::A0,
+        ));
+        roundtrip(M68kInst::Jsr(Operand::PcIndexed(6, Reg::Data(DataReg::D0))));
+        roundtrip(M68kInst::Move(
+            Size::Byte,
+            Operand::Indexed(0, AddrReg::A0, Reg::Data(DataReg::D0)),
+            Operand::DataReg(DataReg::D3),
+        ));
+        roundtrip(M68kInst::Move(
+            Size::Word,
+            Operand::Indexed(-1, AddrReg::A5, Reg::Addr(AddrReg::A2)),
+            Operand::AddrInd(AddrReg::A1),
+        ));
+    }
+
+    /// Short (8-bit) branches encode with the displacement in the opword and
+    /// re-decode to the same short form.
+    #[test]
+    fn short_branches_roundtrip() {
+        let mut asm = Assembler::new(0x200);
+        let instructions = vec![
+            M68kInst::Label("loop".to_string()),
+            M68kInst::BraS("loop".to_string()),
+            M68kInst::BccS(Cond::Eq, "loop".to_string()),
+            M68kInst::BsrS("loop".to_string()),
+            M68kInst::BraS("end".to_string()),
+            M68kInst::Nop, // keeps `end` two bytes past the bra.s PC reference
+            M68kInst::Label("end".to_string()),
+        ];
+        let bytes = asm.assemble(&instructions).unwrap();
+        assert_eq!(bytes[0..2], [0x60, 0xFE]); // bra.s -2
+        assert_eq!(bytes[2..4], [0x67, 0xFC]); // beq.s: pc_ref 0x204 -> 0x200
+        assert_eq!(bytes[4..6], [0x61, 0xFA]); // bsr.s: pc_ref 0x206 -> 0x200
+        assert_eq!(bytes[6..8], [0x60, 0x02]); // bra.s: pc_ref 0x208 -> 0x20A
+
+        let listing = disassemble_listing(&bytes, 0x200, asm.symbols(), None);
+        assert!(listing.contains("bra.s   loop"), "listing:\n{listing}");
+        assert!(listing.contains("beq.s    loop"), "listing:\n{listing}");
+        assert!(listing.contains("bsr.s   loop"), "listing:\n{listing}");
+        assert!(listing.contains("bra.s   end"), "listing:\n{listing}");
+        assert!(
+            !listing.contains("bra.w"),
+            "short forms must not widen:\n{listing}"
+        );
+    }
+
+    /// MOVEP and immediate-to-CCR opcodes previously desynced the cursor by
+    /// consuming the wrong number of extension words.
+    #[test]
+    fn previously_desyncing_opcodes_stay_in_sync() {
+        // movep.w d0, 4(a1) = 0149 0004 ; then a nop must decode at +4
+        let code = [0x01, 0x49, 0x00, 0x04, 0x4E, 0x71];
+        let listing = disassemble_listing(&code, 0x200, &HashMap::new(), None);
+        assert!(listing.contains("movep.w d0, 4(a1)"), "listing:\n{listing}");
+        assert!(listing.contains("nop"), "listing:\n{listing}");
+
+        // ori.b #$23, ccr = 003C 0023, then a nop
+        let code = [0x00, 0x3C, 0x00, 0x23, 0x4E, 0x71];
+        let listing = disassemble_listing(&code, 0x200, &HashMap::new(), None);
+        assert!(listing.contains("ori.b   #$23, ccr"), "listing:\n{listing}");
+        assert!(listing.contains("nop"), "listing:\n{listing}");
+    }
+
     #[test]
     fn roundtrip_stack_and_jumps() {
         roundtrip(M68kInst::Link(AddrReg::A6, -64));
@@ -982,17 +1285,17 @@ mod tests {
             M68kInst::Nop,
             M68kInst::Bcc(Cond::Ne, "start".to_string()),
             M68kInst::Bra("start".to_string()),
-            M68kInst::Dbf(DataReg::D0, "start".to_string()),
+            M68kInst::Dbcc(Cond::False, DataReg::D0, "start".to_string()),
             M68kInst::Bsr("start".to_string()),
         ];
         let bytes = asm.assemble(&instructions).unwrap();
         let listing = disassemble_listing(&bytes, 0x200, asm.symbols(), None);
 
         assert!(listing.contains("start:"), "listing:\n{listing}");
-        assert!(listing.contains("bne     start"), "listing:\n{listing}");
-        assert!(listing.contains("bra     start"), "listing:\n{listing}");
-        assert!(listing.contains("dbf     d0, start"), "listing:\n{listing}");
-        assert!(listing.contains("bsr     start"), "listing:\n{listing}");
+        assert!(listing.contains("bne.w    start"), "listing:\n{listing}");
+        assert!(listing.contains("bra.w   start"), "listing:\n{listing}");
+        assert!(listing.contains("dbf    d0, start"), "listing:\n{listing}");
+        assert!(listing.contains("bsr.w   start"), "listing:\n{listing}");
     }
 
     #[test]

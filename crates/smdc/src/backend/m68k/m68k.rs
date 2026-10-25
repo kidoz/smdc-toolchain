@@ -101,7 +101,7 @@ impl Size {
 }
 
 /// M68k addressing mode operand
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Operand {
     /// Data register direct: Dn
     DataReg(DataReg),
@@ -115,10 +115,12 @@ pub enum Operand {
     PreDec(AddrReg),
     /// Displacement: d(An)
     Disp(i16, AddrReg),
-    /// Indexed: d(An,Dn)
-    Indexed(i8, AddrReg, DataReg),
-    /// PC-relative indexed (decoder-only): base+d(Dn), base pre-resolved
-    PcIndexed(i32, DataReg),
+    /// Indexed: d(An,Xn) with a data or address index register (brief format)
+    Indexed(i8, AddrReg, Reg),
+    /// PC-relative indexed (brief format): d(PC,Xn)
+    PcIndexed(i8, Reg),
+    /// PC-relative displacement: d(PC)
+    PcDisp(i16),
     /// Absolute short: addr.w
     AbsShort(i16),
     /// Absolute long: addr.l
@@ -141,7 +143,8 @@ impl std::fmt::Display for Operand {
             Operand::PreDec(r) => write!(f, "-({r})"),
             Operand::Disp(d, r) => write!(f, "{d}({r})"),
             Operand::Indexed(d, a, d2) => write!(f, "({d},{a},{d2})"),
-            Operand::PcIndexed(base, r) => write!(f, "${base:06X}+{r}"),
+            Operand::PcIndexed(d, r) => write!(f, "({d},pc,{r})"),
+            Operand::PcDisp(d) => write!(f, "({d},pc)"),
             Operand::AbsShort(a) => write!(f, "${a:04X}.w"),
             Operand::AbsLong(a) => write!(f, "${a:08X}"),
             Operand::Imm(v) => {
@@ -203,7 +206,7 @@ impl std::fmt::Display for Cond {
 }
 
 /// M68k instruction
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum M68kInst {
     // Data movement
     Move(Size, Operand, Operand),
@@ -227,7 +230,17 @@ pub enum M68kInst {
     Divs(Operand, DataReg), // Signed divide
     Divu(Operand, DataReg), // Unsigned divide
     Neg(Size, Operand),
-    Ext(Size, DataReg), // Sign extend
+    Negx(Size, Operand), // Negate with extend
+    Ext(Size, DataReg),  // Sign extend
+    // Extend-flag arithmetic (register or predecrement forms)
+    Addx(Size, Operand, Operand),
+    Subx(Size, Operand, Operand),
+    // BCD arithmetic (register or predecrement forms)
+    Abcd(Operand, Operand),
+    Sbcd(Operand, Operand),
+    Nbcd(Operand),
+    // Compare memory-to-memory: (Ay)+,(Ax)+
+    Cmpm(Size, AddrReg, AddrReg),
 
     // Logical
     And(Size, Operand, Operand),
@@ -238,13 +251,24 @@ pub enum M68kInst {
     Eori(Size, i32, Operand),
     Not(Size, Operand),
 
-    // Shift and rotate
+    // Shift and rotate (register forms)
     Lsl(Size, Operand, DataReg),
     Lsr(Size, Operand, DataReg),
     Asl(Size, Operand, DataReg),
     Asr(Size, Operand, DataReg),
     Rol(Size, Operand, DataReg),
     Ror(Size, Operand, DataReg),
+    Roxl(Size, Operand, DataReg),
+    Roxr(Size, Operand, DataReg),
+    // Memory-form shifts and rotates (word size, shift by one)
+    AslMem(Operand),
+    AsrMem(Operand),
+    LslMem(Operand),
+    LsrMem(Operand),
+    RolMem(Operand),
+    RorMem(Operand),
+    RoxlMem(Operand),
+    RoxrMem(Operand),
 
     // Bit manipulation
     Btst(Operand, Operand),
@@ -257,12 +281,19 @@ pub enum M68kInst {
     Cmpa(Size, Operand, AddrReg),
     Cmpi(Size, i32, Operand),
     Tst(Size, Operand),
+    Chk(Operand, DataReg), // CHK.W <ea>,Dn
 
-    // Branch
+    // Branch. The plain variants use a 16-bit displacement; the `S`
+    // variants use the 8-bit short form. Both re-encode exactly.
     Bra(String),
     Bsr(String),
     Bcc(Cond, String),
-    Dbf(DataReg, String), // Decrement and branch if not -1 (loop)
+    BraS(String),
+    BsrS(String),
+    BccS(Cond, String),
+    // Decrement and branch (16-bit displacement only). DBF is
+    // `Dbcc(Cond::False, ..)`.
+    Dbcc(Cond, DataReg, String),
 
     // Jump
     Jmp(Operand),
@@ -273,6 +304,7 @@ pub enum M68kInst {
     Unlk(AddrReg),
     Rts,
     Rte,
+    Rtr,
 
     // Multiple register
     Movem(Size, Vec<Reg>, Operand, bool), // bool = to_memory
@@ -283,6 +315,26 @@ pub enum M68kInst {
     // Misc
     Nop,
     Swap(DataReg),
+    // MOVE <ea>,CCR (word)
+    MoveToCcr(Operand),
+    // Immediate data to CCR/SR (raw extension word, high byte included)
+    OriToCcr(u16),
+    AndiToCcr(u16),
+    EoriToCcr(u16),
+    OriToSr(u16),
+    AndiToSr(u16),
+    EoriToSr(u16),
+    // MOVE USP,Ax / MOVE Ax,USP
+    MoveUspToAddr(AddrReg),
+    MoveAddrToUsp(AddrReg),
+    // MOVEP Dx,(d16,An) or (d16,An),Dx
+    Movep(Size, bool, i16, AddrReg, DataReg), // bool = to memory
+    Tas(Operand),
+    Trap(u8),
+    Trapv,
+    Stop(u16),
+    Reset,
+    Illegal,
 
     // Pseudo-instructions
     Label(String),
@@ -313,7 +365,14 @@ impl M68kInst {
             M68kInst::Divs(src, dst) => format!("    divs.w  {src}, {dst}"),
             M68kInst::Divu(src, dst) => format!("    divu.w  {src}, {dst}"),
             M68kInst::Neg(s, op) => format!("    neg.{s}  {op}"),
+            M68kInst::Negx(s, op) => format!("    negx.{s} {op}"),
             M68kInst::Ext(s, d) => format!("    ext.{s}  {d}"),
+            M68kInst::Addx(s, src, dst) => format!("    addx.{s} {src}, {dst}"),
+            M68kInst::Subx(s, src, dst) => format!("    subx.{s} {src}, {dst}"),
+            M68kInst::Abcd(src, dst) => format!("    abcd    {src}, {dst}"),
+            M68kInst::Sbcd(src, dst) => format!("    sbcd    {src}, {dst}"),
+            M68kInst::Nbcd(op) => format!("    nbcd    {op}"),
+            M68kInst::Cmpm(s, src, dst) => format!("    cmpm.{s} ({src})+, ({dst})+"),
 
             M68kInst::And(s, src, dst) => format!("    and.{s}  {src}, {dst}"),
             M68kInst::Andi(s, v, op) => format!("    andi.{s} #{v}, {op}"),
@@ -329,6 +388,16 @@ impl M68kInst {
             M68kInst::Asr(s, cnt, d) => format!("    asr.{s}  {cnt}, {d}"),
             M68kInst::Rol(s, cnt, d) => format!("    rol.{s}  {cnt}, {d}"),
             M68kInst::Ror(s, cnt, d) => format!("    ror.{s}  {cnt}, {d}"),
+            M68kInst::Roxl(s, cnt, d) => format!("    roxl.{s} {cnt}, {d}"),
+            M68kInst::Roxr(s, cnt, d) => format!("    roxr.{s} {cnt}, {d}"),
+            M68kInst::AslMem(op) => format!("    asl.w   {op}"),
+            M68kInst::AsrMem(op) => format!("    asr.w   {op}"),
+            M68kInst::LslMem(op) => format!("    lsl.w   {op}"),
+            M68kInst::LsrMem(op) => format!("    lsr.w   {op}"),
+            M68kInst::RolMem(op) => format!("    rol.w   {op}"),
+            M68kInst::RorMem(op) => format!("    ror.w   {op}"),
+            M68kInst::RoxlMem(op) => format!("    roxl.w  {op}"),
+            M68kInst::RoxrMem(op) => format!("    roxr.w  {op}"),
 
             M68kInst::Btst(bit, op) => format!("    btst    {bit}, {op}"),
             M68kInst::Bset(bit, op) => format!("    bset    {bit}, {op}"),
@@ -339,11 +408,15 @@ impl M68kInst {
             M68kInst::Cmpa(s, src, dst) => format!("    cmpa.{s} {src}, {dst}"),
             M68kInst::Cmpi(s, v, op) => format!("    cmpi.{s} #{v}, {op}"),
             M68kInst::Tst(s, op) => format!("    tst.{s}  {op}"),
+            M68kInst::Chk(src, dst) => format!("    chk.w   {src}, {dst}"),
 
-            M68kInst::Bra(l) => format!("    bra     {l}"),
-            M68kInst::Bsr(l) => format!("    bsr     {l}"),
-            M68kInst::Bcc(c, l) => format!("    b{c}     {l}"),
-            M68kInst::Dbf(d, l) => format!("    dbf     {d}, {l}"),
+            M68kInst::Bra(l) => format!("    bra.w   {l}"),
+            M68kInst::Bsr(l) => format!("    bsr.w   {l}"),
+            M68kInst::Bcc(c, l) => format!("    b{c}.w    {l}"),
+            M68kInst::BraS(l) => format!("    bra.s   {l}"),
+            M68kInst::BsrS(l) => format!("    bsr.s   {l}"),
+            M68kInst::BccS(c, l) => format!("    b{c}.s    {l}"),
+            M68kInst::Dbcc(c, d, l) => format!("    db{c}    {d}, {l}"),
 
             M68kInst::Jmp(op) => format!("    jmp     {op}"),
             M68kInst::Jsr(op) => format!("    jsr     {op}"),
@@ -352,6 +425,7 @@ impl M68kInst {
             M68kInst::Unlk(a) => format!("    unlk    {a}"),
             M68kInst::Rts => "    rts".to_string(),
             M68kInst::Rte => "    rte".to_string(),
+            M68kInst::Rtr => "    rtr".to_string(),
 
             M68kInst::Movem(s, regs, op, to_mem) => {
                 let reg_list: Vec<String> = regs.iter().map(|r| r.to_string()).collect();
@@ -366,6 +440,28 @@ impl M68kInst {
 
             M68kInst::Nop => "    nop".to_string(),
             M68kInst::Swap(d) => format!("    swap    {d}"),
+            M68kInst::MoveToCcr(op) => format!("    move.w  {op}, ccr"),
+            M68kInst::OriToCcr(v) => format!("    ori.b   #${v:X}, ccr"),
+            M68kInst::AndiToCcr(v) => format!("    andi.b  #${v:X}, ccr"),
+            M68kInst::EoriToCcr(v) => format!("    eori.b  #${v:X}, ccr"),
+            M68kInst::OriToSr(v) => format!("    ori.w   #${v:04X}, sr"),
+            M68kInst::AndiToSr(v) => format!("    andi.w  #${v:04X}, sr"),
+            M68kInst::EoriToSr(v) => format!("    eori.w  #${v:04X}, sr"),
+            M68kInst::MoveUspToAddr(a) => format!("    move    usp, {a}"),
+            M68kInst::MoveAddrToUsp(a) => format!("    move    {a}, usp"),
+            M68kInst::Movep(s, to_mem, d, a, r) => {
+                if *to_mem {
+                    format!("    movep.{s} {r}, {d}({a})")
+                } else {
+                    format!("    movep.{s} {d}({a}), {r}")
+                }
+            }
+            M68kInst::Tas(op) => format!("    tas     {op}"),
+            M68kInst::Trap(v) => format!("    trap    #{v}"),
+            M68kInst::Trapv => "    trapv".to_string(),
+            M68kInst::Stop(v) => format!("    stop    #${v:04X}"),
+            M68kInst::Reset => "    reset".to_string(),
+            M68kInst::Illegal => "    illegal".to_string(),
 
             M68kInst::Label(l) => format!("{l}:"),
             M68kInst::Comment(c) => format!("    ; {c}"),

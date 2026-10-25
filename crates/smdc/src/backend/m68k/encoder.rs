@@ -35,8 +35,19 @@ pub struct InstructionEncoder {
     pub position: u32,
     /// Symbol table for label resolution
     symbols: HashMap<String, u32>,
-    /// Pending relocations (position, symbol_name, is_relative)
-    relocations: Vec<(u32, String, bool)>,
+    /// Pending relocations (position, symbol_name, kind)
+    relocations: Vec<(u32, String, RelocKind)>,
+}
+
+/// Kind of a pending relocation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RelocKind {
+    /// 16-bit PC-relative displacement (branches, DBcc)
+    Word16,
+    /// 8-bit PC-relative displacement in the opword low byte (short branches)
+    Byte8,
+    /// 32-bit absolute address
+    Abs32,
 }
 
 impl InstructionEncoder {
@@ -84,8 +95,9 @@ impl InstructionEncoder {
             M68kInst::Link(_, _) => 4,
 
             // Branch instructions
-            M68kInst::Bra(_) | M68kInst::Bsr(_) | M68kInst::Bcc(_, _) => 4, // Use word displacement
-            M68kInst::Dbf(_, _) => 4,                                       // DBF is 4 bytes
+            M68kInst::Bra(_) | M68kInst::Bsr(_) | M68kInst::Bcc(_, _) => 4, // Word displacement
+            M68kInst::BraS(_) | M68kInst::BsrS(_) | M68kInst::BccS(_, _) => 2, // Short form
+            M68kInst::Dbcc(_, _, _) => 4,                                    // DBcc is 4 bytes
 
             // Variable length based on operands
             M68kInst::Move(size, src, dst) => {
@@ -124,9 +136,27 @@ impl InstructionEncoder {
             | M68kInst::Divs(src, _)
             | M68kInst::Divu(src, _) => 2 + self.operand_extension_size(src, Size::Word),
 
-            M68kInst::Neg(size, op) | M68kInst::Not(size, op) | M68kInst::Tst(size, op) => {
-                2 + self.operand_extension_size(op, *size)
-            }
+            M68kInst::Neg(size, op)
+            | M68kInst::Negx(size, op)
+            | M68kInst::Not(size, op)
+            | M68kInst::Tst(size, op) => 2 + self.operand_extension_size(op, *size),
+
+            M68kInst::Addx(..) | M68kInst::Subx(..) | M68kInst::Abcd(..) | M68kInst::Sbcd(..) => 2,
+            M68kInst::Cmpm(..) => 2,
+            M68kInst::Nbcd(op) | M68kInst::Tas(op) => 2 + self.operand_extension_size(op, Size::Byte),
+            M68kInst::MoveToCcr(op) => 2 + self.operand_extension_size(op, Size::Word),
+            M68kInst::Chk(src, _) => 2 + self.operand_extension_size(src, Size::Word),
+            M68kInst::OriToCcr(_)
+            | M68kInst::AndiToCcr(_)
+            | M68kInst::EoriToCcr(_)
+            | M68kInst::OriToSr(_)
+            | M68kInst::AndiToSr(_)
+            | M68kInst::EoriToSr(_) => 4,
+            M68kInst::MoveUspToAddr(_) | M68kInst::MoveAddrToUsp(_) => 2,
+            M68kInst::Movep(..) => 4,
+            M68kInst::Trap(_) | M68kInst::Trapv | M68kInst::Reset | M68kInst::Illegal => 2,
+            M68kInst::Stop(_) => 4,
+            M68kInst::Rtr => 2,
 
             M68kInst::Ext(_, _) => 2,
 
@@ -137,7 +167,9 @@ impl InstructionEncoder {
             | M68kInst::Asl(_, count, _)
             | M68kInst::Asr(_, count, _)
             | M68kInst::Rol(_, count, _)
-            | M68kInst::Ror(_, count, _) => {
+            | M68kInst::Ror(_, count, _)
+            | M68kInst::Roxl(_, count, _)
+            | M68kInst::Roxr(_, count, _) => {
                 // Each shift instruction is 2 bytes, but shifts > 8 need multiple instructions
                 match count {
                     Operand::Imm(n) => {
@@ -147,6 +179,15 @@ impl InstructionEncoder {
                     _ => 2,
                 }
             }
+
+            M68kInst::AslMem(op)
+            | M68kInst::AsrMem(op)
+            | M68kInst::LslMem(op)
+            | M68kInst::LsrMem(op)
+            | M68kInst::RolMem(op)
+            | M68kInst::RorMem(op)
+            | M68kInst::RoxlMem(op)
+            | M68kInst::RoxrMem(op) => 2 + self.operand_extension_size(op, Size::Word),
 
             M68kInst::Btst(bit, op)
             | M68kInst::Bset(bit, op)
@@ -165,7 +206,7 @@ impl InstructionEncoder {
 
             M68kInst::Exg(_, _) => 2,
 
-            M68kInst::Movem(_, _, op, _) => 4 + self.operand_extension_size(op, Size::Long),
+            M68kInst::Movem(size, _, op, _) => 4 + self.operand_extension_size(op, *size),
 
             M68kInst::Scc(_, op) => 2 + self.operand_extension_size(op, Size::Byte),
         }
@@ -217,6 +258,7 @@ impl InstructionEncoder {
             Operand::Disp(_, _) => 2,
             Operand::Indexed(_, _, _) => 2,
             Operand::PcIndexed(_, _) => 2, // brief-format extension word
+            Operand::PcDisp(_) => 2,
             Operand::AbsShort(_) => 2,
             Operand::AbsLong(_) => 4,
             Operand::Imm(_) => {
@@ -314,25 +356,38 @@ impl InstructionEncoder {
                 let base = 0x6000 | ((cond_code(cond) as u16) << 8);
                 self.encode_branch(base, label, &mut bytes)?;
             }
-            M68kInst::Dbf(reg, label) => {
-                // DBF Dn, label (decrement and branch if not -1)
-                // Encoding: 0101 0001 1100 1 rrr (rrr = register)
-                let opword = 0x51C8 | reg_num_data(reg) as u16;
+            M68kInst::BraS(label) => {
+                self.encode_branch_short(0x6000, label, &mut bytes)?;
+            }
+            M68kInst::BsrS(label) => {
+                self.encode_branch_short(0x6100, label, &mut bytes)?;
+            }
+            M68kInst::BccS(cond, label) => {
+                let base = 0x6000 | ((cond_code(cond) as u16) << 8);
+                self.encode_branch_short(base, label, &mut bytes)?;
+            }
+            M68kInst::Dbcc(cond, reg, label) => {
+                // DBcc Dn, label: 0101 ccc 1100 1 rrr + word displacement
+                let opword = 0x50C8
+                    | ((cond_code(cond) as u16) << 8)
+                    | reg_num_data(reg) as u16;
                 bytes.extend_from_slice(&opword.to_be_bytes());
 
-                // Calculate displacement or mark for relocation
                 if let Some(target) = self.symbols.get(label) {
                     let current = self.position + 2; // After the opword
                     let disp = (*target as i32) - (current as i32);
                     if !(-32768..=32767).contains(&disp) {
                         return Err(EncodeError::OutOfRange(format!(
-                            "DBF to {label} out of range"
+                            "DBcc to {label} out of range"
                         )));
                     }
                     bytes.extend_from_slice(&(disp as i16 as u16).to_be_bytes());
                 } else {
-                    self.relocations
-                        .push((self.position + 2, label.clone(), true));
+                    self.relocations.push((
+                        self.position + 2,
+                        label.clone(),
+                        RelocKind::Word16,
+                    ));
                     bytes.extend_from_slice(&0u16.to_be_bytes()); // Placeholder
                 }
             }
@@ -503,6 +558,137 @@ impl InstructionEncoder {
                 bytes.extend_from_slice(&ext);
             }
 
+            // NEGX
+            M68kInst::Negx(size, op) => {
+                let (mode, reg, ext) = self.encode_ea(op, *size)?;
+                let size_bits = size_bits(*size);
+                let opword =
+                    0x4000 | ((size_bits as u16) << 6) | ((mode as u16) << 3) | (reg as u16);
+                bytes.extend_from_slice(&opword.to_be_bytes());
+                bytes.extend_from_slice(&ext);
+            }
+
+            // ADDX / SUBX (register or predecrement forms)
+            M68kInst::Addx(size, src, dst) => {
+                self.encode_extend_op(0xD000, *size, src, dst, &mut bytes)?;
+            }
+            M68kInst::Subx(size, src, dst) => {
+                self.encode_extend_op(0x9000, *size, src, dst, &mut bytes)?;
+            }
+
+            // ABCD / SBCD (register or predecrement forms)
+            M68kInst::Abcd(src, dst) => {
+                self.encode_bcd(0xC100, src, dst, &mut bytes)?;
+            }
+            M68kInst::Sbcd(src, dst) => {
+                self.encode_bcd(0x8100, src, dst, &mut bytes)?;
+            }
+
+            // NBCD
+            M68kInst::Nbcd(op) => {
+                let (mode, reg, ext) = self.encode_ea(op, Size::Byte)?;
+                let opword = 0x4800 | ((mode as u16) << 3) | (reg as u16);
+                bytes.extend_from_slice(&opword.to_be_bytes());
+                bytes.extend_from_slice(&ext);
+            }
+
+            // CMPM (Ay)+,(Ax)+
+            M68kInst::Cmpm(size, src, dst) => {
+                let opword = 0xB100
+                    | ((reg_num_addr(dst) as u16) << 9)
+                    | (1 << 8)
+                    | ((size_bits(*size) as u16) << 6)
+                    | (1 << 3)
+                    | reg_num_addr(src) as u16;
+                bytes.extend_from_slice(&opword.to_be_bytes());
+            }
+
+            // MOVE <ea>,CCR
+            M68kInst::MoveToCcr(op) => {
+                let (mode, reg, ext) = self.encode_ea(op, Size::Word)?;
+                let opword = 0x44C0 | ((mode as u16) << 3) | (reg as u16);
+                bytes.extend_from_slice(&opword.to_be_bytes());
+                bytes.extend_from_slice(&ext);
+            }
+
+            // Immediate to CCR/SR
+            M68kInst::OriToCcr(v) => {
+                bytes.extend_from_slice(&0x003Cu16.to_be_bytes());
+                bytes.extend_from_slice(&v.to_be_bytes());
+            }
+            M68kInst::AndiToCcr(v) => {
+                bytes.extend_from_slice(&0x023Cu16.to_be_bytes());
+                bytes.extend_from_slice(&v.to_be_bytes());
+            }
+            M68kInst::EoriToCcr(v) => {
+                bytes.extend_from_slice(&0x0A3Cu16.to_be_bytes());
+                bytes.extend_from_slice(&v.to_be_bytes());
+            }
+            M68kInst::OriToSr(v) => {
+                bytes.extend_from_slice(&0x007Cu16.to_be_bytes());
+                bytes.extend_from_slice(&v.to_be_bytes());
+            }
+            M68kInst::AndiToSr(v) => {
+                bytes.extend_from_slice(&0x027Cu16.to_be_bytes());
+                bytes.extend_from_slice(&v.to_be_bytes());
+            }
+            M68kInst::EoriToSr(v) => {
+                bytes.extend_from_slice(&0x0A7Cu16.to_be_bytes());
+                bytes.extend_from_slice(&v.to_be_bytes());
+            }
+
+            // MOVE USP
+            M68kInst::MoveUspToAddr(a) => {
+                let opword = 0x4E60 | reg_num_addr(a) as u16;
+                bytes.extend_from_slice(&opword.to_be_bytes());
+            }
+            M68kInst::MoveAddrToUsp(a) => {
+                let opword = 0x4E68 | reg_num_addr(a) as u16;
+                bytes.extend_from_slice(&opword.to_be_bytes());
+            }
+
+            // CHK.W <ea>,Dn
+            M68kInst::Chk(src, dst) => {
+                let (mode, reg, ext) = self.encode_ea(src, Size::Word)?;
+                let opword =
+                    0x4180 | ((reg_num_data(dst) as u16) << 9) | ((mode as u16) << 3) | (reg as u16);
+                bytes.extend_from_slice(&opword.to_be_bytes());
+                bytes.extend_from_slice(&ext);
+            }
+
+            // MOVEP
+            M68kInst::Movep(size, to_mem, disp, an, dn) => {
+                let size_bit = if matches!(size, Size::Word) { 0x40 } else { 0 };
+                let dir_bit = if *to_mem { 0 } else { 0x80 };
+                let opword = 0x0100
+                    | ((reg_num_data(dn) as u16) << 9)
+                    | dir_bit
+                    | size_bit
+                    | 0x08
+                    | reg_num_addr(an) as u16;
+                bytes.extend_from_slice(&opword.to_be_bytes());
+                bytes.extend_from_slice(&(*disp as u16).to_be_bytes());
+            }
+
+            // TAS
+            M68kInst::Tas(op) => {
+                let (mode, reg, ext) = self.encode_ea(op, Size::Byte)?;
+                let opword = 0x4AC0 | ((mode as u16) << 3) | (reg as u16);
+                bytes.extend_from_slice(&opword.to_be_bytes());
+                bytes.extend_from_slice(&ext);
+            }
+
+            // System
+            M68kInst::Rtr => bytes.extend_from_slice(&0x4E77u16.to_be_bytes()),
+            M68kInst::Trapv => bytes.extend_from_slice(&0x4E76u16.to_be_bytes()),
+            M68kInst::Reset => bytes.extend_from_slice(&0x4E70u16.to_be_bytes()),
+            M68kInst::Illegal => bytes.extend_from_slice(&0x4AFCu16.to_be_bytes()),
+            M68kInst::Trap(v) => bytes.extend_from_slice(&(0x4E40 | *v as u16).to_be_bytes()),
+            M68kInst::Stop(v) => {
+                bytes.extend_from_slice(&0x4E72u16.to_be_bytes());
+                bytes.extend_from_slice(&v.to_be_bytes());
+            }
+
             // NOT
             M68kInst::Not(size, op) => {
                 let (mode, reg, ext) = self.encode_ea(op, *size)?;
@@ -585,6 +771,38 @@ impl InstructionEncoder {
             }
             M68kInst::Ror(size, count, reg) => {
                 self.encode_shift(0xE018, *size, count, reg, &mut bytes)?;
+            }
+            M68kInst::Roxl(size, count, reg) => {
+                self.encode_shift(0xE110, *size, count, reg, &mut bytes)?;
+            }
+            M68kInst::Roxr(size, count, reg) => {
+                self.encode_shift(0xE010, *size, count, reg, &mut bytes)?;
+            }
+
+            // Memory-form shifts and rotates (word EA, shift by one)
+            M68kInst::AslMem(op) => {
+                self.encode_shift_mem(0xE1C0, op, &mut bytes)?;
+            }
+            M68kInst::AsrMem(op) => {
+                self.encode_shift_mem(0xE0C0, op, &mut bytes)?;
+            }
+            M68kInst::LslMem(op) => {
+                self.encode_shift_mem(0xE3C0, op, &mut bytes)?;
+            }
+            M68kInst::LsrMem(op) => {
+                self.encode_shift_mem(0xE2C0, op, &mut bytes)?;
+            }
+            M68kInst::RoxlMem(op) => {
+                self.encode_shift_mem(0xE5C0, op, &mut bytes)?;
+            }
+            M68kInst::RoxrMem(op) => {
+                self.encode_shift_mem(0xE4C0, op, &mut bytes)?;
+            }
+            M68kInst::RolMem(op) => {
+                self.encode_shift_mem(0xE7C0, op, &mut bytes)?;
+            }
+            M68kInst::RorMem(op) => {
+                self.encode_shift_mem(0xE6C0, op, &mut bytes)?;
             }
 
             // Bit operations
@@ -705,9 +923,120 @@ impl InstructionEncoder {
         } else {
             // Mark for relocation
             self.relocations
-                .push((self.position + 2, label.to_string(), true));
+                .push((self.position + 2, label.to_string(), RelocKind::Word16));
             bytes.extend_from_slice(&0u16.to_be_bytes()); // Placeholder
         }
+        Ok(())
+    }
+
+    /// Encode a short (8-bit displacement) branch. The displacement lives in
+    /// the opword low byte; a displacement of zero is not representable in
+    /// this form (the hardware would read a word displacement instead).
+    fn encode_branch_short(
+        &mut self,
+        base: u16,
+        label: &str,
+        bytes: &mut Vec<u8>,
+    ) -> Result<(), EncodeError> {
+        if let Some(target) = self.symbols.get(label) {
+            let current = self.position + 2; // PC reference
+            let disp = (*target as i32) - (current as i32);
+            if disp == 0 || !(-128..=127).contains(&disp) {
+                return Err(EncodeError::OutOfRange(format!(
+                    "short branch to {label} out of range ({disp}) at ${:X}",
+                    self.position
+                )));
+            }
+            bytes.extend_from_slice(&(base | (disp as u8 as u16)).to_be_bytes());
+        } else {
+            self.relocations
+                .push((self.position, label.to_string(), RelocKind::Byte8));
+            bytes.extend_from_slice(&base.to_be_bytes());
+        }
+        Ok(())
+    }
+
+    /// Encode ADDX/SUBX (register or predecrement forms).
+    fn encode_extend_op(
+        &self,
+        base: u16,
+        size: Size,
+        src: &Operand,
+        dst: &Operand,
+        bytes: &mut Vec<u8>,
+    ) -> Result<(), EncodeError> {
+        let m = match (src, dst) {
+            (Operand::DataReg(_), Operand::DataReg(_)) => 0u16,
+            (Operand::PreDec(_), Operand::PreDec(_)) => 1u16,
+            _ => {
+                return Err(EncodeError::InvalidOperands(
+                    "ADDX/SUBX operands must be both registers or both predecrement".to_string(),
+                ))
+            }
+        };
+        let ry = match src {
+            Operand::DataReg(d) => reg_num_data(d),
+            Operand::PreDec(a) => reg_num_addr(a),
+            _ => 0,
+        };
+        let rx = match dst {
+            Operand::DataReg(d) => reg_num_data(d),
+            Operand::PreDec(a) => reg_num_addr(a),
+            _ => 0,
+        };
+        let opword = base
+            | 0x0100
+            | ((rx as u16) << 9)
+            | ((size_bits(size) as u16) << 6)
+            | (m << 3)
+            | ry as u16;
+        bytes.extend_from_slice(&opword.to_be_bytes());
+        Ok(())
+    }
+
+    /// Encode ABCD/SBCD (register or predecrement forms).
+    fn encode_bcd(
+        &self,
+        base: u16,
+        src: &Operand,
+        dst: &Operand,
+        bytes: &mut Vec<u8>,
+    ) -> Result<(), EncodeError> {
+        let m = match (src, dst) {
+            (Operand::DataReg(_), Operand::DataReg(_)) => 0u16,
+            (Operand::PreDec(_), Operand::PreDec(_)) => 1u16,
+            _ => {
+                return Err(EncodeError::InvalidOperands(
+                    "ABCD/SBCD operands must be both registers or both predecrement".to_string(),
+                ))
+            }
+        };
+        let ry = match src {
+            Operand::DataReg(d) => reg_num_data(d),
+            Operand::PreDec(a) => reg_num_addr(a),
+            _ => 0,
+        };
+        let rx = match dst {
+            Operand::DataReg(d) => reg_num_data(d),
+            Operand::PreDec(a) => reg_num_addr(a),
+            _ => 0,
+        };
+        let opword = base | ((rx as u16) << 9) | (m << 3) | ry as u16;
+        bytes.extend_from_slice(&opword.to_be_bytes());
+        Ok(())
+    }
+
+    /// Encode a memory-form shift or rotate (word EA, shift by one).
+    fn encode_shift_mem(
+        &self,
+        base: u16,
+        op: &Operand,
+        bytes: &mut Vec<u8>,
+    ) -> Result<(), EncodeError> {
+        let (mode, reg, ext) = self.encode_ea(op, Size::Word)?;
+        let opword = base | ((mode as u16) << 3) | (reg as u16);
+        bytes.extend_from_slice(&opword.to_be_bytes());
+        bytes.extend_from_slice(&ext);
         Ok(())
     }
 
@@ -1056,10 +1385,20 @@ impl InstructionEncoder {
                 (0b101, reg_num_addr(a))
             }
             Operand::Indexed(d, a, idx) => {
-                // Brief extension word: D/A | reg | W/L | scale | 0 | disp
-                let brief = ((reg_num_data(idx) as u16) << 12) | ((*d as u8 as u16) & 0xFF);
+                // Brief extension word: D/A | reg | 0 0 00 | 0 | disp
+                let brief = index_brief(idx, *d);
                 ext.extend_from_slice(&brief.to_be_bytes());
                 (0b110, reg_num_addr(a))
+            }
+            Operand::PcIndexed(d, idx) => {
+                // Brief extension word off the PC
+                let brief = index_brief(idx, *d);
+                ext.extend_from_slice(&brief.to_be_bytes());
+                (0b111, 0b011)
+            }
+            Operand::PcDisp(d) => {
+                ext.extend_from_slice(&(*d as u16).to_be_bytes());
+                (0b111, 0b010)
             }
             Operand::AbsShort(addr) => {
                 ext.extend_from_slice(&(*addr as u16).to_be_bytes());
@@ -1096,20 +1435,13 @@ impl InstructionEncoder {
                     "SR cannot be encoded as EA".to_string(),
                 ));
             }
-            Operand::PcIndexed(..) => {
-                // Decoder-only operand (foreign ROMs); the encoder emits
-                // absolute addressing instead.
-                return Err(EncodeError::InvalidOperands(
-                    "PcIndexed cannot be encoded".to_string(),
-                ));
-            }
         };
 
         Ok((mode, reg, ext))
     }
 
     /// Get pending relocations
-    pub fn relocations(&self) -> &[(u32, String, bool)] {
+    pub fn relocations(&self) -> &[(u32, String, RelocKind)] {
         &self.relocations
     }
 }
@@ -1154,6 +1486,15 @@ fn size_bits(size: Size) -> u8 {
         Size::Word => 0b01,
         Size::Long => 0b10,
     }
+}
+
+/// Brief-format index extension word: D/A | reg | 0 0 scale(00) | 0 | disp8.
+fn index_brief(idx: &Reg, d: i8) -> u16 {
+    let reg_bits = match idx {
+        Reg::Data(r) => (reg_num_data(r) as u16) << 12,
+        Reg::Addr(r) => 0x8000 | ((reg_num_addr(r) as u16) << 12),
+    };
+    reg_bits | ((d as u8 as u16) & 0xFF)
 }
 
 fn cond_code(cond: &Cond) -> u8 {

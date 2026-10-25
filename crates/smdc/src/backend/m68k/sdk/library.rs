@@ -293,7 +293,7 @@ impl SdkLibraryGenerator {
                 Operand::PostInc(AddrReg::A0),
                 Operand::AbsLong(VDP_DATA),
             ),
-            M68kInst::Dbf(DataReg::D1, loop_label),
+            M68kInst::Dbcc(Cond::False, DataReg::D1, loop_label),
             M68kInst::Label(".vlp_done".to_string()),
             M68kInst::Unlk(AddrReg::A6),
             M68kInst::Rts,
@@ -356,7 +356,7 @@ impl SdkLibraryGenerator {
                 Operand::PostInc(AddrReg::A0),
                 Operand::AbsLong(VDP_DATA),
             ),
-            M68kInst::Dbf(DataReg::D1, loop_label),
+            M68kInst::Dbcc(Cond::False, DataReg::D1, loop_label),
             M68kInst::Label(".vlt_done".to_string()),
             M68kInst::Unlk(AddrReg::A6),
             M68kInst::Rts,
@@ -507,7 +507,7 @@ impl SdkLibraryGenerator {
             M68kInst::Label(loop_label.clone()),
             // CLR reads the data port first, freezing the VDP mid-write; use MOVE #0
             M68kInst::Move(Size::Word, Operand::Imm(0), Operand::AbsLong(VDP_DATA)),
-            M68kInst::Dbf(DataReg::D0, loop_label),
+            M68kInst::Dbcc(Cond::False, DataReg::D0, loop_label),
             M68kInst::Rts,
         ]
     }
@@ -529,7 +529,7 @@ impl SdkLibraryGenerator {
             M68kInst::Label(loop_label.clone()),
             // CLR reads the data port first, freezing the VDP mid-write; use MOVE #0
             M68kInst::Move(Size::Word, Operand::Imm(0), Operand::AbsLong(VDP_DATA)),
-            M68kInst::Dbf(DataReg::D0, loop_label),
+            M68kInst::Dbcc(Cond::False, DataReg::D0, loop_label),
             M68kInst::Rts,
         ]
     }
@@ -782,7 +782,7 @@ impl SdkLibraryGenerator {
             M68kInst::Lsl(Size::Long, Operand::Imm(2), DataReg::D0),
             M68kInst::Move(
                 Size::Long,
-                Operand::Indexed(0, AddrReg::A0, DataReg::D0),
+                Operand::Indexed(0, AddrReg::A0, Reg::Data(DataReg::D0)),
                 Operand::DataReg(DataReg::D4),
             ),
             // Get channel
@@ -1338,7 +1338,7 @@ impl SdkLibraryGenerator {
             // Y = 0 (offscreen), size/link = 0, attr = 0, X = 0
             M68kInst::Move(Size::Long, Operand::Imm(0), Operand::AbsLong(VDP_DATA)),
             M68kInst::Move(Size::Long, Operand::Imm(0), Operand::AbsLong(VDP_DATA)),
-            M68kInst::Dbf(DataReg::D0, loop_label),
+            M68kInst::Dbcc(Cond::False, DataReg::D0, loop_label),
             M68kInst::Rts,
         ]
     }
@@ -1783,7 +1783,7 @@ impl SdkLibraryGenerator {
                 Operand::PostInc(AddrReg::A0),
                 Operand::PostInc(AddrReg::A1),
             ),
-            M68kInst::Dbf(DataReg::D0, loop_label),
+            M68kInst::Dbcc(Cond::False, DataReg::D0, loop_label),
             M68kInst::Label(".mcpy_done".to_string()),
             M68kInst::Unlk(AddrReg::A6),
             M68kInst::Rts,
@@ -1819,7 +1819,7 @@ impl SdkLibraryGenerator {
                 Operand::DataReg(DataReg::D1),
                 Operand::PostInc(AddrReg::A0),
             ),
-            M68kInst::Dbf(DataReg::D0, loop_label),
+            M68kInst::Dbcc(Cond::False, DataReg::D0, loop_label),
             M68kInst::Label(".mset_done".to_string()),
             M68kInst::Unlk(AddrReg::A6),
             M68kInst::Rts,
@@ -2391,7 +2391,7 @@ impl SdkLibraryGenerator {
                 Operand::PostInc(AddrReg::A1),
             ),
             M68kInst::Addq(Size::Long, 2, Operand::AddrReg(AddrReg::A0)),
-            M68kInst::Dbf(DataReg::D0, loop_label),
+            M68kInst::Dbcc(Cond::False, DataReg::D0, loop_label),
             M68kInst::Label(".srd_done".to_string()),
             M68kInst::Unlk(AddrReg::A6),
             M68kInst::Rts,
@@ -2439,7 +2439,7 @@ impl SdkLibraryGenerator {
                 Operand::AddrInd(AddrReg::A1),
             ),
             M68kInst::Addq(Size::Long, 2, Operand::AddrReg(AddrReg::A1)),
-            M68kInst::Dbf(DataReg::D0, loop_label),
+            M68kInst::Dbcc(Cond::False, DataReg::D0, loop_label),
             M68kInst::Label(".swr_done".to_string()),
             M68kInst::Unlk(AddrReg::A6),
             M68kInst::Rts,

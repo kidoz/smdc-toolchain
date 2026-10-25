@@ -36,6 +36,25 @@ impl From<EncodeError> for AssemblyError {
 /// RAM base address for data section
 const DATA_RAM_BASE: u32 = 0x00FF8000;
 
+/// One item of a parsed assembly source file.
+///
+/// The full-coverage disassembler emits this grammar and the text parser
+/// (`asmparse`) reads it back, so a disassembled ROM can be reassembled
+/// byte-for-byte.
+#[derive(Debug, Clone)]
+pub enum AsmItem {
+    /// A machine instruction.
+    Inst(M68kInst),
+    /// A label bound to the current position.
+    Label(String),
+    /// Raw data bytes (`dc.b` / `dc.w` / `dc.l`).
+    Data(Vec<u8>),
+    /// Set the output position; the gap (if any) is filled with 0xFF.
+    Org(u32),
+    /// Final image size; the image is 0xFF-padded up to it.
+    RomEnd(u32),
+}
+
 /// Two-pass assembler for M68k instructions
 pub struct Assembler {
     /// Symbol table (label -> address)
@@ -93,6 +112,84 @@ impl Assembler {
 
         // Pass 2: Encode all instructions with resolved addresses
         self.encode_pass(instructions)
+    }
+
+    /// Assemble parsed source items (instructions, data, orgs) into a flat
+    /// image starting at address 0. Gaps from `Org` and the `RomEnd` size
+    /// are filled with 0xFF, matching ROM padding conventions.
+    pub fn assemble_items(&mut self, items: &[AsmItem]) -> Result<Vec<u8>, AssemblyError> {
+        // Pass 1: lay out labels.
+        self.symbols.clear();
+        let sizer = InstructionEncoder::new();
+        let mut position = 0u32;
+        for item in items {
+            match item {
+                AsmItem::Label(name) => {
+                    if self.symbols.contains_key(name) {
+                        return Err(AssemblyError::DuplicateSymbol(name.clone()));
+                    }
+                    self.symbols.insert(name.clone(), position);
+                }
+                AsmItem::Data(bytes) => position += bytes.len() as u32,
+                AsmItem::Inst(inst) => position += sizer.instruction_size(inst) as u32,
+                AsmItem::Org(addr) => position = position.max(*addr),
+                AsmItem::RomEnd(_) => {}
+            }
+        }
+
+        // Pass 2: encode with the resolved symbol table.
+        let mut encoder = InstructionEncoder::new();
+        for (name, &addr) in &self.symbols {
+            let saved_pos = encoder.position;
+            encoder.position = addr;
+            encoder.define_symbol(name);
+            encoder.position = saved_pos;
+        }
+
+        let mut output: Vec<u8> = Vec::new();
+        let verify = std::env::var("SMDC_VERIFY_LAYOUT").is_ok();
+        let mut layout_pos = 0u32;
+        let mut layout_idx = 0usize;
+        for item in items {
+            match item {
+                AsmItem::Data(bytes) => {
+                    output.extend_from_slice(bytes);
+                    encoder.position += bytes.len() as u32;
+                    layout_pos += bytes.len() as u32;
+                }
+                AsmItem::Org(addr) => {
+                    while (output.len() as u32) < *addr {
+                        output.push(0xFF);
+                        encoder.position += 1;
+                        layout_pos += 1;
+                    }
+                }
+                AsmItem::Inst(inst) => {
+                    let bytes = encoder.encode(inst)?;
+                    output.extend_from_slice(&bytes);
+                    layout_pos += sizer.instruction_size(inst) as u32;
+                    if verify && output.len() as u32 != layout_pos {
+                        eprintln!(
+                            "layout divergence at item {layout_idx} {inst:?}: encoded {} bytes, layout said {}",
+                            bytes.len(),
+                            sizer.instruction_size(inst)
+                        );
+                        layout_pos = output.len() as u32; // resync to find more
+                    }
+                }
+                AsmItem::Label(_) | AsmItem::RomEnd(_) => {}
+            }
+            layout_idx += 1;
+        }
+
+        if let Some(AsmItem::RomEnd(size)) = items.iter().rev().find(|i| matches!(i, AsmItem::RomEnd(_))) {
+            while (output.len() as u32) < *size {
+                output.push(0xFF);
+            }
+        }
+
+        self.apply_relocations(&mut output, &encoder, 0)?;
+        Ok(output)
     }
 
     /// Pass 1: Calculate the address of each label
@@ -186,7 +283,7 @@ impl Assembler {
         }
 
         // Apply relocations
-        self.apply_relocations(&mut output, &encoder)?;
+        self.apply_relocations(&mut output, &encoder, self.base_address)?;
 
         Ok(output)
     }
@@ -211,39 +308,58 @@ impl Assembler {
         &self,
         output: &mut [u8],
         encoder: &InstructionEncoder,
+        base_address: u32,
     ) -> Result<(), AssemblyError> {
-        for (pos, symbol, is_relative) in encoder.relocations() {
+        use super::encoder::RelocKind;
+        for (pos, symbol, kind) in encoder.relocations() {
             let target = self
                 .symbols
                 .get(symbol)
                 .ok_or_else(|| AssemblyError::UnresolvedSymbol(symbol.clone()))?;
 
-            let offset = (*pos - self.base_address) as usize;
+            let offset = (*pos - base_address) as usize;
 
-            if *is_relative {
-                // PC-relative displacement
-                let pc = *pos; // PC is at the extension word
-                let disp = (*target as i32) - (pc as i32);
+            match kind {
+                RelocKind::Word16 => {
+                    // PC-relative word displacement; PC is at the extension
+                    // word position.
+                    let pc = *pos;
+                    let disp = (*target as i32) - (pc as i32);
 
-                if !(-32768..=32767).contains(&disp) {
-                    return Err(AssemblyError::Encode(EncodeError::OutOfRange(format!(
-                        "branch displacement {disp} out of range"
-                    ))));
+                    if !(-32768..=32767).contains(&disp) {
+                        return Err(AssemblyError::Encode(EncodeError::OutOfRange(format!(
+                            "branch displacement {disp} out of range"
+                        ))));
+                    }
+
+                    let disp_bytes = (disp as i16).to_be_bytes();
+                    if offset + 1 < output.len() {
+                        output[offset] = disp_bytes[0];
+                        output[offset + 1] = disp_bytes[1];
+                    }
                 }
-
-                let disp_bytes = (disp as i16).to_be_bytes();
-                if offset + 1 < output.len() {
-                    output[offset] = disp_bytes[0];
-                    output[offset + 1] = disp_bytes[1];
+                RelocKind::Byte8 => {
+                    // 8-bit PC-relative displacement in the opword low byte;
+                    // `pos` points at the opword.
+                    let pc = *pos + 2;
+                    let disp = (*target as i32) - (pc as i32);
+                    if disp == 0 || !(-128..=127).contains(&disp) {
+                        return Err(AssemblyError::Encode(EncodeError::OutOfRange(format!(
+                            "short branch displacement {disp} out of range"
+                        ))));
+                    }
+                    if offset + 1 < output.len() {
+                        output[offset + 1] = disp as i8 as u8;
+                    }
                 }
-            } else {
-                // Absolute address
-                let addr_bytes = target.to_be_bytes();
-                if offset + 3 < output.len() {
-                    output[offset] = addr_bytes[0];
-                    output[offset + 1] = addr_bytes[1];
-                    output[offset + 2] = addr_bytes[2];
-                    output[offset + 3] = addr_bytes[3];
+                RelocKind::Abs32 => {
+                    let addr_bytes = target.to_be_bytes();
+                    if offset + 3 < output.len() {
+                        output[offset] = addr_bytes[0];
+                        output[offset + 1] = addr_bytes[1];
+                        output[offset + 2] = addr_bytes[2];
+                        output[offset + 3] = addr_bytes[3];
+                    }
                 }
             }
         }
@@ -378,14 +494,14 @@ mod tests {
         assert_eq!(bytes[2..4], [0x00, 0x04]); // displacement +4
     }
 
-    /// Forward DBF (loop bottom). Verifies the 0x51C8 base + displacement math
+    /// Forward DBcc (loop bottom). Verifies the 0x51C8 base + displacement math
     /// for the resolved-symbol path that the codegen emits for `for`/`while` loops.
     #[test]
     fn test_forward_dbf_displacement() {
         let mut asm = Assembler::new(0x200);
         let instructions = vec![
             // 0x200: dbf d0, loop_top (4 bytes)
-            M68kInst::Dbf(DataReg::D0, "loop_top".to_string()),
+            M68kInst::Dbcc(Cond::False, DataReg::D0, "loop_top".to_string()),
             // 0x204: nop (2 bytes, filler)
             M68kInst::Nop,
             // 0x206: loop_top label
@@ -395,7 +511,7 @@ mod tests {
 
         let bytes = asm.assemble(&instructions).unwrap();
 
-        // DBcc opword = 0x51C8 | reg. D0 -> 0x51C8.
+        // DBcc opword = 0x50C8 | (cond << 8) | reg. Cond::False = 1, D0 -> 0x51C8.
         // PC ref = 0x200 + 2 = 0x202, target = 0x206, disp = +4 = 0x0004.
         assert_eq!(bytes[0..2], [0x51, 0xC8]); // DBF D0 opword
         assert_eq!(bytes[2..4], [0x00, 0x04]); // displacement +4

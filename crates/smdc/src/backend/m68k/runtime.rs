@@ -151,7 +151,7 @@ fn udivsi3() -> Vec<M68kInst> {
         M68kInst::Sub(Size::Long, d(D1), d(D0)),
         M68kInst::Addq(Size::Long, 1, d(D2)), // quotient bit
         label(SKIP),
-        M68kInst::Dbf(D3, LOOP.to_string()),
+        M68kInst::Dbcc(Cond::False, D3, LOOP.to_string()),
         M68kInst::Move(Size::Long, d(D0), d(D1)),
         M68kInst::Move(Size::Long, d(D2), d(D0)),
         label(DONE),
