@@ -14,6 +14,8 @@ of four needs:
   [Build your first Mega Drive ROM](tutorials/build-your-first-rom.md)
 - **Have a MIDI file?**
   [Render a MIDI file to a ROM](how-to/render-a-midi-file-to-rom.md)
+- **Have a ROM to inspect or patch?**
+  [Round-trip a ROM through assembly](how-to/roundtrip-a-rom.md)
 - **Need exact behavior or limits?**
   [MIDI sound driver reference](reference/midi-sound-driver.md)
 - **Want the design story?**

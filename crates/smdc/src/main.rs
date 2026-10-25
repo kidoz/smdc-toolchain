@@ -3,7 +3,10 @@
 //! Usage: smdc [OPTIONS] <input> -o <output>
 
 use clap::{Parser as ClapParser, ValueEnum};
-use smd_compiler::backend::m68k::{decompile_rom, disassemble_listing, parse_sym_file};
+use smd_compiler::backend::m68k::{
+    decompile_rom, disassemble_full, disassemble_listing, parse_assembly, parse_sym_file,
+    Assembler,
+};
 use smd_compiler::backend::rom::verify_checksum;
 use smd_compiler::backend::{BackendConfig, M68kBackend, OutputFormat, RomBackend, RomConfig};
 use smd_compiler::common::DiagnosticReporter;
@@ -105,6 +108,12 @@ struct Args {
     #[arg(long)]
     disasm: bool,
 
+    /// With --disasm: emit a full-coverage re-assemblable listing instead
+    /// of the annotated reading listing. The output .s can be rebuilt with
+    /// `smdc file.s -o file.gen` into a byte-identical ROM.
+    #[arg(long, requires = "disasm")]
+    full: bool,
+
     /// Decompile a ROM binary (.bin) to C-like pseudo-source instead of
     /// compiling. Functions, parameters and locals are recovered from the
     /// codegen's frame layout; if/else and loop structure is reconstructed
@@ -161,6 +170,16 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     }
     if args.decompile {
         return run_decompile(args);
+    }
+
+    // Assembly source in, ROM image out.
+    let is_asm_input = args
+        .input
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e == "s" || e == "asm");
+    if is_asm_input {
+        return run_assemble(args);
     }
 
     let language = detect_language(&args.input, args.lang);
@@ -394,7 +413,11 @@ fn run_disasm(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         HashMap::new()
     };
 
-    let listing = rom_listing(&rom, &args.input.display().to_string(), &symbols);
+    let listing = if args.full {
+        disassemble_full(&rom, &symbols)
+    } else {
+        rom_listing(&rom, &args.input.display().to_string(), &symbols)
+    };
 
     match &args.output {
         Some(path) => {
@@ -438,6 +461,32 @@ fn run_decompile(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         None => print!("{source}"),
+    }
+    Ok(())
+}
+
+/// Assemble a full-coverage `.s` listing back into a ROM image.
+fn run_assemble(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
+    let source = fs::read_to_string(&args.input)?;
+    let items = parse_assembly(&source).map_err(|e| format!("parse error: {e}"))?;
+    let mut assembler = Assembler::new(0);
+    let image = assembler
+        .assemble_items(&items)
+        .map_err(|e| format!("assembly error: {e}"))?;
+
+    let output_path = args.output.clone().unwrap_or_else(|| {
+        let mut path = args.input.clone();
+        path.set_extension("gen");
+        path
+    });
+    fs::write(&output_path, &image)?;
+    if args.verbose {
+        eprintln!(
+            "Assembled {} -> {} ({} bytes)",
+            args.input.display(),
+            output_path.display(),
+            image.len()
+        );
     }
     Ok(())
 }

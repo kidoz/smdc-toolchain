@@ -4,18 +4,22 @@
 //! targeting the Sega Megadrive/Genesis console.
 
 mod assembler;
+mod asmparse;
 mod decomp;
 mod disasm;
 mod emit;
 mod encoder;
+mod fullasm;
 mod m68k;
 mod runtime;
 pub mod sdk;
 mod symfile;
 
-pub use assembler::Assembler;
+pub use assembler::{Assembler, AsmItem};
+pub use asmparse::{parse_assembly, parse_inst_line, ParseError};
 pub use decomp::decompile_rom;
 pub use disasm::disassemble_listing;
+pub use fullasm::disassemble_full;
 pub use emit::CodeGenerator;
 pub use encoder::{EncodeError, InstructionEncoder};
 pub use m68k::*;
