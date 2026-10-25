@@ -4,7 +4,9 @@
 //! original image byte for byte. The ROM is copyrighted and lives outside
 //! version control; the test skips gracefully when it is absent.
 
-use smd_compiler::backend::m68k::{disassemble_full, parse_assembly, Assembler};
+use smd_compiler::backend::m68k::{decompile_rom, disassemble_full, parse_assembly, Assembler};
+use smd_compiler::frontend::{CFrontend, CompileContext, Frontend, FrontendConfig};
+use smd_compiler::DiagnosticReporter;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -89,4 +91,69 @@ fn tetris_round_trips_byte_exactly() {
         "round trip is not byte-exact\n{}",
         diff_report(&rebuilt, &original, 8)
     );
+}
+
+/// The pseudo-C view of a foreign ROM must stay valid C: balanced and
+/// compilable through the smdc C frontend.
+#[test]
+fn tetris_decompiles_to_compiling_pseudo_c() {
+    let Some(path) = tetris_rom_path() else {
+        eprintln!("skipping: Tetris ROM not found (set SMDC_TETRIS_ROM to override)");
+        return;
+    };
+    let Ok(original) = std::fs::read(&path) else {
+        eprintln!("skipping: cannot read {}", path.display());
+        return;
+    };
+
+    let source = decompile_rom(&original, &HashMap::new(), None);
+
+    assert_eq!(
+        source.matches('{').count(),
+        source.matches('}').count(),
+        "unbalanced braces in decompiled source"
+    );
+
+    // Foreign-ROM recoveries: named hardware registers, typed RAM globals
+    // (absolute-short addresses sign-extended into work RAM), interrupt
+    // handlers without phantom arguments, register-convention signatures,
+    // and return-value assignment at call sites.
+    assert!(source.contains("#define VDP_CTRL"), "hardware registers not named");
+    assert!(
+        source.contains("#define ram_FFF6"),
+        "RAM globals not named:\n{}",
+        &source[..source.len().min(2000)]
+    );
+    assert!(
+        source.contains("void F_00031A(void)"),
+        "VBlank handler must not take arguments"
+    );
+    assert!(
+        source.contains("int F_0005FA(int d1, int d0)"),
+        "register arguments not reconstructed"
+    );
+    assert!(
+        source.contains("d0 = F_"),
+        "return values not assigned at call sites"
+    );
+
+    let mut reporter = DiagnosticReporter::new();
+    let file_id = reporter.add_file("tetris.c", &source);
+    let context = CompileContext::new("tetris.c".to_string(), file_id, &reporter);
+    let compiled = CFrontend::new().compile(&source, &context, &FrontendConfig::default());
+    if let Err(e) = &compiled {
+        // Show the offending construct for census-style iteration.
+        let msg = format!("{e}");
+        eprintln!("decompiled pseudo-C failed to compile: {msg}");
+        for line in source.lines() {
+            let l = line.trim();
+            if !l.is_empty()
+                && (msg.contains("line") || true)
+                && (l.contains("(*)") || l.contains("*--"))
+            {
+                eprintln!("  suspect: {l}");
+            }
+        }
+    }
+    compiled.expect("decompiled pseudo-C must compile");
 }

@@ -65,3 +65,20 @@ file exists (set `SMDC_TETRIS_ROM` to point at another ROM).
   rebuilt ROM stays byte-identical, at the cost of showing them as data.
 - The listing grammar is exactly what the toolchain emits; see
   `crates/smdc/src/backend/m68k/asmparse.rs` for the accepted syntax.
+
+## Reading the ROM as C
+
+For a pseudo-C view instead of assembly:
+
+```bash
+./target/debug/smdc game.gen --decompile -o game.c
+```
+
+The decompiler reconstructs foreign calling conventions: functions without
+an A6 frame get register arguments from a read-before-write analysis
+(`int F_003076(int a0)`), call sites assign return values
+(`d0 = F_000612();`), hardware registers render as `VDP_CTRL`-style defines,
+and work-RAM globals become typed `ram_FFFFxx` defines with absolute-short
+addresses sign-extended. Interrupt handlers entered from the vector table
+take no arguments. The output is meant for reading; recompiling it is only
+guaranteed for ROMs produced by this toolchain.

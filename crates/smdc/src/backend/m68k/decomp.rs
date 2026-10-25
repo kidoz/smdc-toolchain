@@ -53,6 +53,20 @@ struct Decompiler<'a> {
     /// Address -> user-visible symbol name (functions and data).
     names: HashMap<u32, String>,
     data_start: Option<u32>,
+    /// RAM globals (work-RAM absolute addresses) with their access size.
+    /// `None` marks an address accessed at conflicting sizes (rendered raw).
+    ram_sizes: BTreeMap<u32, Option<Size>>,
+    /// Hardware registers referenced by the code (address set).
+    hw_used: BTreeSet<u32>,
+    /// Function start -> register argument names (foreign register
+    /// conventions), in first-read order. Functions with an A6 frame use
+    /// frame parameters instead.
+    func_args: BTreeMap<u32, Vec<String>>,
+    /// Functions whose return value in d0 is live at some `rts`.
+    func_ret: BTreeSet<u32>,
+    /// Functions entered from the exception vector table (interrupt
+    /// handlers and the reset entry): never modeled with arguments.
+    hw_vector_funcs: BTreeSet<u32>,
 }
 
 impl<'a> Decompiler<'a> {
@@ -80,6 +94,11 @@ impl<'a> Decompiler<'a> {
             labels: BTreeSet::new(),
             names,
             data_start,
+            ram_sizes: BTreeMap::new(),
+            hw_used: BTreeSet::new(),
+            func_args: BTreeMap::new(),
+            func_ret: BTreeSet::new(),
+            hw_vector_funcs: BTreeSet::new(),
         }
     }
 
@@ -87,6 +106,9 @@ impl<'a> Decompiler<'a> {
         let mut out = String::from("/* Decompiled by smdc --decompile (pseudo-C) */\n");
         self.analyze();
         self.merge_cross_jumping_functions();
+        self.scan_globals();
+        self.scan_signatures();
+        self.emit_defines(&mut out);
         self.emit_functions(&mut out);
         self.emit_data(&mut out);
         out
@@ -139,8 +161,10 @@ impl<'a> Decompiler<'a> {
     /// Walk control flow from the vector-table entries, decoding instructions
     /// and collecting function starts and block labels.
     fn analyze(&mut self) {
-        let mut work: Vec<u32> = self.entry_points().into_iter().collect();
-        self.func_starts = self.entry_points().into_iter().collect();
+        let entries = self.entry_points();
+        let mut work: Vec<u32> = entries.iter().copied().collect();
+        self.func_starts = entries.iter().copied().collect();
+        self.hw_vector_funcs = entries;
         let mut visited: HashSet<u32> = HashSet::new();
 
         while let Some(addr) = work.pop() {
@@ -253,18 +277,183 @@ impl<'a> Decompiler<'a> {
         Some(u16::from_be_bytes([b[0], b[1]]))
     }
 
-    /// Entry points from the vector table: initial PC (0x4), HBlank (0x70)
-    /// and VBlank (0x78) autovectors. smdc ROMs point them all at the entry.
+    // -- global naming -------------------------------------------------------
+
+    /// Collect absolute work-RAM addresses and the hardware registers the
+    /// code touches, so they can be rendered as named globals.
+    fn scan_globals(&mut self) {
+        let insts: Vec<M68kInst> = self.insts.values().map(|d| d.inst.clone()).collect();
+        for inst in &insts {
+            for (op, size) in operand_sizes(inst) {
+                if let Some(a24) = abs_address(op) {
+                    if is_hw_register(a24) {
+                        self.hw_used.insert(a24);
+                    } else if (RAM_BASE..=0xFFFFFF).contains(&a24) {
+                        let entry = self.ram_sizes.entry(a24);
+                        match entry {
+                            std::collections::btree_map::Entry::Occupied(mut e) => {
+                                if *e.get() != Some(size) {
+                                    *e.get_mut() = None; // conflicting sizes
+                                }
+                            }
+                            std::collections::btree_map::Entry::Vacant(v) => {
+                                v.insert(Some(size));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Name for an absolute address access at the given size, if we have a
+    /// stable one. Hardware registers must be accessed at their documented
+    /// size; RAM globals at their (consistent) observed size.
+    fn named_addr(&self, a24: u32, size: Size) -> Option<String> {
+        if let Some((_, name, sz)) = HW_REGISTERS.iter().find(|(a, _, _)| *a == a24) {
+            return (*sz == size).then(|| name.to_string());
+        }
+        if let Some(Some(sz)) = self.ram_sizes.get(&a24) {
+            if *sz == size {
+                return Some(format!("ram_{a24:06X}"));
+            }
+        }
+        None
+    }
+
+    /// Emit the `#define` block for named hardware registers and RAM globals.
+    fn emit_defines(&self, out: &mut String) {
+        let mut defs: Vec<String> = Vec::new();
+        let mut hw: Vec<_> = self.hw_used.iter().copied().collect();
+        hw.sort();
+        for a in hw {
+            if let Some((_, name, sz)) = HW_REGISTERS.iter().find(|(addr, _, _)| *addr == a) {
+                let t = match sz {
+                    Size::Byte => "volatile unsigned char",
+                    Size::Word => "volatile unsigned short",
+                    Size::Long => "volatile unsigned int",
+                };
+                defs.push(format!("#define {name} (*({t} *)0x{a:06X})\n"));
+            }
+        }
+        let mut ram: Vec<_> = self.ram_sizes.iter().collect();
+        ram.sort_by_key(|(a, _)| **a);
+        for (&a, sz) in ram {
+            if let Some(sz) = sz {
+                let t = match sz {
+                    Size::Byte => "unsigned char",
+                    Size::Word => "short",
+                    Size::Long => "int",
+                };
+                defs.push(format!("#define ram_{a:06X} (*({t} *)0x{a:06X})\n"));
+            }
+        }
+        if !defs.is_empty() {
+            out.push_str("\n/* hardware registers and RAM globals */\n");
+            for d in defs {
+                out.push_str(&d);
+            }
+            out.push('\n');
+        }
+    }
+
+    // -- calling-convention reconstruction ------------------------------------
+
+    /// Per-function register arguments (read-before-write registers) and
+    /// return-value liveness, computed once so call sites can use them even
+    /// for forward references.
+    fn scan_signatures(&mut self) {
+        let starts: Vec<u32> = self.func_starts.iter().copied().collect();
+        let mut func_args = BTreeMap::new();
+        let mut func_ret = BTreeSet::new();
+        for (i, &start) in starts.iter().enumerate() {
+            let end = starts
+                .get(i + 1)
+                .copied()
+                .unwrap_or_else(|| self.insts.keys().next_back().map_or(start, |k| k + 1));
+            let mut insts: Vec<&M68kInst> =
+                self.insts.range(start..end).map(|(_, d)| &d.inst).collect();
+            if insts.is_empty() {
+                continue;
+            }            // Return value: d0 written at any point before an `rts`.
+            let mut d0_written = false;
+            for inst in &insts {
+                let (_, writes) = reg_rw(inst);
+                if writes.contains(&Reg::Data(DataReg::D0)) {
+                    d0_written = true;
+                }
+                if matches!(inst, M68kInst::Rts) {
+                    if d0_written {
+                        func_ret.insert(start);
+                    }
+                    d0_written = false;
+                }
+            }
+            // Register arguments: read before written. Functions with an
+            // A6 frame (smdc cdecl) use frame parameters instead; interrupt
+            // handlers and the reset entry are called by hardware; a
+            // leading register save (`movem` to memory) preserves registers
+            // rather than receiving them.
+            let has_link = insts
+                .iter()
+                .any(|i| matches!(i, M68kInst::Link(AddrReg::A6, _)));
+            if has_link || self.hw_vector_funcs.contains(&start) {
+                continue;
+            }
+            let mut read_order: Vec<String> = Vec::new();
+            let mut written: Vec<Reg> = Vec::new();
+            let mut in_prologue = true;
+            for inst in &insts {
+                // `link a6` writes the frame pointer; `unlk` reads it.
+                if let M68kInst::Link(an, _) = inst {
+                    written.push(Reg::Addr(*an));
+                    continue;
+                }
+                if in_prologue {
+                    if let M68kInst::Movem(_, regs, _, true) = inst {
+                        written.extend(regs.iter().copied());
+                        continue;
+                    }
+                    if matches!(inst, M68kInst::Nop) {
+                        continue;
+                    }
+                    in_prologue = false;
+                }
+                let (reads, writes) = reg_rw(inst);
+                for r in reads {
+                    if !written.contains(&r) && r != Reg::Addr(AddrReg::A7) {
+                        let name = format!("{r}");
+                        if !read_order.contains(&name) {
+                            read_order.push(name);
+                        }
+                    }
+                }
+                written.extend(writes);
+            }
+            if !read_order.is_empty() {
+                func_args.insert(start, read_order);
+            }
+        }
+        self.func_args = func_args;
+        self.func_ret = func_ret;
+    }
+
+    /// Entry points from the vector table: every populated vector that
+    /// points into the code section (foreign ROMs often park a generic
+    /// handler on unused vectors), deduplicated.
     fn entry_points(&self) -> BTreeSet<u32> {
-        let read = |off: usize| -> Option<u32> {
-            let b = self.rom.get(off..off + 4)?;
+        let mut out = BTreeSet::new();
+        for idx in 1..64 {
+            let off = idx * 4;
+            let Some(b) = self.rom.get(off..off + 4) else {
+                break;
+            };
             let v = u32::from_be_bytes([b[0], b[1], b[2], b[3]]);
-            (v >= CODE_BASE && v % 2 == 0).then_some(v)
-        };
-        [0x4, 0x70, 0x78]
-            .iter()
-            .filter_map(|&off| read(off))
-            .collect()
+            if v >= CODE_BASE && v % 2 == 0 && self.in_code(v) {
+                out.insert(v);
+            }
+        }
+        out
     }
 
     fn in_code(&self, addr: u32) -> bool {
@@ -361,8 +550,235 @@ impl<'a> Decompiler<'a> {
     }
 }
 
-fn is_unconditional(inst: &M68kInst) -> bool {
-    // DBcc is not in this list: it falls through when the loop exits, so the
+/// First address of the 68000 work RAM as seen in ROM addressing.
+const RAM_BASE: u32 = 0xFF0000;
+
+/// Well-known Mega Drive hardware registers (address, name, access size).
+const HW_REGISTERS: [(u32, &str, Size); 12] = [
+    (0xA10001, "IO_VERSION", Size::Byte),
+    (0xA10003, "IO_DATA_A", Size::Byte),
+    (0xA10005, "IO_DATA_B", Size::Byte),
+    (0xA10007, "IO_DATA_C", Size::Byte),
+    (0xA10009, "IO_CTRL_A", Size::Byte),
+    (0xA1000B, "IO_CTRL_B", Size::Byte),
+    (0xA1000D, "IO_CTRL_C", Size::Byte),
+    (0xA11100, "Z80_BUSREQ", Size::Word),
+    (0xA11200, "Z80_RESET", Size::Word),
+    (0xA14000, "TMSS_SEGA", Size::Long),
+    (0xC00000, "VDP_DATA", Size::Word),
+    (0xC00004, "VDP_CTRL", Size::Word),
+];
+
+fn is_hw_register(a: u32) -> bool {
+    HW_REGISTERS.iter().any(|(addr, _, _)| *addr == a)
+}
+
+/// 24-bit ROM-space address of an absolute operand, with absolute-short
+/// sign extension applied (0xF610.w addresses 0xFFF610).
+fn abs_address(op: &Operand) -> Option<u32> {
+    match op {
+        Operand::AbsLong(a) => Some(a & 0x00FFFFFF),
+        Operand::AbsShort(a) => Some(((*a as i16 as i32) as u32) & 0x00FFFFFF),
+        _ => None,
+    }
+}
+
+/// Dereferenced operands with their access size, for global typing.
+fn operand_sizes(inst: &M68kInst) -> Vec<(&Operand, Size)> {
+    match inst {
+        M68kInst::Move(s, a, b) => vec![(a, *s), (b, *s)],
+        M68kInst::MoveToCcr(a) => vec![(a, Size::Word)],
+        M68kInst::Clr(s, a)
+        | M68kInst::Neg(s, a)
+        | M68kInst::Negx(s, a)
+        | M68kInst::Not(s, a)
+        | M68kInst::Tst(s, a) => vec![(a, *s)],
+        M68kInst::Add(s, a, b)
+        | M68kInst::Sub(s, a, b)
+        | M68kInst::And(s, a, b)
+        | M68kInst::Or(s, a, b)
+        | M68kInst::Cmp(s, a, b) => vec![(a, *s), (b, *s)],
+        M68kInst::Adda(s, a, _) | M68kInst::Suba(s, a, _) | M68kInst::Cmpa(s, a, _) => {
+            vec![(a, *s)]
+        }
+        M68kInst::Addq(s, _, a) | M68kInst::Subq(s, _, a) => vec![(a, *s)],
+        M68kInst::Addi(s, _, a)
+        | M68kInst::Subi(s, _, a)
+        | M68kInst::Andi(s, _, a)
+        | M68kInst::Ori(s, _, a)
+        | M68kInst::Eori(s, _, a)
+        | M68kInst::Cmpi(s, _, a) => vec![(a, *s)],
+        M68kInst::Movem(s, _, a, _) => vec![(a, *s)],
+        M68kInst::Btst(_, a)
+        | M68kInst::Bset(_, a)
+        | M68kInst::Bclr(_, a)
+        | M68kInst::Bchg(_, a) => vec![(a, Size::Byte)],
+        M68kInst::Scc(_, a) | M68kInst::Tas(a) | M68kInst::Nbcd(a) => vec![(a, Size::Byte)],
+        M68kInst::Muls(a, _) | M68kInst::Mulu(a, _) | M68kInst::Chk(a, _) => vec![(a, Size::Word)],
+        M68kInst::Divs(a, _) | M68kInst::Divu(a, _) => vec![(a, Size::Word)],
+        _ => Vec::new(),
+    }
+}
+
+/// Register-direct value uses and address-register bases of an operand.
+fn reg_reads_of(op: &Operand) -> Vec<Reg> {
+    match op {
+        Operand::DataReg(d) => vec![Reg::Data(*d)],
+        Operand::AddrReg(a) => vec![Reg::Addr(*a)],
+        Operand::AddrInd(a)
+        | Operand::PostInc(a)
+        | Operand::PreDec(a)
+        | Operand::Disp(_, a) => vec![Reg::Addr(*a)],
+        Operand::Indexed(_, a, i) => vec![Reg::Addr(*a), *i],
+        Operand::PcIndexed(_, i) => vec![*i],
+        _ => Vec::new(),
+    }
+}
+
+/// Registers written by an operand used as a destination (register direct,
+/// or an address register that the addressing mode advances).
+fn reg_writes_of(op: &Operand) -> Vec<Reg> {
+    match op {
+        Operand::DataReg(d) => vec![Reg::Data(*d)],
+        Operand::AddrReg(a) => vec![Reg::Addr(*a)],
+        Operand::PostInc(a) | Operand::PreDec(a) => vec![Reg::Addr(*a)],
+        _ => Vec::new(),
+    }
+}
+
+/// Registers (reads, writes) touched by an instruction, for the
+/// read-before-write argument analysis. Unknown instructions conservatively
+/// read every register they mention.
+fn reg_rw(inst: &M68kInst) -> (Vec<Reg>, Vec<Reg>) {
+    fn src(reads: &mut Vec<Reg>, op: &Operand) {
+        reads.extend(reg_reads_of(op));
+    }
+    fn dst(reads: &mut Vec<Reg>, writes: &mut Vec<Reg>, op: &Operand, also_read: bool) {
+        if also_read {
+            reads.extend(reg_reads_of(op));
+        }
+        writes.extend(reg_writes_of(op));
+    }
+
+    let mut reads = Vec::new();
+    let mut writes = Vec::new();
+    match inst {
+        M68kInst::Move(_, a, b) => {
+            src(&mut reads, a);
+            dst(&mut reads, &mut writes, b, false);
+        }
+        M68kInst::Moveq(_, d) => writes.push(Reg::Data(*d)),
+        M68kInst::Lea(a, r) => {
+            src(&mut reads, a);
+            writes.push(Reg::Addr(*r));
+        }
+        M68kInst::Pea(a) => src(&mut reads, a),
+        M68kInst::Clr(_, a) => dst(&mut reads, &mut writes, a, false),
+        M68kInst::Exg(a, b) => {
+            reads.extend([*a, *b]);
+            writes.extend([*a, *b]);
+        }
+        M68kInst::Add(_, a, b)
+        | M68kInst::Sub(_, a, b)
+        | M68kInst::And(_, a, b)
+        | M68kInst::Or(_, a, b) => {
+            src(&mut reads, a);
+            dst(&mut reads, &mut writes, b, true);
+        }
+        M68kInst::Adda(_, a, r) => {
+            src(&mut reads, a);
+            writes.push(Reg::Addr(*r));
+        }
+        M68kInst::Suba(_, a, r) => {
+            src(&mut reads, a);
+            writes.push(Reg::Addr(*r));
+        }
+        M68kInst::Cmpa(_, a, r) => {
+            src(&mut reads, a);
+            reads.push(Reg::Addr(*r));
+        }
+        M68kInst::Cmp(_, a, b) => {
+            src(&mut reads, a);
+            src(&mut reads, b);
+        }
+        M68kInst::Addq(_, _, a) | M68kInst::Subq(_, _, a) => {
+            dst(&mut reads, &mut writes, a, true)
+        }
+        M68kInst::Addi(_, _, a)
+        | M68kInst::Subi(_, _, a)
+        | M68kInst::Andi(_, _, a)
+        | M68kInst::Ori(_, _, a)
+        | M68kInst::Eori(_, _, a) => dst(&mut reads, &mut writes, a, true),
+        M68kInst::Cmpi(_, _, a) => src(&mut reads, a),
+        M68kInst::Neg(_, a) | M68kInst::Negx(_, a) | M68kInst::Not(_, a) => {
+            dst(&mut reads, &mut writes, a, true)
+        }
+        M68kInst::Tst(_, a) | M68kInst::Chk(a, _) | M68kInst::Tas(a) | M68kInst::Nbcd(a) => {
+            src(&mut reads, a)
+        }
+        M68kInst::MoveToCcr(a) => src(&mut reads, a),
+        M68kInst::Ext(_, d) | M68kInst::Swap(d) => {
+            reads.push(Reg::Data(*d));
+            writes.push(Reg::Data(*d));
+        }
+        M68kInst::Muls(a, d) | M68kInst::Mulu(a, d) | M68kInst::Divs(a, d) | M68kInst::Divu(a, d) => {
+            src(&mut reads, a);
+            reads.push(Reg::Data(*d));
+            writes.push(Reg::Data(*d));
+        }
+        M68kInst::Lsl(_, c, d)
+        | M68kInst::Lsr(_, c, d)
+        | M68kInst::Asl(_, c, d)
+        | M68kInst::Asr(_, c, d)
+        | M68kInst::Rol(_, c, d)
+        | M68kInst::Ror(_, c, d)
+        | M68kInst::Roxl(_, c, d)
+        | M68kInst::Roxr(_, c, d) => {
+            src(&mut reads, c);
+            reads.push(Reg::Data(*d));
+            writes.push(Reg::Data(*d));
+        }
+        M68kInst::Btst(a, b) => {
+            src(&mut reads, a);
+            src(&mut reads, b);
+        }
+        M68kInst::Bset(a, b) | M68kInst::Bclr(a, b) | M68kInst::Bchg(a, b) => {
+            src(&mut reads, a);
+            dst(&mut reads, &mut writes, b, true);
+        }
+        M68kInst::Scc(_, a) => dst(&mut reads, &mut writes, a, false),
+        M68kInst::Movem(_, regs, a, to_mem) => {
+            src(&mut reads, a);
+            if *to_mem {
+                reads.extend(regs.iter().copied());
+            } else {
+                writes.extend(regs.iter().copied());
+            }
+        }
+        M68kInst::Dbcc(_, d, _) => {
+            reads.push(Reg::Data(*d));
+            writes.push(Reg::Data(*d));
+        }
+        M68kInst::MoveUspToAddr(r) => writes.push(Reg::Addr(*r)),
+        M68kInst::MoveAddrToUsp(r) => reads.push(Reg::Addr(*r)),
+        M68kInst::Link(r, _) => writes.push(Reg::Addr(*r)),
+        M68kInst::Unlk(r) => reads.push(Reg::Addr(*r)),
+        M68kInst::Movep(_, _, _, a, d) => {
+            reads.push(Reg::Addr(*a));
+            reads.push(Reg::Data(*d));
+            writes.push(Reg::Data(*d));
+        }
+        // Conservatively treat anything unlisted as reading all mentioned
+        // registers, so no argument is missed.
+        other => {
+            let mut f = |op: &Operand| reads.extend(reg_reads_of(op));
+            for_each_operand(other, &mut f);
+        }
+    }
+    (reads, writes)
+}
+
+fn is_unconditional(inst: &M68kInst) -> bool {    // DBcc is not in this list: it falls through when the loop exits, so the
     // linear walk must continue past it (the target is queued as a label).
     matches!(
         inst,
@@ -549,7 +965,13 @@ impl<'a, 'b> Lifter<'a, 'b> {
                         return;
                     }
                 }
-                self.stmts.push(Stmt::Return(None));
+                if self.decomp.func_ret.contains(&self.start) {
+                    // A value-returning function's plain `rts` returns d0.
+                    self.used_regs.insert("d0".to_string());
+                    self.stmts.push(Stmt::Return(Some("d0".to_string())));
+                } else {
+                    self.stmts.push(Stmt::Return(None));
+                }
             }
 
             M68kInst::Move(size, src, dst) => self.lift_move(size, &src, &dst),
@@ -714,16 +1136,14 @@ impl<'a, 'b> Lifter<'a, 'b> {
             }
             M68kInst::Bsr(_) | M68kInst::BsrS(_) => {
                 if let Some(t) = target {
-                    let name = self.target_name(t);
-                    self.stmts.push(Stmt::Expr(format!("{name}();")));
+                    self.push_call(t);
                 }
             }
             M68kInst::Jsr(op) => {
                 // Prefer the analysis-pass call target (named via symbols);
                 // only statically-known addresses reach this path.
                 if let Some(t) = target {
-                    let name = self.target_name(t);
-                    self.stmts.push(Stmt::Expr(format!("{name}();")));
+                    self.push_call(t);
                 } else {
                     match op {
                         Operand::Label(name) => {
@@ -772,7 +1192,9 @@ impl<'a, 'b> Lifter<'a, 'b> {
 
             M68kInst::Pea(op) => {
                 let a = self.operand_addr(&op);
-                self.stmts.push(Stmt::Expr(format!("*--sp = (int)({a});")));
+                self.used_regs.insert("sp".to_string());
+                self.stmts
+                    .push(Stmt::Expr(format!("sp = sp - 4; *(int *)sp = (int)({a});")));
             }
 
             // Foreign-ROM instructions without a C-level model yet: keep the
@@ -786,6 +1208,34 @@ impl<'a, 'b> Lifter<'a, 'b> {
     }
 
     // -- statement helpers --------------------------------------------------
+
+    /// Emit a call to a statically-known target with the callee's
+    /// reconstructed register arguments; a callee whose return value is
+    /// live gets its result assigned to d0.
+    fn push_call(&mut self, target: u32) {
+        let name = self.target_name(target);
+        let args = self
+            .decomp
+            .func_args
+            .get(&target)
+            .cloned()
+            .unwrap_or_default();
+        for a in &args {
+            self.used_regs.insert(a.clone());
+        }
+        let call = if args.is_empty() {
+            format!("{name}()")
+        } else {
+            format!("{name}({})", args.join(", "))
+        };
+        if self.decomp.func_ret.contains(&target) {
+            self.used_regs.insert("d0".to_string());
+            self.stmts.push(Stmt::Expr(format!("d0 = {call};")));
+            self.pending = Some(("d0".to_string(), CmpRef::Zero));
+        } else {
+            self.stmts.push(Stmt::Expr(format!("{call};")));
+        }
+    }
 
     fn lift_move(&mut self, size: Size, src: &Operand, dst: &Operand) {
         // Track pure address copies between registers: the codegen moves
@@ -897,8 +1347,14 @@ impl<'a, 'b> Lifter<'a, 'b> {
                 format!("*({} *)({r} + {d} /*pc*/)", ctype(size))
             }
             Operand::PcDisp(d) => format!("*({} *)({d} /*pc*/)", ctype(size)),
-            Operand::AbsShort(a) => format!("*({} *)0x{:X}", ctype(size), *a as u16),
-            Operand::AbsLong(a) => format!("*({} *)0x{a:X}", ctype(size)),
+            Operand::AbsShort(_) | Operand::AbsLong(_) => {
+                // Sign-extended 24-bit address, named when we know it.
+                let a24 = abs_address(op).unwrap_or(0);
+                match self.decomp.named_addr(a24, *size) {
+                    Some(name) => name,
+                    None => format!("*({} *)0x{a24:06X}", ctype(size)),
+                }
+            }
             Operand::Label(name) => format!("*({} *)&{name}", ctype(size)),
             Operand::Imm(v) => {
                 if _lv {
@@ -926,8 +1382,13 @@ impl<'a, 'b> Lifter<'a, 'b> {
             Operand::Indexed(d, r, i) => format!("({d} + {r} + {i})"),
             Operand::PcIndexed(d, r) => format!("({r} + {d} /*pc*/)"),
             Operand::PcDisp(d) => format!("({d} /*pc*/)"),
-            Operand::AbsShort(a) => format!("0x{:X}", *a as u16),
-            Operand::AbsLong(a) => format!("0x{a:X}"),
+            Operand::AbsShort(_) | Operand::AbsLong(_) => {
+                let a24 = abs_address(op).unwrap_or(0);
+                match self.decomp.named_addr(a24, Size::Long) {
+                    Some(name) => name,
+                    None => format!("0x{a24:06X}"),
+                }
+            }
             Operand::Label(name) => format!("&{name}"),
             Operand::Imm(v) => format!("{v}"),
             Operand::Sr => "sr".to_string(),
@@ -982,16 +1443,42 @@ impl<'a, 'b> Lifter<'a, 'b> {
     // -- rendering ----------------------------------------------------------
 
     fn render(&self, name: &str, stmts: &[Stmt], out: &mut String) {
-        let ret = if self.returns_value { "int" } else { "void" };
-        let params: Vec<String> = self.params.iter().map(|p| format!("int p{p}")).collect();
-        let plist = if params.is_empty() {
+        let ret = if self.decomp.func_ret.contains(&self.start) {
+            "int"
+        } else {
+            "void"
+        };
+        // smdc cdecl frames use named parameters; foreign register
+        // conventions pass the registers the callee reads first.
+        let arg_names: Vec<String> = if !self.params.is_empty() {
+            self.params.iter().map(|p| format!("int p{p}")).collect()
+        } else {
+            self.decomp
+                .func_args
+                .get(&self.start)
+                .map(|args| args.iter().map(|a| format!("int {a}")).collect())
+                .unwrap_or_default()
+        };
+        let plist = if arg_names.is_empty() {
             "void".to_string()
         } else {
-            params.join(", ")
+            arg_names.join(", ")
         };
         out.push_str(&format!("{ret} {name}({plist}) {{\n"));
 
-        let mut regs: Vec<String> = self.used_regs.iter().cloned().collect();
+        // Locals: every used register except the parameter registers.
+        let param_names: Vec<String> = self
+            .decomp
+            .func_args
+            .get(&self.start)
+            .cloned()
+            .unwrap_or_default();
+        let mut regs: Vec<String> = self
+            .used_regs
+            .iter()
+            .filter(|r| !param_names.contains(r))
+            .cloned()
+            .collect();
         regs.sort_by(|a, b| {
             (a.starts_with('a'), a.to_string()).cmp(&(b.starts_with('a'), b.to_string()))
         });
