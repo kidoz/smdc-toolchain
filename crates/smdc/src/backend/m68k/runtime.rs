@@ -16,6 +16,27 @@ pub const UDIVSI3: &str = "__udivsi3";
 /// Signed 32-bit divide truncating toward zero: quotient in D0, remainder
 /// (with the dividend's sign) in D1
 pub const DIVSI3: &str = "__divsi3";
+/// Set the status register from a cdecl argument (decompiler intrinsic)
+pub const SET_SR: &str = "__set_sr";
+/// Read the status register into D0 (decompiler intrinsic)
+pub const GET_SR: &str = "__get_sr";
+
+/// All helper names, for call-site recognition.
+pub fn is_helper(name: &str) -> bool {
+    matches!(name, MULSI3 | UDIVSI3 | DIVSI3 | SET_SR | GET_SR)
+}
+
+/// Static name for a helper call site, if `name` is a helper.
+pub fn helper_static(name: &str) -> Option<&'static str> {
+    match name {
+        MULSI3 => Some(MULSI3),
+        UDIVSI3 => Some(UDIVSI3),
+        DIVSI3 => Some(DIVSI3),
+        SET_SR => Some(SET_SR),
+        GET_SR => Some(GET_SR),
+        _ => None,
+    }
+}
 
 /// Helpers `name` calls, which must be emitted along with it
 pub fn dependencies(name: &str) -> &'static [&'static str] {
@@ -31,8 +52,32 @@ pub fn generate(name: &str) -> Vec<M68kInst> {
         MULSI3 => mulsi3(),
         UDIVSI3 => udivsi3(),
         DIVSI3 => divsi3(),
+        SET_SR => set_sr(),
+        GET_SR => get_sr(),
         _ => unreachable!("unknown runtime helper {name}"),
     }
+}
+
+/// `void __set_sr(int value)`: move.w 8(a6), sr; rts
+fn set_sr() -> Vec<M68kInst> {
+    vec![
+        label(SET_SR),
+        M68kInst::Move(
+            Size::Word,
+            Operand::Disp(8, AddrReg::A6),
+            Operand::Sr,
+        ),
+        M68kInst::Rts,
+    ]
+}
+
+/// `int __get_sr(void)`: move.w sr, d0; rts
+fn get_sr() -> Vec<M68kInst> {
+    vec![
+        label(GET_SR),
+        M68kInst::Move(Size::Word, Operand::Sr, Operand::DataReg(DataReg::D0)),
+        M68kInst::Rts,
+    ]
 }
 
 fn d(reg: DataReg) -> Operand {

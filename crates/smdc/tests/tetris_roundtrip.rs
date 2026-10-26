@@ -5,7 +5,8 @@
 //! version control; the test skips gracefully when it is absent.
 
 use smd_compiler::backend::m68k::{
-    compare_traces, decompile_rom, disassemble_full, parse_assembly, run_rom, Assembler, RunConfig,
+    build_hybrid_rom, compare_traces, decompile_rom, disassemble_full, parse_assembly, run_rom,
+    Assembler, RunConfig,
 };
 use smd_compiler::frontend::{CFrontend, CompileContext, Frontend, FrontendConfig};
 use smd_compiler::DiagnosticReporter;
@@ -194,4 +195,85 @@ fn tetris_byte_exact_rebuild_behaves_identically() {
     let rebuilt = assembler.assemble_items(&items).expect("reassembly failed");
     let b = run_rom(&rebuilt, &cfg);
     compare_traces(&a, &b).expect("byte-exact rebuild must behave identically");
+}
+
+/// Hybrid rebuild: original image as substrate, discovered functions
+/// replaced by their compiled C. Milestone: the hybrid must behave
+/// identically to the original — same work RAM state (stack residue
+/// excluded) and the same VDP write sequence.
+#[test]
+fn tetris_hybrid_behaves_identically() {
+    let Some(path) = tetris_rom_path() else {
+        eprintln!("skipping: Tetris ROM not found (set SMDC_TETRIS_ROM to override)");
+        return;
+    };
+    let Ok(original) = std::fs::read(&path) else {
+        eprintln!("skipping: cannot read {}", path.display());
+        return;
+    };
+
+    let hybrid = build_hybrid_rom(&original).expect("hybrid build failed");
+    assert!(
+        hybrid.image.len() > original.len(),
+        "hybrid should append compiled code"
+    );
+    if std::env::var("SMDC_DUMP_HYBRID").is_ok() {
+        let _ = std::fs::create_dir_all("tmp");
+        let _ = std::fs::write("tmp/hybrid.gen", &hybrid.image);
+        let _ = std::fs::write("tmp/hybrid.c", &hybrid.source);
+        let mut map = String::new();
+        let mut addrs: Vec<_> = hybrid.function_map.iter().collect();
+        addrs.sort();
+        for (orig, new) in addrs {
+            map.push_str(&format!("{orig:06X} -> {new:06X}\n"));
+        }
+        let _ = std::fs::write("tmp/hybrid.map", map);
+    }
+
+    // A generous budget: the hybrid's compiled checksum loop alone takes
+    // ~12M instructions (the original finishes its whole boot in ~0.5M).
+    // Both ROMs run under the SAME config, keeping the comparison fair.
+    let cfg = RunConfig {
+        frames: 40,
+        frame_instructions: 1_000_000,
+    };
+    let a = run_rom(&original, &cfg);
+    assert!(
+        a.error.is_none(),
+        "original ROM failed to run: {} (after {} instructions)",
+        a.error.unwrap_or_default(),
+        a.instructions
+    );
+
+    let b = run_rom(&hybrid.image, &cfg);
+    assert!(
+        b.error.is_none(),
+        "hybrid ROM failed to run: {} (after {} instructions)",
+        b.error.unwrap_or_default(),
+        b.instructions
+    );
+
+    match compare_traces(&a, &b) {
+        Ok(()) => eprintln!("hybrid trace matches the original"),
+        Err(divergence) => {
+            // Census diagnostics: how far apart are the traces?
+            let mut diffs: Vec<usize> = Vec::new();
+            for (i, (x, y)) in a.ram.iter().zip(b.ram.iter()).enumerate() {
+                if x != y && (0xFF0000 + i as u32) < a.stack_floor.min(b.stack_floor) {
+                    diffs.push(i);
+                }
+            }
+            panic!(
+                "hybrid diverged from the original: {divergence}; {} semantic RAM bytes \
+                 differ, first: {}; instructions {} vs {}",
+                diffs.len(),
+                diffs
+                    .first()
+                    .map(|i| format!("0x{:06X}", 0xFF0000 + i))
+                    .unwrap_or_else(|| "?".into()),
+                a.instructions,
+                b.instructions
+            );
+        }
+    }
 }

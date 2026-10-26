@@ -104,6 +104,34 @@ impl CodeGenerator {
         self.debug_source = source;
     }
 
+    /// Generate only the module's functions (plus any runtime/SDK helpers
+    /// they use): no startup stub, no vector/header stub, no data section.
+    /// This is the codegen mode for hybrid ROM rebuilds, where the original
+    /// image provides the header, vectors and data.
+    pub fn generate_functions_only(&mut self, module: &IrModule) -> CompileResult<Vec<M68kInst>> {
+        self.output.clear();
+        self.pending_sdk_functions.clear();
+        self.defined_functions.clear();
+        self.pending_runtime.clear();
+
+        for func in &module.functions {
+            self.defined_functions.insert(func.name.clone());
+        }
+        self.data_size = 0;
+
+        self.emit(M68kInst::Directive(".section .text".to_string()));
+        self.emit(M68kInst::Directive(".align 2".to_string()));
+
+        for func in &module.functions {
+            self.generate_function(func)?;
+        }
+
+        self.emit_sdk_library_functions()?;
+        self.emit_runtime_helpers();
+
+        Ok(std::mem::take(&mut self.output))
+    }
+
     /// Generate M68k instructions from IR module (for binary output)
     pub fn generate_instructions(&mut self, module: &IrModule) -> CompileResult<Vec<M68kInst>> {
         self.output.clear();
@@ -1194,6 +1222,11 @@ impl CodeGenerator {
                         }
                     }
                 } else {
+                    // Runtime helper calls (decompiler intrinsics like
+                    // __set_sr) keep their bodies pending emission.
+                    if let Some(helper) = super::runtime::helper_static(func) {
+                        self.pending_runtime.insert(helper);
+                    }
                     // Regular user function call
                     self.flush_cache();
                     self.emit_standard_call(func, args, dst)?;
