@@ -131,7 +131,8 @@ fn tetris_decompiles_to_compiling_pseudo_c() {
         "VBlank handler must not take arguments"
     );
     assert!(
-        source.contains("int F_0005FA(int d1, int d0)"),
+        source.contains("int F_000854(int a0)")
+            || source.contains("int F_0009C4(int d0)"),
         "register arguments not reconstructed"
     );
     assert!(

@@ -67,6 +67,9 @@ struct Decompiler<'a> {
     /// Functions entered from the exception vector table (interrupt
     /// handlers and the reset entry): never modeled with arguments.
     hw_vector_funcs: BTreeSet<u32>,
+    /// Resolved PC-relative jump tables: dispatch instruction address ->
+    /// (index register, entry stride in bytes, is_jsr, targets).
+    jump_tables: BTreeMap<u32, (Reg, u32, bool, Vec<u32>)>,
 }
 
 impl<'a> Decompiler<'a> {
@@ -99,11 +102,15 @@ impl<'a> Decompiler<'a> {
             func_args: BTreeMap::new(),
             func_ret: BTreeSet::new(),
             hw_vector_funcs: BTreeSet::new(),
+            jump_tables: BTreeMap::new(),
         }
     }
 
     fn run(&mut self) -> String {
         let mut out = String::from("/* Decompiled by smdc --decompile (pseudo-C) */\n");
+        out.push_str("\n/* status-register intrinsics (provided by the runtime) */\n");
+        out.push_str("void __set_sr(int value);\n");
+        out.push_str("int __get_sr(void);\n");
         self.analyze();
         self.merge_cross_jumping_functions();
         self.scan_globals();
@@ -219,21 +226,33 @@ impl<'a> Decompiler<'a> {
 
                 // Computed dispatch through a PC-relative jump table:
                 // `jsr/jmp table(pc,dN)`. The instruction address gives the
-                // table base (opword + extension, then +2); its word entries
-                // are offsets relative to the table start. Follow every entry
-                // that lands inside the code section.
-                if let M68kInst::Jsr(op) | M68kInst::Jmp(op) = &self.insts[&addr].inst {
-                    if let Operand::PcIndexed(disp, _) = op {
-                        let base = addr.wrapping_add(4).wrapping_add_signed(*disp as i32);
-                        let is_jsr = matches!(self.insts[&addr].inst, M68kInst::Jsr(_));
-                        let table = self.resolve_jump_table(base as i32);
-                        for t in table {
-                            if is_jsr {
-                                self.func_starts.insert(t);
-                            } else {
-                                self.labels.insert(t);
+                // table base (opword + extension, then +2). Resolve entries
+                // so the lifter can render a real switch.
+                if target.is_none() {
+                    let dispatch = match &self.insts[&addr].inst {
+                        M68kInst::Jsr(Operand::PcIndexed(d, i))
+                        | M68kInst::Jmp(Operand::PcIndexed(d, i)) => {
+                            let is_jsr =
+                                matches!(self.insts[&addr].inst, M68kInst::Jsr(_));
+                            Some((*i, *d, is_jsr))
+                        }
+                        _ => None,
+                    };
+                    if let Some((idx, disp, is_jsr)) = dispatch {
+                        let base = addr.wrapping_add(4).wrapping_add_signed(disp as i32);
+                        let (stride, entries) = self.resolve_jump_table(base);
+                        if !entries.is_empty() {
+                            self.jump_tables
+                                .insert(addr, (idx, stride, is_jsr, entries.clone()));
+                            self.labels.insert(base);
+                            for t in entries {
+                                if is_jsr {
+                                    self.func_starts.insert(t);
+                                } else {
+                                    self.labels.insert(t);
+                                }
+                                work.push(t);
                             }
-                            work.push(t);
                         }
                     }
                 }
@@ -245,30 +264,60 @@ impl<'a> Decompiler<'a> {
         }
     }
 
-    /// Resolve a jump table at `base`: word offsets relative to `base`.
-    /// Entries are followed while they point at plausible code (forward,
-    /// inside the ROM, even); the scan stops at the first implausible entry.
-    fn resolve_jump_table(&self, base: i32) -> Vec<u32> {
+    /// Resolve a jump table at `base`: (entry stride, targets). Tries
+    /// long-absolute entries first, then word offsets relative to `base`.
+    /// Entries must point at decodable instructions; the scan stops at the
+    /// first implausible entry.
+    fn resolve_jump_table(&self, base: u32) -> (u32, Vec<u32>) {
+        let decodes = |t: u32| -> bool {
+            (t as usize) < self.rom.len()
+                && decode_at(
+                    self.code,
+                    (t - CODE_BASE) as usize,
+                    CODE_BASE,
+                    &HashMap::new(),
+                )
+                .is_some()
+        };
         let mut targets = Vec::new();
-        if base < CODE_BASE as i32 {
-            return targets;
-        }
-        let base = base as u32;
         let mut off = base;
-        // Cap: no dispatch table has more than 256 arms.
-        for _ in 0..256 {
+        // Long-absolute entries.
+        loop {
+            let Some(b) = self.rom.get(off as usize..off as usize + 4) else {
+                break;
+            };
+            let v = u32::from_be_bytes([b[0], b[1], b[2], b[3]]);
+            if v == 0 || !self.in_code(v) || v % 2 != 0 || !decodes(v) {
+                break;
+            }
+            targets.push(v);
+            off += 4;
+            if targets.len() >= 256 {
+                break;
+            }
+        }
+        if targets.len() >= 2 {
+            return (4, targets);
+        }
+        // Word offsets relative to the table base.
+        targets.clear();
+        let mut off = base;
+        loop {
             let Some(w) = self.read_rom_word(off) else {
                 break;
             };
             let target = base.wrapping_add_signed(w as i16 as i32);
-            // Offsets are non-negative and must land after the table start.
-            if (w as i16) < 0 || !self.in_code(target) || target < base {
+            // Offsets are non-negative and must land inside the code section.
+            if (w as i16) < 0 || !self.in_code(target) || target < base || !decodes(target) {
                 break;
             }
             targets.push(target);
             off += 2;
+            if targets.len() >= 256 {
+                break;
+            }
         }
-        targets
+        (2, targets)
     }
 
     fn read_rom_word(&self, addr: u32) -> Option<u16> {
@@ -946,7 +995,7 @@ impl<'a, 'b> Lifter<'a, 'b> {
         }
     }
 
-    fn lift_inst(&mut self, inst: M68kInst, _addr: u32, target: Option<u32>) {
+    fn lift_inst(&mut self, inst: M68kInst, addr: u32, target: Option<u32>) {
         match inst {
             M68kInst::Comment(c) => self.stmts.push(Stmt::Comment(format!("/* {c} */"))),
             M68kInst::Directive(_) | M68kInst::Label(_) | M68kInst::Nop => {}
@@ -974,6 +1023,17 @@ impl<'a, 'b> Lifter<'a, 'b> {
                 }
             }
 
+            // Status-register accesses become intrinsics so the compiled
+            // hybrid actually changes the interrupt mask.
+            M68kInst::Move(Size::Word, src, Operand::Sr) => {
+                let v = self.rvalue(&src, &Size::Word);
+                self.stmts.push(Stmt::Expr(format!("__set_sr({v});")));
+            }
+            M68kInst::Move(Size::Word, Operand::Sr, dst) => {
+                let lv = self.lvalue(&dst, &Size::Word);
+                self.stmts.push(Stmt::Expr(format!("{lv} = __get_sr();")));
+                self.pending = Some((lv, CmpRef::Zero));
+            }
             M68kInst::Move(size, src, dst) => self.lift_move(size, &src, &dst),
             M68kInst::Moveq(v, reg) => {
                 self.stmts.push(Stmt::Expr(format!("{reg} = {v};")));
@@ -1083,22 +1143,36 @@ impl<'a, 'b> Lifter<'a, 'b> {
                 self.lift_shift(&cnt, &Operand::DataReg(dst), ">>")
             }
 
-            M68kInst::Tst(_, op) => {
-                let v = self.rvalue(&op, &Size::Long);
+            M68kInst::Tst(size, op) => {
+                let v = self.rvalue(&op, &size);
+                let v = masked_compare_value(v, size);
                 self.pending = Some((v, CmpRef::Zero));
             }
-            M68kInst::Cmp(_, src, dst) => {
-                let d = self.rvalue(&dst, &Size::Long);
-                let s = self.rvalue(&src, &Size::Long);
+            M68kInst::Cmp(size, src, dst) => {
+                // Memory operands render at the compare's width: cmp.w reads
+                // the word AT the address, not the low half of a long.
+                let d = self.rvalue(&dst, &size);
+                let s = self.rvalue(&src, &size);
+                let (d, s) = if size == Size::Long {
+                    (d, s)
+                } else {
+                    (masked_compare_value(d, size), masked_compare_value(s, size))
+                };
                 self.pending = Some((d, CmpRef::Expr(s)));
             }
             M68kInst::Cmpa(_, src, dst) => {
                 let s = self.rvalue(&src, &Size::Long);
                 self.pending = Some((format!("{dst}"), CmpRef::Expr(s)));
             }
-            M68kInst::Cmpi(_, v, dst) => {
-                let d = self.rvalue(&dst, &Size::Long);
-                self.pending = Some((d, CmpRef::Expr(format!("{v}"))));
+            M68kInst::Cmpi(size, v, dst) => {
+                let d = self.rvalue(&dst, &size);
+                let s = masked_compare_value(format!("{v}"), size);
+                let d = if size == Size::Long {
+                    d
+                } else {
+                    masked_compare_value(d, size)
+                };
+                self.pending = Some((d, CmpRef::Expr(s)));
             }
 
             M68kInst::Bra(_) | M68kInst::BraS(_) => {
@@ -1144,6 +1218,10 @@ impl<'a, 'b> Lifter<'a, 'b> {
                 // only statically-known addresses reach this path.
                 if let Some(t) = target {
                     self.push_call(t);
+                } else if let Some((idx, stride, is_jsr, targets)) =
+                    self.decomp.jump_tables.get(&addr).cloned()
+                {
+                    self.emit_dispatch_switch(&idx, stride, is_jsr, &targets);
                 } else {
                     match op {
                         Operand::Label(name) => {
@@ -1161,9 +1239,13 @@ impl<'a, 'b> Lifter<'a, 'b> {
                     }
                 }
             }
-            M68kInst::Jmp(_) => {
+            M68kInst::Jmp(op) => {
                 if let Some(t) = target {
                     self.stmts.push(Stmt::Branch { taken: None, target: t });
+                } else if let Some((idx, stride, is_jsr, targets)) =
+                    self.decomp.jump_tables.get(&addr).cloned()
+                {
+                    self.emit_dispatch_switch(&idx, stride, is_jsr, &targets);
                 }
             }
             M68kInst::Scc(cond, dst) => {
@@ -1209,10 +1291,37 @@ impl<'a, 'b> Lifter<'a, 'b> {
 
     // -- statement helpers --------------------------------------------------
 
-    /// Emit a call to a statically-known target with the callee's
-    /// reconstructed register arguments; a callee whose return value is
-    /// live gets its result assigned to d0.
-    fn push_call(&mut self, target: u32) {
+    /// Render a resolved jump-table dispatch as a C `switch` over the index
+    /// register: `case` values are byte offsets into the table, arms call
+    /// the target functions (jsr tables) or branch to labels (jmp tables).
+    fn emit_dispatch_switch(&mut self, idx: &Reg, stride: u32, is_jsr: bool, targets: &[u32]) {
+        let idx_name = format!("{idx}");
+        self.used_regs.insert(idx_name.clone());
+        self.pending = None;
+        self.stmts.push(Stmt::Control(format!("switch ({idx_name}) {{")));
+        for (i, t) in targets.iter().enumerate() {
+            let arm = if is_jsr {
+                format!("{} break;", self.call_text(*t))
+            } else {
+                format!("goto L_{t:06X};")
+            };
+            self.stmts
+                .push(Stmt::Control(format!("case {}: {arm}", i as u32 * stride)));
+        }
+        self.stmts.push(Stmt::Control("}".to_string()));
+    }
+
+    /// Call expression for a statically-known target with its reconstructed
+    /// register arguments; a callee whose return value is live assigns d0.
+    /// Functions that are not independently emitted (merged into a
+    /// neighbour) are called through their original address: the hybrid
+    /// keeps the original image, so that code still exists.
+    fn call_text(&mut self, target: u32) -> String {
+        if !self.decomp.func_starts.contains(&target)
+            || !self.decomp.insts.contains_key(&target)
+        {
+            return format!("((int (*)(void))0x{target:X})();");
+        }
         let name = self.target_name(target);
         let args = self
             .decomp
@@ -1230,10 +1339,21 @@ impl<'a, 'b> Lifter<'a, 'b> {
         };
         if self.decomp.func_ret.contains(&target) {
             self.used_regs.insert("d0".to_string());
-            self.stmts.push(Stmt::Expr(format!("d0 = {call};")));
-            self.pending = Some(("d0".to_string(), CmpRef::Zero));
+            format!("d0 = {call};")
         } else {
-            self.stmts.push(Stmt::Expr(format!("{call};")));
+            format!("{call};")
+        }
+    }
+
+    /// Emit a call to a statically-known target with the callee's
+    /// reconstructed register arguments; a callee whose return value is
+    /// live gets its result assigned to d0.
+    fn push_call(&mut self, target: u32) {
+        let returns = self.decomp.func_ret.contains(&target);
+        let text = self.call_text(target);
+        self.stmts.push(Stmt::Expr(text));
+        if returns {
+            self.pending = Some(("d0".to_string(), CmpRef::Zero));
         }
     }
 
@@ -1249,6 +1369,29 @@ impl<'a, 'b> Lifter<'a, 'b> {
             }
         }
         let rv = self.rvalue(src, &size);
+        // Register destinations model partial-register semantics: a byte
+        // move keeps the upper 24 bits, a word move zero-extends (m68k
+        // MOVE.W), a long move replaces.
+        if let Some(d) = reg_name_of(dst) && matches!(dst, Operand::DataReg(_)) {
+            let (assign, flags_value) = match size {
+                Size::Byte => (
+                    format!("{d} = ({d} & -256) | ({rv} & 255);"),
+                    format!("({rv} & 255)"),
+                ),
+                Size::Word => (
+                    format!("{d} = {rv} & 65535;"),
+                    format!("({rv} & 65535)"),
+                ),
+                Size::Long => (
+                    format!("{d} = {rv};"),
+                    rv.clone(),
+                ),
+            };
+            self.stmts.push(Stmt::Expr(assign));
+            self.pending = Some((flags_value, CmpRef::Zero));
+            self.addr_regs.remove(&d);
+            return;
+        }
         let lv = self.lvalue(dst, &size);
         self.stmts.push(Stmt::Expr(format!("{lv} = {rv};")));
         if let Some((r, n)) = self.post_store_inc.take() {
@@ -1264,6 +1407,23 @@ impl<'a, 'b> Lifter<'a, 'b> {
     fn lift_binary(&mut self, src: &Operand, dst: &Operand, op: &str, size: &Size) {
         let lv = self.lvalue(dst, size);
         let rv = self.rvalue(src, size);
+        // Sub-word arithmetic into a data register confines the result to
+        // the low byte/word, preserving the upper bits (m68k semantics).
+        if let Some(d) = reg_name_of(dst)
+            && matches!(dst, Operand::DataReg(_))
+            && *size != Size::Long
+        {
+            let (m, keep) = match size {
+                Size::Byte => ("255", "-256"),
+                _ => ("65535", "-65536"),
+            };
+            let expr = format!("(({lv} {op} {rv}) & {m})");
+            self.stmts
+                .push(Stmt::Expr(format!("{d} = ({d} & {keep}) | {expr};")));
+            self.pending = Some((expr, CmpRef::Zero));
+            self.addr_regs.remove(&d);
+            return;
+        }
         self.stmts.push(Stmt::Expr(format!("{lv} = {lv} {op} {rv};")));
         self.pending = Some((lv, CmpRef::Zero));
         if let Some(d) = reg_name_of(dst) {
@@ -1401,6 +1561,10 @@ impl<'a, 'b> Lifter<'a, 'b> {
         let Some((v, r)) = &self.pending else {
             return format!("/* cc {cond} */ 1");
         };
+        // Both sides are parenthesized: lifted values are compound
+        // expressions (`(d0 & 15) & 255`), and C comparison operators bind
+        // tighter than bitwise `&`/`|`.
+        let v = format!("({v})");
         if matches!(r, CmpRef::Carry) {
             // Only carry-sense branches are expressible for a captured bit.
             return match cond {
@@ -1411,7 +1575,7 @@ impl<'a, 'b> Lifter<'a, 'b> {
         }
         let cmp = match r {
             CmpRef::Zero => "0".to_string(),
-            CmpRef::Expr(e) => e.clone(),
+            CmpRef::Expr(e) => format!("({e})"),
             CmpRef::Carry => unreachable!(),
         };
         match cond {
@@ -1546,6 +1710,16 @@ fn reg_name_of(op: &Operand) -> Option<String> {
         Operand::DataReg(r) => Some(format!("{r}")),
         Operand::AddrReg(r) => Some(format!("{r}")),
         _ => None,
+    }
+}
+
+/// C expression for a sub-word compare operand: masked to the operation
+/// size and cast for signed comparison semantics.
+fn masked_compare_value(expr: String, size: Size) -> String {
+    match size {
+        Size::Byte => format!("(char)(({expr}) & 255)"),
+        Size::Word => format!("(short)(({expr}) & 65535)"),
+        Size::Long => expr,
     }
 }
 
