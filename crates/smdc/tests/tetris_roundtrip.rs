@@ -4,7 +4,9 @@
 //! original image byte for byte. The ROM is copyrighted and lives outside
 //! version control; the test skips gracefully when it is absent.
 
-use smd_compiler::backend::m68k::{decompile_rom, disassemble_full, parse_assembly, Assembler};
+use smd_compiler::backend::m68k::{
+    compare_traces, decompile_rom, disassemble_full, parse_assembly, run_rom, Assembler, RunConfig,
+};
 use smd_compiler::frontend::{CFrontend, CompileContext, Frontend, FrontendConfig};
 use smd_compiler::DiagnosticReporter;
 use std::collections::HashMap;
@@ -156,4 +158,39 @@ fn tetris_decompiles_to_compiling_pseudo_c() {
         }
     }
     compiled.expect("decompiled pseudo-C must compile");
+}
+
+/// Both ROMs must behave identically on the deterministic interpreter:
+/// equal final work RAM and equal VDP write sequences after N frames.
+/// This is the oracle the C-recompile milestones will be measured with.
+#[test]
+fn tetris_byte_exact_rebuild_behaves_identically() {
+    let Some(path) = tetris_rom_path() else {
+        eprintln!("skipping: Tetris ROM not found (set SMDC_TETRIS_ROM to override)");
+        return;
+    };
+    let Ok(original) = std::fs::read(&path) else {
+        eprintln!("skipping: cannot read {}", path.display());
+        return;
+    };
+
+    let cfg = RunConfig::default();
+    let a = run_rom(&original, &cfg);
+    assert!(
+        a.error.is_none(),
+        "original ROM failed to run: {} (after {} instructions)",
+        a.error.unwrap_or_default(),
+        a.instructions
+    );
+
+    // Determinism: a second run of the same ROM is identical.
+    let a2 = run_rom(&original, &cfg);
+    compare_traces(&a, &a2).expect("interpreter must be deterministic");
+
+    let listing = disassemble_full(&original, &HashMap::new());
+    let items = parse_assembly(&listing).expect("listing must re-parse");
+    let mut assembler = Assembler::new(0);
+    let rebuilt = assembler.assemble_items(&items).expect("reassembly failed");
+    let b = run_rom(&rebuilt, &cfg);
+    compare_traces(&a, &b).expect("byte-exact rebuild must behave identically");
 }
