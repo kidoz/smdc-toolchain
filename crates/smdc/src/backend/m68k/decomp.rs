@@ -15,6 +15,7 @@
 use super::disasm::decode_at;
 use super::m68k::*;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::fmt::Write as _;
 
 const CODE_BASE: u32 = 0x200;
 
@@ -173,6 +174,18 @@ impl<'a> Decompiler<'a> {
     /// function. Merge such functions: drop the start of the function whose
     /// range contains the foreign target.
     fn merge_cross_jumping_functions(&mut self) {
+        // Functions that are actual call targets must survive merging: the
+        // lifter emits them as real C functions (with their register-arg
+        // signatures), and calls compile consistently. A merged-away call
+        // target would be invoked as a raw-address thunk instead, whose
+        // foreign register convention corrupts compiled state.
+        let call_targets: BTreeSet<u32> = self
+            .insts
+            .values()
+            .filter(|d| is_call(&d.inst))
+            .filter_map(|d| d.target)
+            .filter(|&t| self.func_starts.contains(&t))
+            .collect();
         loop {
             let starts: Vec<u32> = self.func_starts.iter().copied().collect();
             let mut removed = None;
@@ -191,11 +204,17 @@ impl<'a> Decompiler<'a> {
                     // Forward into a later function: merge that one in.
                     if t >= a2 {
                         if let Some(&owner) = self.func_starts.range(a2..=t).next() {
+                            if call_targets.contains(&owner) {
+                                continue; // keep called functions intact
+                            }
                             removed = Some(owner);
                             break 'outer;
                         }
                     } else if t < a1 {
                         // Backward into an earlier function: merge self in.
+                        if call_targets.contains(&a1) {
+                            continue; // keep called functions intact
+                        }
                         removed = Some(a1);
                         break 'outer;
                     }
@@ -1786,6 +1805,36 @@ impl<'a, 'b> Lifter<'a, 'b> {
             }
         }
 
+        // Scope block labels to this function: C labels are function-local
+        // but the assembler's symbol table is global, and kept
+        // cross-jumping functions can reference the same block address.
+        // `L_000788` becomes `L004000_000788` (prefixed with the owning
+        // function's start) everywhere in this body.
+        {
+            let start = self.start;
+            let mut renamed = String::with_capacity(out.len() - body_start);
+            let source = out[body_start..].to_string();
+            let bytes = source.as_bytes();
+            let mut i = 0;
+            while i < bytes.len() {
+                if bytes[i] == b'L'
+                    && i + 8 <= bytes.len()
+                    && &bytes[i..i + 2] == b"L_"
+                    && bytes[i + 2..i + 8].iter().all(|b| b.is_ascii_hexdigit())
+                {
+                    let _ = write!(renamed, "L{start:06X}_");
+                    renamed.push_str(&source[i + 2..i + 8]);
+                    i += 8;
+                } else {
+                    renamed.push(source[i..].chars().next().unwrap());
+                    let ch_len = source[i..].chars().next().unwrap().len_utf8();
+                    i += ch_len;
+                }
+            }
+            out.truncate(body_start);
+            out.push_str(&renamed);
+        }
+
         // Safety net: any label referenced by a goto but never defined
         // (its block was consumed by a structuring pattern or emitted by
         // a switch arm) is appended at the function end — a jump to the
@@ -1793,22 +1842,26 @@ impl<'a, 'b> Lifter<'a, 'b> {
         // semantics closely enough for pseudo-C and keeping the output
         // compilable. Scanning this function's rendered text catches every
         // emission path; labels in OTHER functions must not suppress it.
+        let start = self.start;
+        let prefix = format!("L{start:06X}_");
         let body = out[body_start..].to_string();
-        let mut missing: Vec<u32> = Vec::new();
+        let mut missing: Vec<String> = Vec::new();
+        let needle = format!("goto {prefix}");
         let mut rest = body.as_str();
-        while let Some(p) = rest.find("goto L_") {
-            let after = &rest[p + 7..];
+        while let Some(p) = rest.find(&needle) {
+            let after = &rest[p + needle.len()..];
             let hex: String = after.chars().take_while(|c| c.is_ascii_hexdigit()).collect();
-            if let Ok(a) = u32::from_str_radix(&hex, 16)
-                && !body.contains(&format!("L_{a:06X}:"))
-                && !missing.contains(&a)
+            if hex.len() == 6
+                && u32::from_str_radix(&hex, 16).is_ok()
+                && !body.contains(&format!("{prefix}{hex}:"))
+                && !missing.contains(&hex)
             {
-                missing.push(a);
+                missing.push(hex);
             }
             rest = after;
         }
-        for a in missing {
-            out.push_str(&format!("L_{a:06X}: ;\n"));
+        for hex in missing {
+            let _ = write!(out, "{prefix}{hex}: ;\n");
         }
 
         out.push_str("}\n");

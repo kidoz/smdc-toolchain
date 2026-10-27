@@ -551,14 +551,6 @@ impl<'a> Cpu<'a> {
                 self.halted = true;
             }
             M68kInst::Rts => {
-                if std::env::var("SMDC_SPY").is_ok() {
-                    eprintln!(
-                        "[{:>8}] rts  sp={:08X} -> [sp]={:08X}",
-                        self.instr_count,
-                        self.a[7],
-                        self.read32(self.a[7])
-                    );
-                }
                 self.pc = self.pop32();
             }
             M68kInst::Rtr => {
@@ -1170,10 +1162,13 @@ impl<'a> Cpu<'a> {
         let step = size_bytes(size);
         match (to_mem, op) {
             (true, Operand::PreDec(r)) => {
-                // Predecrement stores in list order, descending addresses;
-                // the decoder already reversed the mask for this mode.
+                // Predecrement R→M stores in the REVERSE of the normal
+                // D0..D7,A0..A6 order (68000 PRM): the first register in
+                // the list lands at the HIGHEST address. The decoder's
+                // regs list is in normal order, so iterate it reversed to
+                // mirror the matching postincrement restore exactly.
                 let mut a = self.a[*r as usize];
-                for reg in regs {
+                for reg in regs.iter().rev() {
                     a = a.wrapping_sub(step);
                     let v = self.reg_get(reg);
                     self.write_sized(a, size, v);

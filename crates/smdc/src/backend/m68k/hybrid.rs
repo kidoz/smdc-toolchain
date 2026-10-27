@@ -279,8 +279,15 @@ fn inject_handler_wrappers(
                 out.push(inst);
             }
             M68kInst::Link(..) if is_handler && !wrapped => {
-                out.push(inst);
+                // Save BEFORE linking (canonical handler prologue): pushed
+                // after the link, the save block would sit inside the
+                // compiled body's local-slot area (-4(a6), -12(a6), ...)
+                // and the body's own temp stores would overwrite the saved
+                // registers. Before the link it sits between the interrupt
+                // frame and the link frame, out of the body's reach; the
+                // epilogue's unlk then points sp straight at it.
                 out.push(full_save.clone());
+                out.push(inst);
                 wrapped = true;
             }
             M68kInst::Rts if wrapped => {
