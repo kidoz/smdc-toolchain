@@ -11,6 +11,11 @@ pub struct SemanticAnalyzer {
     current_function_return_type: Option<CType>,
     in_loop: bool,
     in_switch: bool,
+    /// C labels are function-scoped: defined/referenced anywhere in the
+    /// function body regardless of block nesting. Tracked here rather than
+    /// in the block scope chain, where structurers' nested definitions
+    /// would be discarded with the block.
+    function_labels: std::collections::HashMap<String, bool>,
 }
 
 impl SemanticAnalyzer {
@@ -20,6 +25,7 @@ impl SemanticAnalyzer {
             current_function_return_type: None,
             in_loop: false,
             in_switch: false,
+            function_labels: std::collections::HashMap::new(),
         }
     }
 
@@ -160,6 +166,7 @@ impl SemanticAnalyzer {
 
             // Clear labels for new function scope
             self.scope.clear_labels();
+            self.function_labels.clear();
 
             // Add parameters to scope
             for param in &mut func.params {
@@ -187,12 +194,13 @@ impl SemanticAnalyzer {
             self.analyze_block(body)?;
 
             // Check that all referenced labels are defined
-            if let Err(undefined) = self.scope.check_labels() {
+            if let Err(undefined) = self.check_function_labels() {
                 return Err(CompileError::semantic(
                     format!("undefined labels: {}", undefined.join(", ")),
                     func.span,
                 ));
             }
+
 
             // Restore scope
             self.current_function_return_type = None;
@@ -434,13 +442,17 @@ impl SemanticAnalyzer {
             }
             StmtKind::Goto(label) => {
                 // Reference the label (will be checked at end of function)
-                self.scope.reference_label(label);
+                self.function_labels.entry(label.clone()).or_insert(false);
             }
             StmtKind::Label { name, stmt } => {
-                // Define the label
-                self.scope
-                    .define_label(name)
-                    .map_err(|e| CompileError::semantic(e, stmt.span))?;
+                // Define the label (function scope, per C semantics)
+                if self.function_labels.get(name) == Some(&true) {
+                    return Err(CompileError::semantic(
+                        format!("label '{name}' already defined"),
+                        stmt.span,
+                    ));
+                }
+                self.function_labels.insert(name.clone(), true);
                 self.analyze_stmt(stmt)?;
             }
             StmtKind::Declaration(decl) => {
@@ -448,6 +460,22 @@ impl SemanticAnalyzer {
             }
         }
         Ok(())
+    }
+
+    /// Undefined labels of the current function (referenced by goto but
+    /// never defined).
+    fn check_function_labels(&self) -> Result<(), Vec<String>> {
+        let undefined: Vec<String> = self
+            .function_labels
+            .iter()
+            .filter(|(_, defined)| !**defined)
+            .map(|(name, _)| name.clone())
+            .collect();
+        if undefined.is_empty() {
+            Ok(())
+        } else {
+            Err(undefined)
+        }
     }
 
     fn analyze_expr(&mut self, expr: &mut Expr) -> CompileResult<CType> {

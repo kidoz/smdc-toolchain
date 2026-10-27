@@ -129,18 +129,17 @@ impl Cursor<'_> {
             6 => {
                 let ext = self.read_u16()?;
                 // Brief-format extension words only (full format has bit 8
-                // set). Brief format: D/A | reg | 0 0 scale | 0 | disp8.
-                // Reject full format and non-zero scale bits (68020-only);
-                // they fall back to `dc.w`, which preserves the bytes.
-                if ext & 0x0F00 != 0 {
-                    return None;
+                // set): D/A | reg | W/L | scale | 0 | disp8. The raw high
+                // byte rides along so the operand re-encodes exactly.
+                if ext & 0x0100 != 0 {
+                    return None; // full format (68020)
                 }
                 let index = if ext & 0x8000 != 0 {
                     Reg::Addr(addr_reg((ext >> 12) & 7))
                 } else {
                     Reg::Data(data_reg((ext >> 12) & 7))
                 };
-                Operand::Indexed(ext as u8 as i8, addr_reg(reg), index)
+                Operand::Indexed(ext as u8 as i8, addr_reg(reg), index, (ext >> 8) as u8)
             }
             7 => match reg {
                 0 => Operand::AbsShort(self.read_u16()? as i16),
@@ -154,15 +153,15 @@ impl Cursor<'_> {
                 // d(PC,Xn): brief-format index, kept raw for re-encoding.
                 3 => {
                     let ext = self.read_u16()?;
-                    if ext & 0x0F00 != 0 {
-                        return None; // full format (68020) or scaled index
+                    if ext & 0x0100 != 0 {
+                        return None; // full format (68020)
                     }
                     let index = if ext & 0x8000 != 0 {
                         Reg::Addr(addr_reg((ext >> 12) & 7))
                     } else {
                         Reg::Data(data_reg((ext >> 12) & 7))
                     };
-                    Operand::PcIndexed(ext as u8 as i8, index)
+                    Operand::PcIndexed(ext as u8 as i8, index, (ext >> 8) as u8)
                 }
                 4 => match size {
                     // Byte immediates keep the full extension word so the
@@ -534,12 +533,6 @@ impl Cursor<'_> {
         }
         let size = decode_size((op >> 6) & 3)?;
         let dn = Operand::DataReg(data_reg((op >> 9) & 7));
-        // Dn -> <ea> direction. A register-direct destination in this
-        // direction has a second canonical encoding (ea -> Dn) that the
-        // model cannot distinguish; treat it as data so the bytes survive.
-        if op & 0x0100 != 0 && ((op >> 3) & 7) < 2 {
-            return None;
-        }
         let ea = self.decode_ea((op >> 3) & 7, op & 7, size)?;
         Some(if op & 0x0100 == 0 {
             M68kInst::Or(size, ea, dn)
@@ -666,11 +659,6 @@ impl Cursor<'_> {
         }
         let size = decode_size((op >> 6) & 3)?;
         let dn = Operand::DataReg(data_reg((op >> 9) & 7));
-        // Dn -> <ea> direction; register-direct destinations are ambiguous
-        // with the canonical ea -> Dn form, so treat them as data.
-        if op & 0x0100 != 0 && ((op >> 3) & 7) < 2 {
-            return None;
-        }
         let ea = self.decode_ea((op >> 3) & 7, op & 7, size)?;
         Some(if op & 0x0100 == 0 {
             M68kInst::And(size, ea, dn)
@@ -1181,22 +1169,25 @@ mod tests {
         ));
         roundtrip(M68kInst::Move(
             Size::Word,
-            Operand::PcIndexed(2, Reg::Data(DataReg::D2)),
+            // hi byte encodes the same register as the Reg field (D2 -> 0x20).
+            Operand::PcIndexed(2, Reg::Data(DataReg::D2), 0x20),
             Operand::DataReg(DataReg::D1),
         ));
         roundtrip(M68kInst::Lea(
-            Operand::PcIndexed(0, Reg::Addr(AddrReg::A3)),
+            // A3 -> hi = D/A | reg 3 = 0xB0.
+            Operand::PcIndexed(0, Reg::Addr(AddrReg::A3), 0xB0),
             AddrReg::A0,
         ));
-        roundtrip(M68kInst::Jsr(Operand::PcIndexed(6, Reg::Data(DataReg::D0))));
+        roundtrip(M68kInst::Jsr(Operand::PcIndexed(6, Reg::Data(DataReg::D0), 0)));
         roundtrip(M68kInst::Move(
             Size::Byte,
-            Operand::Indexed(0, AddrReg::A0, Reg::Data(DataReg::D0)),
+            Operand::Indexed(0, AddrReg::A0, Reg::Data(DataReg::D0), 0),
             Operand::DataReg(DataReg::D3),
         ));
         roundtrip(M68kInst::Move(
             Size::Word,
-            Operand::Indexed(-1, AddrReg::A5, Reg::Addr(AddrReg::A2)),
+            // A2 index -> hi = 0xA0.
+            Operand::Indexed(-1, AddrReg::A5, Reg::Addr(AddrReg::A2), 0xA0),
             Operand::AddrInd(AddrReg::A1),
         ));
     }

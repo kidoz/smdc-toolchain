@@ -37,6 +37,53 @@ pub fn decompile_rom(
     Decompiler::new(rom, symbols, data_start).run()
 }
 
+/// Flow-verified instruction spans (address, end) of a ROM, plus protected
+/// data ranges: windows after every absolute reference walked code makes
+/// into the image. Over-reads (tables whose loops run into a neighbouring
+/// function's prologue) consume those bytes as data, so the data-only
+/// rebuild must preserve them.
+pub fn code_footprint(rom: &[u8]) -> (Vec<(u32, u32)>, Vec<(u32, u32)>) {
+    let mut decomp = Decompiler::new(rom, &HashMap::new(), None);
+    decomp.analyze();
+    decomp.merge_cross_jumping_functions();
+    let code = rom.get(CODE_BASE as usize..).unwrap_or(&[]);
+    let mut spans: Vec<(u32, u32)> = Vec::new();
+    for &addr in decomp.insts.keys() {
+        let off = (addr - CODE_BASE) as usize;
+        if let Some((_, next, _)) = decode_at(code, off, CODE_BASE, &HashMap::new()) {
+            spans.push((addr, CODE_BASE + next as u32));
+        }
+    }
+    spans.sort();
+
+    // Absolute references from walked code protect a window after the
+    // referenced address (tables, and whatever a loop over them touches).
+    let mut refs: Vec<u32> = Vec::new();
+    for d in decomp.insts.values() {
+        let mut visit = |op: &Operand| match op {
+            Operand::AbsLong(a) => refs.push(a & 0x00FF_FFFF),
+            Operand::AbsShort(a) => {
+                let a = (*a as i16 as i32 as u32) & 0x00FF_FFFF;
+                refs.push(a);
+            }
+            _ => {}
+        };
+        for_each_operand(&d.inst, &mut visit);
+    }
+    refs.retain(|a| *a >= CODE_BASE && (*a as usize) < rom.len());
+    refs.sort();
+    refs.dedup();
+    let mut protected: Vec<(u32, u32)> = Vec::new();
+    for r in refs {
+        let end = (r + 64).min(rom.len() as u32);
+        match protected.last_mut() {
+            Some(last) if last.1 >= r => last.1 = last.1.max(end),
+            _ => protected.push((r, end)),
+        }
+    }
+    (spans, protected)
+}
+
 struct Decompiler<'a> {
     rom: &'a [u8],
     /// Initial PC from the vector table: named `main` in the output so the
@@ -184,6 +231,9 @@ impl<'a> Decompiler<'a> {
                 let Some((inst, next_off, target)) =
                     decode_at(self.code, off, CODE_BASE, &HashMap::new())
                 else {
+                    if std::env::var("SMDC_DEBUG_SPANS").is_ok() {
+                        eprintln!("walk stop: decode failed at {addr:06X}");
+                    }
                     break;
                 };
                 visited.insert(addr);
@@ -230,8 +280,8 @@ impl<'a> Decompiler<'a> {
                 // so the lifter can render a real switch.
                 if target.is_none() {
                     let dispatch = match &self.insts[&addr].inst {
-                        M68kInst::Jsr(Operand::PcIndexed(d, i))
-                        | M68kInst::Jmp(Operand::PcIndexed(d, i)) => {
+                        M68kInst::Jsr(Operand::PcIndexed(d, i, _))
+                        | M68kInst::Jmp(Operand::PcIndexed(d, i, _)) => {
                             let is_jsr =
                                 matches!(self.insts[&addr].inst, M68kInst::Jsr(_));
                             Some((*i, *d, is_jsr))
@@ -241,6 +291,12 @@ impl<'a> Decompiler<'a> {
                     if let Some((idx, disp, is_jsr)) = dispatch {
                         let base = addr.wrapping_add(4).wrapping_add_signed(disp as i32);
                         let (stride, entries) = self.resolve_jump_table(base);
+                        if std::env::var("SMDC_DEBUG_SPANS").is_ok() {
+                            eprintln!(
+                                "dispatch {addr:06X} base {base:06X} stride {stride} entries {}",
+                                entries.len()
+                            );
+                        }
                         if !entries.is_empty() {
                             self.jump_tables
                                 .insert(addr, (idx, stride, is_jsr, entries.clone()));
@@ -298,6 +354,53 @@ impl<'a> Decompiler<'a> {
         }
         if targets.len() >= 2 {
             return (4, targets);
+        }
+        if targets.len() >= 2 {
+            return (4, targets);
+        }
+        // `bra.w` trampoline entries: each 4-byte slot is itself a `bra`
+        // to the handler (`jsr table(pc,dN)` with the index stepped by 4).
+        // Some tables prepend a non-bra word (an `rte` no-event default);
+        // if the word at `base` is not a bra but the next even word is,
+        // the trampolines start there. Tried before the word-offset style:
+        // real trampoline opwords (0x6xxx) can alias as plausible offsets.
+        targets.clear();
+        let mut table = base;
+        let mut first = self.read_rom_word(table).is_some_and(|w| (w & 0xFF00) == 0x6000);
+        if !first {
+            table += 2;
+            first = self.read_rom_word(table).is_some_and(|w| (w & 0xFF00) == 0x6000);
+        }
+        if first {
+            let mut off = table;
+            loop {
+                let Some(b) = self.rom.get(off as usize..off as usize + 4) else {
+                    break;
+                };
+                let op = u16::from_be_bytes([b[0], b[1]]);
+                if (op & 0xFF00) != 0x6000 {
+                    break;
+                }
+                // bra.s carries the displacement in the opword; bra.w follows
+                // it as a word (both are 4-byte slots in a trampoline table).
+                let disp = if op & 0xFF == 0 {
+                    u16::from_be_bytes([b[2], b[3]]) as i16 as i32
+                } else {
+                    op as u8 as i8 as i32
+                };
+                let target = (off + 2).wrapping_add_signed(disp);
+                if disp == 0 || !self.in_code(target) || !decodes(target) {
+                    break;
+                }
+                targets.push(target);
+                off += 4;
+                if targets.len() >= 256 {
+                    break;
+                }
+            }
+            if targets.len() >= 2 {
+                return (4, targets);
+            }
         }
         // Word offsets relative to the table base.
         targets.clear();
@@ -678,8 +781,8 @@ fn reg_reads_of(op: &Operand) -> Vec<Reg> {
         | Operand::PostInc(a)
         | Operand::PreDec(a)
         | Operand::Disp(_, a) => vec![Reg::Addr(*a)],
-        Operand::Indexed(_, a, i) => vec![Reg::Addr(*a), *i],
-        Operand::PcIndexed(_, i) => vec![*i],
+        Operand::Indexed(_, a, i, _) => vec![Reg::Addr(*a), *i],
+        Operand::PcIndexed(_, i, _) => vec![*i],
         _ => Vec::new(),
     }
 }
@@ -960,11 +1063,11 @@ impl<'a, 'b> Lifter<'a, 'b> {
                     | Operand::Disp(_, r) => {
                         self.used_regs.insert(format!("{r}"));
                     }
-                    Operand::Indexed(_, r, i) => {
+                    Operand::Indexed(_, r, i, _) => {
                         self.used_regs.insert(format!("{r}"));
                         self.used_regs.insert(format!("{i}"));
                     }
-                    Operand::PcIndexed(_, i) => {
+                    Operand::PcIndexed(_, i, _) => {
                         self.used_regs.insert(format!("{i}"));
                     }
                     Operand::Sr => {
@@ -1502,8 +1605,8 @@ impl<'a, 'b> Lifter<'a, 'b> {
             }
             Operand::Disp(_, AddrReg::A6) => frame_slot(op).unwrap_or_else(|| "0".into()),
             Operand::Disp(d, r) => format!("*({} *)({d} + {r})", ctype(size)),
-            Operand::Indexed(d, r, i) => format!("*({} *)({d} + {r} + {i})", ctype(size)),
-            Operand::PcIndexed(d, r) => {
+            Operand::Indexed(d, r, i, _) => format!("*({} *)({d} + {r} + {i})", ctype(size)),
+            Operand::PcIndexed(d, r, _) => {
                 format!("*({} *)({r} + {d} /*pc*/)", ctype(size))
             }
             Operand::PcDisp(d) => format!("*({} *)({d} /*pc*/)", ctype(size)),
@@ -1539,8 +1642,8 @@ impl<'a, 'b> Lifter<'a, 'b> {
                 .map(|s| format!("&{s}"))
                 .unwrap_or_else(|| "0".into()),
             Operand::Disp(d, r) => format!("({d} + {r})"),
-            Operand::Indexed(d, r, i) => format!("({d} + {r} + {i})"),
-            Operand::PcIndexed(d, r) => format!("({r} + {d} /*pc*/)"),
+            Operand::Indexed(d, r, i, _) => format!("({d} + {r} + {i})"),
+            Operand::PcIndexed(d, r, _) => format!("({r} + {d} /*pc*/)"),
             Operand::PcDisp(d) => format!("({d} /*pc*/)"),
             Operand::AbsShort(_) | Operand::AbsLong(_) => {
                 let a24 = abs_address(op).unwrap_or(0);
@@ -1607,7 +1710,8 @@ impl<'a, 'b> Lifter<'a, 'b> {
     // -- rendering ----------------------------------------------------------
 
     fn render(&self, name: &str, stmts: &[Stmt], out: &mut String) {
-        let ret = if self.decomp.func_ret.contains(&self.start) {
+        let body_start = out.len();
+        let ret = if self.returns_value || self.decomp.func_ret.contains(&self.start) {
             "int"
         } else {
             "void"
@@ -1678,26 +1782,28 @@ impl<'a, 'b> Lifter<'a, 'b> {
         }
 
         // Safety net: any label referenced by a goto but never defined
-        // (its block was consumed by a structuring pattern) is appended at
-        // the function end — a jump to the epilogue falls through to the
-        // closing return, matching `rts` semantics closely enough for
-        // pseudo-C and keeping the output compilable.
-        let mut refs: Vec<u32> = stmts
-            .iter()
-            .filter_map(|s| {
-                match s {
-                    Stmt::Branch { target, .. } | Stmt::Dbf { target, .. } => Some(*target),
-                    _ => None,
-                }
-            })
-            .collect();
-        refs.sort();
-        refs.dedup();
-        for t in refs {
-            let marker = format!("L_{t:06X}:");
-            if !out.contains(&marker) {
-                out.push_str(&format!("L_{t:06X}: ;\n"));
+        // (its block was consumed by a structuring pattern or emitted by
+        // a switch arm) is appended at the function end — a jump to the
+        // epilogue falls through to the closing return, matching `rts`
+        // semantics closely enough for pseudo-C and keeping the output
+        // compilable. Scanning this function's rendered text catches every
+        // emission path; labels in OTHER functions must not suppress it.
+        let body = out[body_start..].to_string();
+        let mut missing: Vec<u32> = Vec::new();
+        let mut rest = body.as_str();
+        while let Some(p) = rest.find("goto L_") {
+            let after = &rest[p + 7..];
+            let hex: String = after.chars().take_while(|c| c.is_ascii_hexdigit()).collect();
+            if let Ok(a) = u32::from_str_radix(&hex, 16)
+                && !body.contains(&format!("L_{a:06X}:"))
+                && !missing.contains(&a)
+            {
+                missing.push(a);
             }
+            rest = after;
+        }
+        for a in missing {
+            out.push_str(&format!("L_{a:06X}: ;\n"));
         }
 
         out.push_str("}\n");

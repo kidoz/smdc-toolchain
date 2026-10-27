@@ -782,7 +782,7 @@ impl SdkLibraryGenerator {
             M68kInst::Lsl(Size::Long, Operand::Imm(2), DataReg::D0),
             M68kInst::Move(
                 Size::Long,
-                Operand::Indexed(0, AddrReg::A0, Reg::Data(DataReg::D0)),
+                Operand::Indexed(0, AddrReg::A0, Reg::Data(DataReg::D0), 0),
                 Operand::DataReg(DataReg::D4),
             ),
             // Get channel

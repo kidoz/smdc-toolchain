@@ -256,8 +256,8 @@ impl InstructionEncoder {
             | Operand::PreDec(_)
             | Operand::Sr => 0,
             Operand::Disp(_, _) => 2,
-            Operand::Indexed(_, _, _) => 2,
-            Operand::PcIndexed(_, _) => 2, // brief-format extension word
+            Operand::Indexed(..) => 2,
+            Operand::PcIndexed(..) => 2, // brief-format extension word
             Operand::PcDisp(_) => 2,
             Operand::AbsShort(_) => 2,
             Operand::AbsLong(_) => 4,
@@ -1384,15 +1384,16 @@ impl InstructionEncoder {
                 ext.extend_from_slice(&(*d as u16).to_be_bytes());
                 (0b101, reg_num_addr(a))
             }
-            Operand::Indexed(d, a, idx) => {
-                // Brief extension word: D/A | reg | 0 0 00 | 0 | disp
-                let brief = index_brief(idx, *d);
+            Operand::Indexed(d, a, idx, hi) => {
+                // Brief extension word: D/A | reg from the index register,
+                // W/L | scale from the raw high byte's low nibble, disp8.
+                let brief = index_brief(idx) | (((*hi as u16) & 0x0E) << 8) | ((*d as u8 as u16) & 0xFF);
                 ext.extend_from_slice(&brief.to_be_bytes());
                 (0b110, reg_num_addr(a))
             }
-            Operand::PcIndexed(d, idx) => {
-                // Brief extension word off the PC
-                let brief = index_brief(idx, *d);
+            Operand::PcIndexed(d, idx, hi) => {
+                // Brief extension word off the PC, same field split.
+                let brief = index_brief(idx) | (((*hi as u16) & 0x0E) << 8) | ((*d as u8 as u16) & 0xFF);
                 ext.extend_from_slice(&brief.to_be_bytes());
                 (0b111, 0b011)
             }
@@ -1488,13 +1489,13 @@ fn size_bits(size: Size) -> u8 {
     }
 }
 
-/// Brief-format index extension word: D/A | reg | 0 0 scale(00) | 0 | disp8.
-fn index_brief(idx: &Reg, d: i8) -> u16 {
-    let reg_bits = match idx {
+/// Brief-format index extension word bits 15-8: D/A | reg (W/L and scale
+/// come from the operand's raw high byte).
+fn index_brief(idx: &Reg) -> u16 {
+    match idx {
         Reg::Data(r) => (reg_num_data(r) as u16) << 12,
         Reg::Addr(r) => 0x8000 | ((reg_num_addr(r) as u16) << 12),
-    };
-    reg_bits | ((d as u8 as u16) & 0xFF)
+    }
 }
 
 fn cond_code(cond: &Cond) -> u8 {

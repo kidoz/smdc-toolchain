@@ -113,6 +113,11 @@ impl<'a> FullDisasm<'a> {
                 if Self::is_control(&inst) && target.is_some_and(|t| !self.labelable(t)) {
                     break;
                 }
+                // Encodings that cannot re-assemble byte-exactly stop the
+                // walk; the sweep will keep their bytes as data.
+                if Self::ambiguous_encoding(&inst) {
+                    break;
+                }
                 visited.insert(addr);
                 self.flow.insert(addr);
                 self.spans.insert(addr, next - (addr - CODE_BASE) as usize);
@@ -131,7 +136,7 @@ impl<'a> FullDisasm<'a> {
                     M68kInst::Rts
                         | M68kInst::Rte
                         | M68kInst::Rtr
-                        | M68kInst::Jmp(Operand::AddrInd(_) | Operand::PostInc(_) | Operand::PreDec(_) | Operand::Disp(_, _) | Operand::Indexed(_, _, _))
+                        | M68kInst::Jmp(Operand::AddrInd(_) | Operand::PostInc(_) | Operand::PreDec(_) | Operand::Disp(_, _) | Operand::Indexed(..))
                 );
 
                 match target {
@@ -151,7 +156,7 @@ impl<'a> FullDisasm<'a> {
 
                 // PC-relative jump table dispatch.
                 if let (M68kInst::Jsr(op) | M68kInst::Jmp(op), true) = (&inst, target.is_none()) {
-                    if let Operand::PcIndexed(disp, _) = op {
+                    if let Operand::PcIndexed(disp, ..) = op {
                         let base = addr
                             .wrapping_add(4)
                             .wrapping_add_signed(*disp as i32);
@@ -194,6 +199,18 @@ impl<'a> FullDisasm<'a> {
                 | M68kInst::Dbcc(_, _, _)
                 | M68kInst::Jsr(_)
                 | M68kInst::Jmp(_)
+        )
+    }
+
+    /// True for encodings that decode fine but cannot re-assemble to the
+    /// same bytes: OR/AND in the Dn -> <ea> direction with a register-direct
+    /// destination encode canonically as <ea> -> Dn, so the typed model
+    /// loses the distinction. The listing keeps such words as `dc.w` data.
+    fn ambiguous_encoding(inst: &M68kInst) -> bool {
+        matches!(
+            inst,
+            M68kInst::Or(_, Operand::DataReg(_), Operand::DataReg(_))
+                | M68kInst::And(_, Operand::DataReg(_), Operand::DataReg(_))
         )
     }
 
@@ -346,7 +363,7 @@ impl<'a> FullDisasm<'a> {
                     });
                     let bad_target = Self::is_control(&inst)
                         && target.is_some_and(|t| !self.labelable(t));
-                    if overruns || bad_target {
+                    if overruns || bad_target || Self::ambiguous_encoding(&inst) {
                         addr += 2;
                         continue;
                     }

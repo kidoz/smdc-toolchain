@@ -5,8 +5,8 @@
 //! version control; the test skips gracefully when it is absent.
 
 use smd_compiler::backend::m68k::{
-    build_hybrid_rom, compare_traces, decompile_rom, disassemble_full, parse_assembly, run_rom,
-    Assembler, RunConfig,
+    build_data_only_rebuild, build_hybrid_rom, compare_traces, decompile_rom, disassemble_full,
+    parse_assembly, run_rom, Assembler, RunConfig,
 };
 use smd_compiler::frontend::{CFrontend, CompileContext, Frontend, FrontendConfig};
 use smd_compiler::DiagnosticReporter;
@@ -193,6 +193,11 @@ fn tetris_byte_exact_rebuild_behaves_identically() {
     let items = parse_assembly(&listing).expect("listing must re-parse");
     let mut assembler = Assembler::new(0);
     let rebuilt = assembler.assemble_items(&items).expect("reassembly failed");
+    if std::env::var("SMDC_DUMP_REBUILD").is_ok() {
+        let _ = std::fs::create_dir_all("tmp");
+        let _ = std::fs::write("tmp/rebuilt.gen", &rebuilt);
+        let _ = std::fs::write("tmp/rebuilt.s", &listing);
+    }
     let b = run_rom(&rebuilt, &cfg);
     compare_traces(&a, &b).expect("byte-exact rebuild must behave identically");
 }
@@ -275,5 +280,59 @@ fn tetris_hybrid_behaves_identically() {
                 b.instructions
             );
         }
+    }
+}
+
+/// Data-only C rebuild: all original code erased, only data survives at its
+/// original addresses, executable code is 100% compiled from the decompiled
+/// C. Milestone: behavioral equality with the original, as with the hybrid.
+#[test]
+fn tetris_data_only_rebuild_behaves_identically() {
+    let Some(path) = tetris_rom_path() else {
+        eprintln!("skipping: Tetris ROM not found (set SMDC_TETRIS_ROM to override)");
+        return;
+    };
+    let Ok(original) = std::fs::read(&path) else {
+        eprintln!("skipping: cannot read {}", path.display());
+        return;
+    };
+
+    let rebuild = build_data_only_rebuild(&original).expect("data-only rebuild failed");
+
+    // The stripped image must differ from the original inside the code
+    // region (proof that erasure happened) but keep its size.
+    assert_eq!(rebuild.image.len() >= original.len(), true);
+    let erased = rebuild
+        .image
+        .iter()
+        .zip(original.iter())
+        .filter(|(r, o)| **r == 0xFF && **o != 0xFF)
+        .count();
+    assert!(erased > 0x400, "expected erasure of original code, got {erased} bytes");
+
+    let cfg = RunConfig {
+        frames: 40,
+        frame_instructions: 1_000_000,
+    };
+    let a = run_rom(&original, &cfg);
+    assert!(
+        a.error.is_none(),
+        "original ROM failed to run: {}",
+        a.error.unwrap_or_default()
+    );
+    let b = run_rom(&rebuild.image, &cfg);
+    assert!(
+        b.error.is_none(),
+        "data-only rebuild failed to run: {} (after {} instructions)",
+        b.error.unwrap_or_default(),
+        b.instructions
+    );
+
+    match compare_traces(&a, &b) {
+        Ok(()) => eprintln!("data-only rebuild trace matches the original"),
+        Err(divergence) => panic!(
+            "data-only rebuild diverged from the original: {divergence}; instructions {} vs {}",
+            a.instructions, b.instructions
+        ),
     }
 }

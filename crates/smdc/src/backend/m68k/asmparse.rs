@@ -226,6 +226,35 @@ fn parse_reg(s: &str) -> Option<Reg> {
     parse_data_reg(s).map(Reg::Data).or_else(|| parse_addr_reg(s).map(Reg::Addr))
 }
 
+/// Parse an index-register spec with optional size and scale attributes
+/// (`d1`, `a2.l`, `d3.w*2`, `d1.l*4`), returning the register and the brief
+/// extension high byte (D/A | reg | W/L | scale).
+fn parse_index_spec(s: &str) -> Option<(Reg, u8)> {
+    let mut body = s.trim();
+    let mut hi = 0u8;
+    // Scale first: the size suffix precedes it (`d1.l*4`).
+    if let Some(star) = body.rfind('*') {
+        let scale = body[star + 1..].trim().parse::<u32>().ok()?;
+        let bits = match scale {
+            1 => 0u8,
+            2 => 1,
+            4 => 2,
+            8 => 3,
+            _ => return None,
+        };
+        hi |= bits << 1;
+        body = &body[..star];
+    }
+    if let Some(head) = body.strip_suffix(".l") {
+        hi |= 0x08;
+        body = head;
+    } else if let Some(head) = body.strip_suffix(".w") {
+        body = head;
+    }
+    let reg = parse_reg(body)?;
+    Some((reg, hi))
+}
+
 fn parse_cond(cc: &str) -> Option<Cond> {
     Some(match cc {
         "t" => Cond::True,
@@ -285,13 +314,14 @@ fn parse_operand(s: &str) -> Result<Operand, String> {
         if parts.len() == 3 {
             let d = parse_number(parts[0]).ok_or_else(|| format!("bad index displacement: {s}"))?;
             if parts[1].eq_ignore_ascii_case("pc") {
-                let idx =
-                    parse_reg(parts[2]).ok_or_else(|| format!("bad index register: {s}"))?;
-                return Ok(Operand::PcIndexed(d as i8, idx));
+                let (idx, hi) =
+                    parse_index_spec(parts[2]).ok_or_else(|| format!("bad index register: {s}"))?;
+                return Ok(Operand::PcIndexed(d as i8, idx, hi));
             }
             let base = parse_addr_reg(parts[1]).ok_or_else(|| format!("bad base register: {s}"))?;
-            let idx = parse_reg(parts[2]).ok_or_else(|| format!("bad index register: {s}"))?;
-            return Ok(Operand::Indexed(d as i8, base, idx));
+            let (idx, hi) =
+                parse_index_spec(parts[2]).ok_or_else(|| format!("bad index register: {s}"))?;
+            return Ok(Operand::Indexed(d as i8, base, idx, hi));
         }
         return Err(format!("bad parenthesized operand: {s}"));
     }
@@ -687,7 +717,7 @@ mod tests {
             M68kInst::Tst(Size::Byte, Operand::DataReg(DataReg::D0)),
             M68kInst::Jmp(Operand::AddrInd(AddrReg::A0)),
             M68kInst::Jsr(Operand::AbsLong(0x00000400)),
-            M68kInst::Jsr(Operand::PcIndexed(6, Reg::Data(DataReg::D0))),
+            M68kInst::Jsr(Operand::PcIndexed(6, Reg::Data(DataReg::D0), 0)),
             M68kInst::Link(AddrReg::A6, -64),
             M68kInst::Unlk(AddrReg::A6),
             M68kInst::Movem(
@@ -718,12 +748,12 @@ mod tests {
             M68kInst::Rtr,
             M68kInst::Move(
                 Size::Byte,
-                Operand::Indexed(0, AddrReg::A0, Reg::Data(DataReg::D0)),
+                Operand::Indexed(0, AddrReg::A0, Reg::Data(DataReg::D0), 0),
                 Operand::DataReg(DataReg::D3),
             ),
             M68kInst::Move(
                 Size::Word,
-                Operand::PcIndexed(2, Reg::Data(DataReg::D2)),
+                Operand::PcIndexed(2, Reg::Data(DataReg::D2), 0),
                 Operand::DataReg(DataReg::D1),
             ),
             M68kInst::Move(Size::Byte, Operand::PcDisp(-4), Operand::DataReg(DataReg::D0)),

@@ -27,8 +27,24 @@ pub struct HybridRom {
     pub function_map: HashMap<u32, u32>,
 }
 
-/// Build a hybrid ROM from an original image.
+/// Build a hybrid ROM from an original image: the original image stays as
+/// the substrate and discovered functions are replaced by compiled C.
 pub fn build_hybrid_rom(rom: &[u8]) -> Result<HybridRom, String> {
+    build(rom, false)
+}
+
+/// Build a data-only C rebuild: every flow-verified instruction span of the
+/// original image is erased (0xFF), so the surviving original bytes are
+/// data only — tables, tiles, strings, header — at their original
+/// addresses. All executable code is compiled from the decompiled C. The
+/// boot checksum is recomputed over the modified range and patched into the
+/// header, so ROM self-checks in the boot code still pass.
+pub fn build_data_only_rebuild(rom: &[u8]) -> Result<HybridRom, String> {
+    let hybrid = build(rom, true)?;
+    Ok(hybrid)
+}
+
+fn build(rom: &[u8], strip_code: bool) -> Result<HybridRom, String> {
     // 1. Decompile with auto names: functions are `F_%06X` of their original
     // address, the entry is `main`.
     let source = decompile_rom(rom, &HashMap::new(), None);
@@ -74,6 +90,30 @@ pub fn build_hybrid_rom(rom: &[u8]) -> Result<HybridRom, String> {
 
     // 6. New image: original bytes + compiled code + power-of-two padding.
     let mut image = rom.to_vec();
+    if strip_code {
+        // Erase every flow-verified instruction span except bytes inside a
+        // protected data window or a thunk island: what remains of the
+        // original image is data only. Bytes the analysis could not prove
+        // to be code (undiscovered regions) are kept — they may be data or
+        // dead code, and erasing them could break data references.
+        let (spans, mut protected) = super::decomp::code_footprint(rom);
+        // Thunk calls (`((int (*)(void))0xNNNNNN)()`) target original code
+        // that was merged away or never lifted; the block it runs through
+        // must survive as original bytes.
+        for t in thunk_targets(&source) {
+            if let Some(block) = contiguous_block(&spans, t) {
+                merge_range(&mut protected, block);
+            }
+        }
+        let is_protected = |a: u32| protected.iter().any(|&(s, e)| a >= s && a < e);
+        for (start, end) in spans {
+            for a in start..end {
+                if !is_protected(a) {
+                    image[a as usize] = 0xFF;
+                }
+            }
+        }
+    }
     image.extend_from_slice(&code);
     let mut size = 0x10000usize; // Mega Drive ROMs are at least 64 KB
     while size < image.len() {
@@ -95,6 +135,29 @@ pub fn build_hybrid_rom(rom: &[u8]) -> Result<HybridRom, String> {
             image[off..off + 4].copy_from_slice(&new.to_be_bytes());
             function_map.insert(v, new);
         }
+    }
+
+    if strip_code {
+        // Recompute the checksum over the range the boot code actually
+        // verifies: words 0x200..=rom_end, where rom_end comes from the
+        // header field at 0x1A4 (not the image length — appended compiled
+        // code lives beyond it and must not change the sum).
+        let rom_end = image
+            .get(0x1A4..0x1A8)
+            .map(|b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]) as usize)
+            .unwrap_or(image.len() - 1);
+        let last = rom_end.min(image.len() - 1);
+        let sum = image[0x200..=last]
+            .chunks(2)
+            .fold(0u16, |acc, c| {
+                let w = if c.len() == 2 {
+                    u16::from_be_bytes([c[0], c[1]])
+                } else {
+                    (c[0] as u16) << 8
+                };
+                acc.wrapping_add(w)
+            });
+        image[0x18E..0x190].copy_from_slice(&sum.to_be_bytes());
     }
 
     Ok(HybridRom {
@@ -120,6 +183,56 @@ fn compile_c(source: &str) -> Result<IrModule, String> {
     CFrontend::new()
         .compile(source, &context, &FrontendConfig::default())
         .map_err(|e| format!("decompiled C failed to compile: {e}"))
+}
+
+/// Addresses called through raw pointers in lifted C
+/// (`((int (*)(void))0xNNNNNN)();`) — original code the decompiler did not
+/// lift as its own function.
+fn thunk_targets(source: &str) -> Vec<u32> {
+    const MARKER: &str = "((int (*)(void))0x";
+    let mut out = Vec::new();
+    for (pos, _) in source.match_indices(MARKER) {
+        let rest = &source[pos + MARKER.len()..];
+        if let Some(end) = rest.find(")();")
+            && let Ok(v) = u32::from_str_radix(rest[..end].trim(), 16)
+        {
+            out.push(v);
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// The contiguous run of instruction spans starting at or covering `t`:
+/// from `t` to the first gap in the walked instruction stream.
+fn contiguous_block(spans: &[(u32, u32)], t: u32) -> Option<(u32, u32)> {
+    let idx = spans.iter().position(|&(s, e)| s <= t && t < e)?;
+    let mut end = spans[idx].1;
+    for &(s, e) in &spans[idx + 1..] {
+        if s != end {
+            break;
+        }
+        end = e;
+    }
+    Some((t, end))
+}
+
+/// Merge a range into a sorted, disjoint protected list.
+fn merge_range(ranges: &mut Vec<(u32, u32)>, r: (u32, u32)) {
+    let mut merged = false;
+    for e in ranges.iter_mut() {
+        if e.1 >= r.0 && e.0 <= r.1 {
+            e.0 = e.0.min(r.0);
+            e.1 = e.1.max(r.1);
+            merged = true;
+            break;
+        }
+    }
+    if !merged {
+        ranges.push(r);
+        ranges.sort();
+    }
 }
 
 /// Wrap interrupt handlers with a full register save/restore and turn their

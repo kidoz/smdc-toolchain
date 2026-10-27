@@ -115,10 +115,13 @@ pub enum Operand {
     PreDec(AddrReg),
     /// Displacement: d(An)
     Disp(i16, AddrReg),
-    /// Indexed: d(An,Xn) with a data or address index register (brief format)
-    Indexed(i8, AddrReg, Reg),
-    /// PC-relative indexed (brief format): d(PC,Xn)
-    PcIndexed(i8, Reg),
+    /// Indexed: d(An,Xn) brief format. The fourth field is the raw high
+    /// byte of the extension word (D/A | reg | W/L | scale) so the
+    /// instruction re-encodes byte-exactly.
+    Indexed(i8, AddrReg, Reg, u8),
+    /// PC-relative indexed (brief format): d(PC,Xn) with the same raw
+    /// extension high byte.
+    PcIndexed(i8, Reg, u8),
     /// PC-relative displacement: d(PC)
     PcDisp(i16),
     /// Absolute short: addr.w
@@ -133,6 +136,21 @@ pub enum Operand {
     Sr,
 }
 
+/// Render an index register with its brief-extension attributes: `.w`/`.l`
+/// size and `*scale`, e.g. `d1.l*4` or `a2`.
+fn format_index(reg: Reg, hi: u8) -> String {
+    let wide = hi & 0x08 != 0;
+    let scale = 1u32 << ((hi >> 1) & 3);
+    let mut s = format!("{reg}");
+    if wide {
+        s.push_str(".l");
+    }
+    if scale > 1 {
+        s.push_str(&format!("*{scale}"));
+    }
+    s
+}
+
 impl std::fmt::Display for Operand {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -142,8 +160,12 @@ impl std::fmt::Display for Operand {
             Operand::PostInc(r) => write!(f, "({r})+"),
             Operand::PreDec(r) => write!(f, "-({r})"),
             Operand::Disp(d, r) => write!(f, "{d}({r})"),
-            Operand::Indexed(d, a, d2) => write!(f, "({d},{a},{d2})"),
-            Operand::PcIndexed(d, r) => write!(f, "({d},pc,{r})"),
+            Operand::Indexed(d, a, d2, hi) => {
+                write!(f, "({d},{a},{})", format_index(*d2, *hi))
+            }
+            Operand::PcIndexed(d, r, hi) => {
+                write!(f, "({d},pc,{})", format_index(*r, *hi))
+            }
             Operand::PcDisp(d) => write!(f, "({d},pc)"),
             Operand::AbsShort(a) => write!(f, "${a:04X}.w"),
             Operand::AbsLong(a) => write!(f, "${a:08X}"),

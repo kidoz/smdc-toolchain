@@ -912,6 +912,18 @@ impl<'a> Cpu<'a> {
         }
     }
 
+    /// Effective value of a brief-format index register: word indexes are
+    /// sign-extended, then the scale (1/2/4/8) is applied.
+    fn index_value(&self, r: &Reg, hi: u8) -> u32 {
+        let raw = self.reg_get(r);
+        let v = if hi & 0x08 != 0 {
+            raw
+        } else {
+            (raw & 0xFFFF) as u16 as i16 as i32 as u32
+        };
+        v << ((hi >> 1) & 3)
+    }
+
     /// Effective address for the memory modes. Predecrement applies its side
     /// effect at the given access size; None for non-addressable operands.
     fn ea_addr(&mut self, op: &Operand, size: Size, inst_addr: u32) -> Option<u32> {
@@ -923,15 +935,15 @@ impl<'a> Cpu<'a> {
                 v
             }
             Operand::Disp(d, r) => self.a[*r as usize].wrapping_add_signed(*d as i32),
-            Operand::Indexed(d, r, i) => self
+            Operand::Indexed(d, r, i, hi) => self
                 .a[*r as usize]
                 .wrapping_add_signed(*d as i32)
-                .wrapping_add(self.reg_get(i)),
+                .wrapping_add(self.index_value(i, *hi)),
             Operand::PcDisp(d) => inst_addr.wrapping_add(4).wrapping_add_signed(*d as i32),
-            Operand::PcIndexed(d, i) => inst_addr
+            Operand::PcIndexed(d, i, hi) => inst_addr
                 .wrapping_add(4)
                 .wrapping_add_signed(*d as i32)
-                .wrapping_add(self.reg_get(i)),
+                .wrapping_add(self.index_value(i, *hi)),
             Operand::AbsShort(a) => (*a as i16 as i32) as u32,
             Operand::AbsLong(a) => *a,
             Operand::Label(name) => name.strip_prefix('$')?.parse().ok()?,
