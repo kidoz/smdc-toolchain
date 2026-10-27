@@ -116,8 +116,9 @@ struct Decompiler<'a> {
     /// handlers and the reset entry): never modeled with arguments.
     hw_vector_funcs: BTreeSet<u32>,
     /// Resolved PC-relative jump tables: dispatch instruction address ->
-    /// (index register, entry stride in bytes, is_jsr, targets).
-    jump_tables: BTreeMap<u32, (Reg, u32, bool, Vec<u32>)>,
+    /// (index register, entry stride in bytes, case-value offset, is_jsr,
+    /// targets).
+    jump_tables: BTreeMap<u32, (Reg, u32, u32, bool, Vec<u32>)>,
 }
 
 impl<'a> Decompiler<'a> {
@@ -312,16 +313,18 @@ impl<'a> Decompiler<'a> {
                         // word's own address (no +2), matching this ROM's
                         // assembler: base = ext_word_addr + disp.
                         let base = addr.wrapping_add(2).wrapping_add_signed(disp as i32);
-                        let (stride, entries) = self.resolve_jump_table(base);
+                        let (stride, case_offset, entries) = self.resolve_jump_table(base);
                         if std::env::var("SMDC_DEBUG_SPANS").is_ok() {
                             eprintln!(
-                                "dispatch {addr:06X} base {base:06X} stride {stride} entries {}",
+                                "dispatch {addr:06X} base {base:06X} stride {stride} off {case_offset} entries {}",
                                 entries.len()
                             );
                         }
                         if !entries.is_empty() {
-                            self.jump_tables
-                                .insert(addr, (idx, stride, is_jsr, entries.clone()));
+                            self.jump_tables.insert(
+                                addr,
+                                (idx, stride, case_offset, is_jsr, entries.clone()),
+                            );
                             self.labels.insert(base);
                             for t in entries {
                                 if is_jsr {
@@ -342,11 +345,13 @@ impl<'a> Decompiler<'a> {
         }
     }
 
-    /// Resolve a jump table at `base`: (entry stride, targets). Tries
-    /// long-absolute entries first, then word offsets relative to `base`.
-    /// Entries must point at decodable instructions; the scan stops at the
-    /// first implausible entry.
-    fn resolve_jump_table(&self, base: u32) -> (u32, Vec<u32>) {
+    /// Resolve a jump table at `base`: (entry stride, case-value offset,
+    /// targets). The offset is added to `i * stride` to get the switch case
+    /// value: it accounts for non-bra words the trampoline scan skipped
+    /// before the first entry (the EA base itself may point at padding or
+    /// an `rte` no-event slot). Tries long-absolute entries first, then
+    /// `bra` trampolines, then word offsets relative to `base`.
+    fn resolve_jump_table(&self, base: u32) -> (u32, u32, Vec<u32>) {
         let decodes = |t: u32| -> bool {
             (t as usize) < self.rom.len()
                 && decode_at(
@@ -375,9 +380,8 @@ impl<'a> Decompiler<'a> {
             }
         }
         if targets.len() >= 2 {
-            return (4, targets);
+            return (4, 0, targets);
         }
-        // `bra.w` trampoline entries: each 4-byte slot is itself a `bra`
         // to the handler (`jsr table(pc,dN)` with the index stepped by 4).
         // Tables may prepend non-bra words (padding or an `rte` no-event
         // default); scan forward from the base for the first bra run.
@@ -395,8 +399,11 @@ impl<'a> Decompiler<'a> {
             }
         }
         let Some(table) = first_at else {
-            return (4, targets);
+            return (4, 0, targets);
         };
+        // The dispatch's computed EA is relative to `base`, so the entry
+        // found at `table` answers to the index (table - base), not 0.
+        let case_offset = table - base;
         let mut off = table;
         loop {
             let Some(b) = self.rom.get(off as usize..off as usize + 4) else {
@@ -424,7 +431,7 @@ impl<'a> Decompiler<'a> {
             }
         }
         if targets.len() >= 2 {
-            return (4, targets);
+            return (4, case_offset, targets);
         }
         // Word offsets relative to the table base.
         targets.clear();
@@ -444,7 +451,7 @@ impl<'a> Decompiler<'a> {
                 break;
             }
         }
-        (2, targets)
+        (2, 0, targets)
     }
 
     fn read_rom_word(&self, addr: u32) -> Option<u16> {
@@ -1345,10 +1352,10 @@ impl<'a, 'b> Lifter<'a, 'b> {
                 // only statically-known addresses reach this path.
                 if let Some(t) = target {
                     self.push_call(t);
-                } else if let Some((idx, stride, is_jsr, targets)) =
+                } else if let Some((idx, stride, case_offset, is_jsr, targets)) =
                     self.decomp.jump_tables.get(&addr).cloned()
                 {
-                    self.emit_dispatch_switch(&idx, stride, is_jsr, &targets);
+                    self.emit_dispatch_switch(&idx, stride, case_offset, is_jsr, &targets);
                 } else {
                     match op {
                         Operand::Label(name) => {
@@ -1369,10 +1376,10 @@ impl<'a, 'b> Lifter<'a, 'b> {
             M68kInst::Jmp(op) => {
                 if let Some(t) = target {
                     self.stmts.push(Stmt::Branch { taken: None, target: t });
-                } else if let Some((idx, stride, is_jsr, targets)) =
+                } else if let Some((idx, stride, case_offset, is_jsr, targets)) =
                     self.decomp.jump_tables.get(&addr).cloned()
                 {
-                    self.emit_dispatch_switch(&idx, stride, is_jsr, &targets);
+                    self.emit_dispatch_switch(&idx, stride, case_offset, is_jsr, &targets);
                 }
             }
             M68kInst::Scc(cond, dst) => {
@@ -1421,7 +1428,14 @@ impl<'a, 'b> Lifter<'a, 'b> {
     /// Render a resolved jump-table dispatch as a C `switch` over the index
     /// register: `case` values are byte offsets into the table, arms call
     /// the target functions (jsr tables) or branch to labels (jmp tables).
-    fn emit_dispatch_switch(&mut self, idx: &Reg, stride: u32, is_jsr: bool, targets: &[u32]) {
+    fn emit_dispatch_switch(
+        &mut self,
+        idx: &Reg,
+        stride: u32,
+        case_offset: u32,
+        is_jsr: bool,
+        targets: &[u32],
+    ) {
         let idx_name = format!("{idx}");
         self.used_regs.insert(idx_name.clone());
         self.pending = None;
@@ -1432,8 +1446,10 @@ impl<'a, 'b> Lifter<'a, 'b> {
             } else {
                 format!("goto L_{t:06X};")
             };
-            self.stmts
-                .push(Stmt::Control(format!("case {}: {arm}", i as u32 * stride)));
+            self.stmts.push(Stmt::Control(format!(
+                "case {}: {arm}",
+                case_offset + i as u32 * stride
+            )));
         }
         self.stmts.push(Stmt::Control("}".to_string()));
     }

@@ -165,15 +165,7 @@ fn tetris_decompiles_to_compiling_pseudo_c() {
 /// Both ROMs must behave identically on the deterministic interpreter:
 /// equal final work RAM and equal VDP write sequences after N frames.
 /// This is the oracle the C-recompile milestones will be measured with.
-///
-/// KNOWN DIVERGENCE (tracked): after fixing the interpreter's MOVEM
-/// predecrement store order (real 68000 semantics: reverse register
-/// order), the ORIGINAL ROM stalls at ~1.8K VDP writes while the rebuild
-/// runs the full game loop — the interpreter is now provably correct on
-/// movem pairing, so the stall is a remaining synthetic-model gap in the
-/// original's code path. Investigation ongoing.
 #[test]
-#[ignore = "original stalls under correct movem; interpreter model gap tracked"]
 fn tetris_byte_exact_rebuild_behaves_identically() {
     let Some(path) = tetris_rom_path() else {
         eprintln!("skipping: Tetris ROM not found (set SMDC_TETRIS_ROM to override)");
@@ -215,9 +207,11 @@ fn tetris_byte_exact_rebuild_behaves_identically() {
 /// identically to the original - same work RAM state (stack residue
 /// excluded) and the same VDP write sequence.
 ///
-/// KNOWN DIVERGENCE (tracked): same rebuild crash as the byte-exact gate
-/// after the EA-base fix; see that test's comment.
-#[ignore = "original stalls under correct movem; see byte-exact gate"]
+/// KNOWN DIVERGENCE (tracked): the lifted dispatch case values were off
+/// by the trampoline-scan offset (fixed; spurious writes dropped 330K to
+/// 83K). A remaining loop-semantics gap in one VBlank task handler still
+/// makes the rebuild do ~45x the original VDP writes.
+#[ignore = "VBlank task loop gap; see comment"]
 #[test]
 fn tetris_hybrid_behaves_identically() {
     let Some(path) = tetris_rom_path() else {
@@ -300,9 +294,9 @@ fn tetris_hybrid_behaves_identically() {
 /// original addresses, executable code is 100% compiled from the decompiled
 /// C. Milestone: behavioral equality with the original, as with the hybrid.
 ///
-/// KNOWN DIVERGENCE (tracked): same rebuild crash as the byte-exact gate
-/// after the EA-base fix; see that test's comment.
-#[ignore = "original stalls under correct movem; see byte-exact gate"]
+/// KNOWN DIVERGENCE (tracked): same VBlank task-handler loop gap as the
+/// hybrid gate (see its comment).
+#[ignore = "VBlank task loop gap; see hybrid gate"]
 #[test]
 fn tetris_data_only_rebuild_behaves_identically() {
     let Some(path) = tetris_rom_path() else {
@@ -359,12 +353,10 @@ fn tetris_data_only_rebuild_behaves_identically() {
 /// directions) must drive the original and the data-only rebuild through
 /// identical state. This exercises code paths idle frames never touch.
 ///
-/// KNOWN DIVERGENCE (tracked): with the corrected interpreter MOVEM
-/// semantics, the original stalls (~7.5K writes under input) while the
-/// rebuild runs on — the same synthetic-model gap as the idle gates.
-/// Run with `cargo test --test tetris_roundtrip -- --ignored`.
+/// KNOWN DIVERGENCE (tracked): same VBlank task-handler loop gap as the
+/// idle gates. Run with `cargo test --test tetris_roundtrip -- --ignored`.
 #[test]
-#[ignore = "original stalls under correct movem; see byte-exact gate"]
+#[ignore = "VBlank task loop gap; see hybrid gate"]
 fn tetris_data_only_rebuild_plays_identically() {
     let Some(path) = tetris_rom_path() else {
         eprintln!("skipping: Tetris ROM not found (set SMDC_TETRIS_ROM to override)");
