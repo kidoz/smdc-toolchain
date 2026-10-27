@@ -157,9 +157,10 @@ impl<'a> FullDisasm<'a> {
                 // PC-relative jump table dispatch.
                 if let (M68kInst::Jsr(op) | M68kInst::Jmp(op), true) = (&inst, target.is_none()) {
                     if let Operand::PcIndexed(disp, ..) = op {
-                        let base = addr
-                            .wrapping_add(4)
-                            .wrapping_add_signed(*disp as i32);
+                        // Brief-format d(PC,Xn) references the extension
+                        // word's own address (no +2), matching this ROM's
+                        // assembler.
+                        let base = addr.wrapping_add(2).wrapping_add_signed(*disp as i32);
                         self.resolve_jump_table(base, matches!(inst, M68kInst::Jsr(_)), &mut work);
                     }
                 }

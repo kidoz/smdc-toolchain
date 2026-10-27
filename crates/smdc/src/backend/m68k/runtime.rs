@@ -58,15 +58,13 @@ pub fn generate(name: &str) -> Vec<M68kInst> {
     }
 }
 
-/// `void __set_sr(int value)`: move.w 8(a6), sr; rts
+/// `void __set_sr(int value)`: cdecl frame, value at 8(a6).
 fn set_sr() -> Vec<M68kInst> {
     vec![
         label(SET_SR),
-        M68kInst::Move(
-            Size::Word,
-            Operand::Disp(8, AddrReg::A6),
-            Operand::Sr,
-        ),
+        M68kInst::Link(AddrReg::A6, 0),
+        M68kInst::Move(Size::Word, Operand::Disp(8, AddrReg::A6), Operand::Sr),
+        M68kInst::Unlk(AddrReg::A6),
         M68kInst::Rts,
     ]
 }

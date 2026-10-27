@@ -23,7 +23,7 @@ pub use decomp::{code_footprint, decompile_rom};
 pub use disasm::disassemble_listing;
 pub use fullasm::disassemble_full;
 pub use hybrid::{build_data_only_rebuild, build_hybrid_rom};
-pub use interp::{compare_traces, run_rom, RunConfig, RunTrace};
+pub use interp::{buttons, compare_traces, run_rom, RunConfig, RunTrace};
 pub use emit::CodeGenerator;
 pub use encoder::{EncodeError, InstructionEncoder};
 pub use m68k::*;

@@ -289,7 +289,10 @@ impl<'a> Decompiler<'a> {
                         _ => None,
                     };
                     if let Some((idx, disp, is_jsr)) = dispatch {
-                        let base = addr.wrapping_add(4).wrapping_add_signed(disp as i32);
+                        // Brief-format d(PC,Xn) references the extension
+                        // word's own address (no +2), matching this ROM's
+                        // assembler: base = ext_word_addr + disp.
+                        let base = addr.wrapping_add(2).wrapping_add_signed(disp as i32);
                         let (stride, entries) = self.resolve_jump_table(base);
                         if std::env::var("SMDC_DEBUG_SPANS").is_ok() {
                             eprintln!(
@@ -355,52 +358,54 @@ impl<'a> Decompiler<'a> {
         if targets.len() >= 2 {
             return (4, targets);
         }
-        if targets.len() >= 2 {
-            return (4, targets);
-        }
         // `bra.w` trampoline entries: each 4-byte slot is itself a `bra`
         // to the handler (`jsr table(pc,dN)` with the index stepped by 4).
-        // Some tables prepend a non-bra word (an `rte` no-event default);
-        // if the word at `base` is not a bra but the next even word is,
-        // the trampolines start there. Tried before the word-offset style:
-        // real trampoline opwords (0x6xxx) can alias as plausible offsets.
+        // Tables may prepend non-bra words (padding or an `rte` no-event
+        // default); scan forward from the base for the first bra run.
         targets.clear();
-        let mut table = base;
-        let mut first = self.read_rom_word(table).is_some_and(|w| (w & 0xFF00) == 0x6000);
-        if !first {
-            table += 2;
-            first = self.read_rom_word(table).is_some_and(|w| (w & 0xFF00) == 0x6000);
+        let mut first_at = None;
+        for skip in 0..4 {
+            let probe = base + skip * 2;
+            if self.read_rom_word(probe).is_some_and(|w| (w & 0xFF00) == 0x6000)
+                && self
+                    .read_rom_word(probe + 4)
+                    .is_some_and(|w| (w & 0xFF00) == 0x6000)
+            {
+                first_at = Some(probe);
+                break;
+            }
         }
-        if first {
-            let mut off = table;
-            loop {
-                let Some(b) = self.rom.get(off as usize..off as usize + 4) else {
-                    break;
-                };
-                let op = u16::from_be_bytes([b[0], b[1]]);
-                if (op & 0xFF00) != 0x6000 {
-                    break;
-                }
-                // bra.s carries the displacement in the opword; bra.w follows
-                // it as a word (both are 4-byte slots in a trampoline table).
-                let disp = if op & 0xFF == 0 {
-                    u16::from_be_bytes([b[2], b[3]]) as i16 as i32
-                } else {
-                    op as u8 as i8 as i32
-                };
-                let target = (off + 2).wrapping_add_signed(disp);
-                if disp == 0 || !self.in_code(target) || !decodes(target) {
-                    break;
-                }
-                targets.push(target);
-                off += 4;
-                if targets.len() >= 256 {
-                    break;
-                }
+        let Some(table) = first_at else {
+            return (4, targets);
+        };
+        let mut off = table;
+        loop {
+            let Some(b) = self.rom.get(off as usize..off as usize + 4) else {
+                break;
+            };
+            let op = u16::from_be_bytes([b[0], b[1]]);
+            if (op & 0xFF00) != 0x6000 {
+                break;
             }
-            if targets.len() >= 2 {
-                return (4, targets);
+            // bra.s carries the displacement in the opword; bra.w follows
+            // it as a word (both are 4-byte slots in a trampoline table).
+            let disp = if op & 0xFF == 0 {
+                u16::from_be_bytes([b[2], b[3]]) as i16 as i32
+            } else {
+                op as u8 as i8 as i32
+            };
+            let target = (off + 2).wrapping_add_signed(disp);
+            if disp == 0 || !self.in_code(target) || !decodes(target) {
+                break;
             }
+            targets.push(target);
+            off += 4;
+            if targets.len() >= 256 {
+                break;
+            }
+        }
+        if targets.len() >= 2 {
+            return (4, targets);
         }
         // Word offsets relative to the table base.
         targets.clear();

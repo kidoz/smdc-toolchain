@@ -12,6 +12,20 @@ use super::m68k::*;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 
+/// Logical controller buttons for [`RunConfig::input`] (bit positions in
+/// the mask, active high in the script; the port model applies the
+/// hardware's active-low protocol).
+pub mod buttons {
+    pub const UP: u8 = 0x01;
+    pub const DOWN: u8 = 0x02;
+    pub const LEFT: u8 = 0x04;
+    pub const RIGHT: u8 = 0x08;
+    pub const A: u8 = 0x10;
+    pub const START: u8 = 0x20;
+    pub const B: u8 = 0x40;
+    pub const C: u8 = 0x80;
+}
+
 /// Virtual time and run length.
 #[derive(Debug, Clone)]
 pub struct RunConfig {
@@ -19,6 +33,10 @@ pub struct RunConfig {
     pub frames: u32,
     /// Instructions per virtual frame.
     pub frame_instructions: u32,
+    /// Scripted controller input: (frame, held-button-mask) transitions,
+    /// applied at frame boundaries in frame order. From the listed frame
+    /// onward the mask is held until the next transition (0 = released).
+    pub input: Vec<(u32, u8)>,
 }
 
 impl Default for RunConfig {
@@ -26,6 +44,7 @@ impl Default for RunConfig {
         RunConfig {
             frames: 6,
             frame_instructions: 400_000,
+            input: Vec::new(),
         }
     }
 }
@@ -49,6 +68,7 @@ pub struct RunTrace {
 /// Run a ROM image deterministically.
 pub fn run_rom(rom: &[u8], cfg: &RunConfig) -> RunTrace {
     let mut cpu = Cpu::new(rom, cfg.frame_instructions);
+    cpu.set_input(cfg.input.clone());
     cpu.run(cfg.frames);
     RunTrace {
         ram: cpu.ram,
@@ -123,6 +143,8 @@ pub fn compare_traces(a: &RunTrace, b: &RunTrace) -> Result<(), String> {
 
 const RAM_BASE: u32 = 0xFF0000;
 const RAM_SIZE: usize = 0x10000;
+const Z80_RAM_BASE: u32 = 0xA00000;
+const Z80_RAM_SIZE: usize = 0x2000;
 const CODE_BASE: u32 = 0x200;
 
 struct Cpu<'a> {
@@ -141,6 +163,15 @@ struct Cpu<'a> {
     halted: bool,
     /// Mirrors of controller ctrl-port writes ($A10009/0B/0D).
     ctrl_latch: [u8; 3],
+    /// Z80 work RAM at $A00000 (8 KB, mirrored through $A1FFFF).
+    z80_ram: Vec<u8>,
+    /// Currently held buttons (logical mask, see [`buttons`]).
+    held: u8,
+    /// Scripted input transitions, consumed at frame boundaries.
+    input: Vec<(u32, u8)>,
+    input_pos: usize,
+    /// Frame index of the last input application.
+    input_frame: u32,
     cache: BTreeMap<u32, (M68kInst, usize, Option<u32>)>,
     vdp_writes: Vec<(u32, u32)>,
     instr_count: u64,
@@ -176,6 +207,11 @@ impl<'a> Cpu<'a> {
             imask: 7,
             halted: false,
             ctrl_latch: [0; 3],
+            z80_ram: vec![0; Z80_RAM_SIZE],
+            held: 0,
+            input: Vec::new(),
+            input_pos: 0,
+            input_frame: 0,
             cache: BTreeMap::new(),
             vdp_writes: Vec::new(),
             instr_count: 0,
@@ -194,6 +230,7 @@ impl<'a> Cpu<'a> {
     fn run(&mut self, frames: u32) {
         let total = frames as u64 * self.frame_instructions as u64;
         while self.instr_count < total && self.error.is_none() {
+            self.service_input();
             self.service_interrupts();
             if self.halted {
                 self.instr_count += 1;
@@ -233,6 +270,63 @@ impl<'a> Cpu<'a> {
             .unwrap_or(0)
     }
 
+    /// Three-button pad read for data port `port` (0=A, 1=B, 2=C at
+    /// $A10003/05/07). The TH phase comes from the control-port latch;
+    /// pressed buttons pull their lines low.
+    /// TH=1: bit5=C, bit4=B, bit3=Right, bit2=Left, bit1=Down, bit0=Up.
+    /// TH=0: bit5=Start, bit4=A, bit3=C, bits 2-0 read 0.
+    fn pad_read(&self, port: usize) -> u8 {
+        let th = self.ctrl_latch[port] & 0x40 != 0;
+        let b = self.held;
+        let active = if th {
+            (b & buttons::UP != 0) as u8
+                | (((b & buttons::DOWN) != 0) as u8) << 1
+                | (((b & buttons::LEFT) != 0) as u8) << 2
+                | (((b & buttons::RIGHT) != 0) as u8) << 3
+                | (((b & buttons::B) != 0) as u8) << 4
+                | (((b & buttons::C) != 0) as u8) << 5
+        } else {
+            (((b & buttons::C) != 0) as u8) << 3
+                | (((b & buttons::A) != 0) as u8) << 4
+                | (((b & buttons::START) != 0) as u8) << 5
+        };
+        let v = !active & 0x3F;
+        if std::env::var("SMDC_WATCH_PAD").is_ok() {
+            use std::io::Write;
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("pad.log")
+            {
+                let _ = writeln!(
+                    f,
+                    "[{:>8}] pad{port} read th={th} -> {v:02X} (held {b:02X})",
+                    self.instr_count
+                );
+            }
+        }
+        v
+    }
+
+    /// Install a scripted input timeline (frame, mask), applied at frame
+    /// boundaries in order.
+    fn set_input(&mut self, input: Vec<(u32, u8)>) {
+        self.input = input;
+    }
+
+    /// Apply any input transitions due for the frame `instr_count` falls in.
+    fn service_input(&mut self) {
+        let frame = (self.instr_count / self.frame_instructions as u64) as u32;
+        if frame == self.input_frame && self.instr_count != 0 {
+            return;
+        }
+        self.input_frame = frame;
+        while self.input_pos < self.input.len() && self.input[self.input_pos].0 <= frame {
+            self.held = self.input[self.input_pos].1;
+            self.input_pos += 1;
+        }
+    }
+
     fn sr(&self) -> u16 {
         let ccr = (self.x as u16) << 4
             | (self.n as u16) << 3
@@ -266,8 +360,11 @@ impl<'a> Cpu<'a> {
         }
         match addr {
             RAM_BASE..=0xFFFFFF => self.ram[(addr - RAM_BASE) as usize],
-            0xA10001 => 0x01,                       // domestic, no TMSS
-            0xA10003 | 0xA10005 | 0xA10007 => 0x3F, // no buttons pressed
+            Z80_RAM_BASE..=0xA07FFF => self.z80_ram[((addr - Z80_RAM_BASE) & 0x1FFF) as usize],
+            0xA10001 => 0x01, // domestic, no TMSS
+            0xA10003 => self.pad_read(0),
+            0xA10005 => self.pad_read(1),
+            0xA10007 => self.pad_read(2),
             0xA10009 => self.ctrl_latch[0],
             0xA1000B => self.ctrl_latch[1],
             0xA1000D => self.ctrl_latch[2],
@@ -301,10 +398,18 @@ impl<'a> Cpu<'a> {
             if let Ok(watch) = std::env::var("SMDC_WATCH") {
                 if let Ok(w) = u32::from_str_radix(watch.trim_start_matches("0x"), 16) {
                     if addr & 0xFFFFFC == w & 0xFFFFFC || addr == w {
-                        eprintln!(
-                            "[{:>8}] write {:02X} to {:06X} from pc={:06X}",
-                            self.instr_count, value, addr, self.pc
-                        );
+                        use std::io::Write;
+                        if let Ok(mut f) = std::fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open("watch.log")
+                        {
+                            let _ = writeln!(
+                                f,
+                                "[{:>8}] write {:02X} to {:06X} from pc={:06X}",
+                                self.instr_count, value, addr, self.pc
+                            );
+                        }
                     }
                 }
             }
@@ -312,9 +417,15 @@ impl<'a> Cpu<'a> {
             return;
         }
         match addr {
-            0xA10009 => self.ctrl_latch[0] = value,
-            0xA1000B => self.ctrl_latch[1] = value,
-            0xA1000D => self.ctrl_latch[2] = value,
+            Z80_RAM_BASE..=0xA07FFF => {
+                self.z80_ram[((addr - Z80_RAM_BASE) & 0x1FFF) as usize] = value;
+            }
+            0xA10003 => self.ctrl_latch[0] = value & 0x40,
+            0xA10005 => self.ctrl_latch[1] = value & 0x40,
+            0xA10007 => self.ctrl_latch[2] = value & 0x40,
+            0xA10009 => self.ctrl_latch[0] = value & 0x40,
+            0xA1000B => self.ctrl_latch[1] = value & 0x40,
+            0xA1000D => self.ctrl_latch[2] = value & 0x40,
             _ => {} // VDP word accesses go through write16; rest ignored
         }
     }
@@ -388,8 +499,22 @@ impl<'a> Cpu<'a> {
 
     fn step(&mut self) {
         let addr = self.pc;
-        if std::env::var("SMDC_TRACE").is_ok() {
-            eprintln!("[{:>8}] ${addr:06X}", self.instr_count);
+        if let Ok(min) = std::env::var("SMDC_TRACE_FROM")
+            && let Ok(min) = min.parse::<u64>()
+            && self.instr_count >= min
+            && std::env::var("SMDC_TRACE_TO")
+                .ok()
+                .and_then(|t| t.parse::<u64>().ok())
+                .is_none_or(|max| self.instr_count < max)
+        {
+            use std::io::Write;
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("trace_from.log")
+            {
+                let _ = writeln!(f, "[{:>8}] ${addr:06X}", self.instr_count);
+            }
         }
         let Some((inst, next, target)) = self.decode_cached(addr) else {
             let bytes = self.read32(addr);
@@ -939,9 +1064,9 @@ impl<'a> Cpu<'a> {
                 .a[*r as usize]
                 .wrapping_add_signed(*d as i32)
                 .wrapping_add(self.index_value(i, *hi)),
-            Operand::PcDisp(d) => inst_addr.wrapping_add(4).wrapping_add_signed(*d as i32),
+            Operand::PcDisp(d) => inst_addr.wrapping_add(2).wrapping_add_signed(*d as i32),
             Operand::PcIndexed(d, i, hi) => inst_addr
-                .wrapping_add(4)
+                .wrapping_add(2)
                 .wrapping_add_signed(*d as i32)
                 .wrapping_add(self.index_value(i, *hi)),
             Operand::AbsShort(a) => (*a as i16 as i32) as u32,
@@ -1446,6 +1571,7 @@ mod tests {
             &RunConfig {
                 frames,
                 frame_instructions: 1000,
+                input: Vec::new(),
             },
         );
         assert!(trace.error.is_none(), "{:?}", trace.error);
@@ -1569,6 +1695,7 @@ mod tests {
             &RunConfig {
                 frames: 1,
                 frame_instructions: 100,
+                input: Vec::new(),
             },
         );
         assert!(trace.error.is_none(), "{:?}", trace.error);
