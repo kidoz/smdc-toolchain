@@ -203,15 +203,11 @@ fn tetris_byte_exact_rebuild_behaves_identically() {
 }
 
 /// Hybrid rebuild: original image as substrate, discovered functions
-/// replaced by their compiled C. Milestone: the hybrid must behave
-/// identically to the original - same work RAM state (stack residue
-/// excluded) and the same VDP write sequence.
-///
-/// KNOWN DIVERGENCE (tracked): the lifted dispatch case values were off
-/// by the trampoline-scan offset (fixed; spurious writes dropped 330K to
-/// 83K). A remaining loop-semantics gap in one VBlank task handler still
-/// makes the rebuild do ~45x the original VDP writes.
-#[ignore = "VBlank task loop gap; see comment"]
+/// replaced by their compiled C. The hybrid must behave identically to
+/// the original — same work RAM state (per-run stack windows excluded)
+/// and the same VDP write sequence — under a frame budget sized so both
+/// runs take their VBlank-synced main-loop passes in lockstep (see the
+/// config comment below).
 #[test]
 fn tetris_hybrid_behaves_identically() {
     let Some(path) = tetris_rom_path() else {
@@ -241,12 +237,19 @@ fn tetris_hybrid_behaves_identically() {
         let _ = std::fs::write("tmp/hybrid.map", map);
     }
 
-    // A generous budget: the hybrid's compiled checksum loop alone takes
-    // ~12M instructions (the original finishes its whole boot in ~0.5M).
-    // Both ROMs run under the SAME config, keeping the comparison fair.
+    // Frame budget sizing: the hybrid's compiled code is far slower than
+    // the original's hand-written assembly (boot + title decompression
+    // take ~15M instructions vs the original's ~0.5M). The interpreter
+    // couples VBlank cadence to the instruction budget (fire at 0.9 of
+    // each frame), so for the two runs to take their VBlank-synced main
+    // loop passes in lockstep, the rebuild's setup must complete before
+    // the first VBlank: 20M per frame puts it at instruction 18M, past
+    // the rebuild's ~14.8M setup. The original is spin-wait driven and
+    // insensitive to the budget. Both ROMs run under the SAME config,
+    // keeping the comparison fair.
     let cfg = RunConfig {
         frames: 40,
-        frame_instructions: 1_000_000,
+        frame_instructions: 20_000_000,
         input: Vec::new(),
     };
     let a = run_rom(&original, &cfg);
@@ -292,11 +295,7 @@ fn tetris_hybrid_behaves_identically() {
 
 /// Data-only C rebuild: all original code erased, only data survives at its
 /// original addresses, executable code is 100% compiled from the decompiled
-/// C. Milestone: behavioral equality with the original, as with the hybrid.
-///
-/// KNOWN DIVERGENCE (tracked): same VBlank task-handler loop gap as the
-/// hybrid gate (see its comment).
-#[ignore = "VBlank task loop gap; see hybrid gate"]
+/// C. Behavioral equality with the original, as with the hybrid.
 #[test]
 fn tetris_data_only_rebuild_behaves_identically() {
     let Some(path) = tetris_rom_path() else {
@@ -321,9 +320,13 @@ fn tetris_data_only_rebuild_behaves_identically() {
         .count();
     assert!(erased > 0x400, "expected erasure of original code, got {erased} bytes");
 
+    // Same frame-budget reasoning as the hybrid gate: the compiled
+    // rebuild needs a per-frame budget its ~15M-instruction setup fits
+    // inside before the first VBlank, while the original is spin-wait
+    // driven and insensitive to it.
     let cfg = RunConfig {
         frames: 40,
-        frame_instructions: 1_000_000,
+        frame_instructions: 20_000_000,
         input: Vec::new(),
     };
     let a = run_rom(&original, &cfg);
@@ -351,12 +354,10 @@ fn tetris_data_only_rebuild_behaves_identically() {
 
 /// Gameplay gate: scripted controller input (Start into the menu, then
 /// directions) must drive the original and the data-only rebuild through
-/// identical state. This exercises code paths idle frames never touch.
-///
-/// KNOWN DIVERGENCE (tracked): same VBlank task-handler loop gap as the
-/// idle gates. Run with `cargo test --test tetris_roundtrip -- --ignored`.
+/// identical state. This exercises code paths idle frames never touch
+/// (menu transitions, the pad-reader's second controller port, the
+/// palette fade task chain).
 #[test]
-#[ignore = "VBlank task loop gap; see hybrid gate"]
 fn tetris_data_only_rebuild_plays_identically() {
     let Some(path) = tetris_rom_path() else {
         eprintln!("skipping: Tetris ROM not found (set SMDC_TETRIS_ROM to override)");
@@ -380,9 +381,13 @@ fn tetris_data_only_rebuild_plays_identically() {
         (36, buttons::A),
         (40, 0),
     ];
+    // Same frame-budget reasoning as the idle gates: the compiled rebuild's
+    // ~15M-instruction setup must fit before the first VBlank (at 0.9 of
+    // the frame) so input frames land on the same main-loop passes in both
+    // runs.
     let cfg = RunConfig {
         frames: 40,
-        frame_instructions: 1_000_000,
+        frame_instructions: 20_000_000,
         input: script,
     };
 

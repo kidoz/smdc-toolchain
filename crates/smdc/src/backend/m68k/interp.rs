@@ -61,6 +61,11 @@ pub struct RunTrace {
     /// Lowest address the stack pointer reached. RAM above this is stale
     /// stack residue and is excluded from comparisons.
     pub stack_floor: u32,
+    /// Initial stack pointer (vector 0). Together with `stack_floor` it
+    /// delimits this run's stack window; the two compared runs may use
+    /// different stacks (a rebuild's compiled code runs on a private
+    /// stack), so residue exclusion is per-run.
+    pub stack_top: u32,
     /// First execution error (unknown instruction, runaway, etc.).
     pub error: Option<String>,
 }
@@ -69,12 +74,14 @@ pub struct RunTrace {
 pub fn run_rom(rom: &[u8], cfg: &RunConfig) -> RunTrace {
     let mut cpu = Cpu::new(rom, cfg.frame_instructions);
     cpu.set_input(cfg.input.clone());
+    let stack_top = cpu.a[7] & 0x00FF_FFFF;
     cpu.run(cfg.frames);
     RunTrace {
         ram: cpu.ram,
         vdp_writes: cpu.vdp_writes,
         instructions: cpu.instr_count,
         stack_floor: cpu.min_sp & 0x00FF_FFFF,
+        stack_top,
         error: cpu.error,
     }
 }
@@ -95,13 +102,20 @@ pub fn compare_traces(a: &RunTrace, b: &RunTrace) -> Result<(), String> {
         ));
     }
     if a.ram != b.ram {
-        // Stale stack residue (from differing call depths) above the
-        // deepest stack either run touched is not semantic state.
-        let floor = a.stack_floor.min(b.stack_floor);
+        // Stale stack residue (from differing call depths) is not semantic
+        // state. The two runs may sit on different stacks — a rebuild's
+        // compiled code uses a private stack below the original's data —
+        // so each run's own window [stack_floor, stack_top) is excluded;
+        // a single shared cutoff would swallow real global differences
+        // between the windows.
+        let in_window = |t: &RunTrace, addr: u32| {
+            t.stack_floor <= addr && addr < t.stack_top && t.stack_top > 0
+        };
         let mut first: Option<usize> = None;
         let mut count = 0usize;
         for (i, (x, y)) in a.ram.iter().zip(b.ram.iter()).enumerate() {
-            if x != y && (0xFF0000 + i as u32) < floor {
+            let addr = 0xFF0000 + i as u32;
+            if x != y && !in_window(a, addr) && !in_window(b, addr) {
                 count += 1;
                 if first.is_none() {
                     first = Some(i);
@@ -111,10 +125,15 @@ pub fn compare_traces(a: &RunTrace, b: &RunTrace) -> Result<(), String> {
         if let Some(off) = first {
             return Err(format!(
                 "work RAM differs at 0x{:06X}: {:02X} vs {:02X} \
-                 (stack floor 0x{floor:06X}, {count} differing bytes below it)",
+                 (stacks [0x{:06X},0x{:06X}) and [0x{:06X},0x{:06X}) excluded, \
+                 {count} differing bytes)",
                 0xFF0000 + off,
                 a.ram[off],
-                b.ram[off]
+                b.ram[off],
+                a.stack_floor,
+                a.stack_top,
+                b.stack_floor,
+                b.stack_top
             ));
         }
     }
@@ -434,6 +453,23 @@ impl<'a> Cpu<'a> {
         let addr = addr & 0x00FF_FFFF;
         match addr {
             0xC00000 | 0xC00002 | 0xC00004 | 0xC00006 => {
+                if std::env::var("SMDC_WATCH_VDP").is_ok() {
+                    use std::io::Write;
+                    if let Ok(mut f) = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open("vdp.log")
+                    {
+                        let _ = writeln!(
+                            f,
+                            "[{:>8}] #{} ${addr:06X} <- {:04X} from pc={:06X}",
+                            self.instr_count,
+                            self.vdp_writes.len(),
+                            value,
+                            self.pc
+                        );
+                    }
+                }
                 self.vdp_writes.push((addr, value as u32));
             }
             0xC00011 => {} // PSG: ignored
@@ -1097,7 +1133,14 @@ impl<'a> Cpu<'a> {
                     Size::Long => value,
                 };
             }
-            Operand::AddrReg(r) => self.a[*r as usize] = value,
+            Operand::AddrReg(r) => {
+                // MOVEA.W sign-extends the word source into all 32 bits
+                // (word $FB00 -> $FFFFFB00); long moves transfer verbatim.
+                self.a[*r as usize] = match size {
+                    Size::Word => sign_extend_word(value),
+                    _ => value,
+                };
+            }
             Operand::Sr => self.set_sr(value as u16),
             Operand::PostInc(r) => {
                 let a = self.a[*r as usize];

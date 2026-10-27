@@ -19,10 +19,12 @@ use std::fmt::Write as _;
 
 const CODE_BASE: u32 = 0x200;
 
-/// One decoded instruction with its static control-transfer target.
+/// One decoded instruction with its static control-transfer target and the
+/// address of the next instruction in memory order.
 struct Decoded {
     inst: M68kInst,
     target: Option<u32>,
+    next: u32,
 }
 
 /// Decompile a Genesis ROM image to C-like pseudo-source.
@@ -110,6 +112,11 @@ struct Decompiler<'a> {
     /// conventions), in first-read order. Functions with an A6 frame use
     /// frame parameters instead.
     func_args: BTreeMap<u32, Vec<String>>,
+    /// Function start -> argument registers the body also WRITES: the 68k
+    /// register file is shared, so a callee's mutation is visible to its
+    /// caller. Rendered as pointer out-parameters with a write-back before
+    /// every return.
+    func_arg_out: BTreeMap<u32, BTreeSet<String>>,
     /// Functions whose return value in d0 is live at some `rts`.
     func_ret: BTreeSet<u32>,
     /// Functions entered from the exception vector table (interrupt
@@ -149,6 +156,7 @@ impl<'a> Decompiler<'a> {
             ram_sizes: BTreeMap::new(),
             hw_used: BTreeSet::new(),
             func_args: BTreeMap::new(),
+            func_arg_out: BTreeMap::new(),
             func_ret: BTreeSet::new(),
             hw_vector_funcs: BTreeSet::new(),
             jump_tables: BTreeMap::new(),
@@ -257,11 +265,13 @@ impl<'a> Decompiler<'a> {
                     break;
                 };
                 visited.insert(addr);
+                let next = CODE_BASE + next_off as u32;
                 self.insts.insert(
                     addr,
                     Decoded {
                         inst,
                         target,
+                        next,
                     },
                 );
 
@@ -548,6 +558,7 @@ impl<'a> Decompiler<'a> {
     fn scan_signatures(&mut self) {
         let starts: Vec<u32> = self.func_starts.iter().copied().collect();
         let mut func_args = BTreeMap::new();
+        let mut func_arg_out: BTreeMap<u32, BTreeSet<String>> = BTreeMap::new();
         let mut func_ret = BTreeSet::new();
         for (i, &start) in starts.iter().enumerate() {
             let end = starts
@@ -585,6 +596,7 @@ impl<'a> Decompiler<'a> {
             }
             let mut read_order: Vec<String> = Vec::new();
             let mut written: Vec<Reg> = Vec::new();
+            let mut arg_writes: BTreeSet<String> = BTreeSet::new();
             let mut in_prologue = true;
             for inst in &insts {
                 // `link a6` writes the frame pointer; `unlk` reads it.
@@ -593,8 +605,11 @@ impl<'a> Decompiler<'a> {
                     continue;
                 }
                 if in_prologue {
-                    if let M68kInst::Movem(_, regs, _, true) = inst {
-                        written.extend(regs.iter().copied());
+                    if let M68kInst::Movem(_, _, _, true) = inst {
+                        // A leading register save stores the incoming
+                        // values; it neither defines nor uses them. Skip
+                        // it: a genuine later read (e.g. `movem a0..;
+                        // move.l a0, a1`) still counts as an argument.
                         continue;
                     }
                     if matches!(inst, M68kInst::Nop) {
@@ -613,11 +628,25 @@ impl<'a> Decompiler<'a> {
                 }
                 written.extend(writes);
             }
+            // Argument registers the body writes: the shared 68k register
+            // file exposes the mutation to the caller. A write before the
+            // argument's first read would have excluded it from the
+            // argument list, so any write here is a genuine mutation.
+            for r in &written {
+                let name = format!("{r}");
+                if read_order.contains(&name) {
+                    arg_writes.insert(name);
+                }
+            }
             if !read_order.is_empty() {
                 func_args.insert(start, read_order);
+                if !arg_writes.is_empty() {
+                    func_arg_out.insert(start, arg_writes);
+                }
             }
         }
         self.func_args = func_args;
+        self.func_arg_out = func_arg_out;
         self.func_ret = func_ret;
     }
 
@@ -1057,8 +1086,34 @@ impl<'a, 'b> Lifter<'a, 'b> {
     fn function(mut self, name: &str, out: &mut String) {
         self.prescan();
         self.lift_body();
-        let stmts = structure(std::mem::take(&mut self.stmts));
-                self.render(name, &stmts, out);
+        let mut stmts = structure(std::mem::take(&mut self.stmts));
+        // Publish out-argument registers before every return, and when the
+        // body can run off the end.
+        let out_args: Vec<String> = self
+            .decomp
+            .func_arg_out
+            .get(&self.start)
+            .map(|s| s.iter().cloned().collect())
+            .unwrap_or_default();
+        if !out_args.is_empty() {
+            let mut rewritten: Vec<Stmt> = Vec::with_capacity(stmts.len() + 8);
+            for s in stmts.drain(..) {
+                match s {
+                    Stmt::Return(v) => {
+                        for a in &out_args {
+                            rewritten.push(Stmt::Expr(format!("*{a}p = {a};")));
+                        }
+                        rewritten.push(Stmt::Return(v));
+                    }
+                    other => rewritten.push(other),
+                }
+            }
+            for a in &out_args {
+                rewritten.push(Stmt::Expr(format!("*{a}p = {a};")));
+            }
+            stmts = rewritten;
+        }
+        self.render(name, &stmts, out);
     }
 
     /// Discover frame layout and register usage before lifting.
@@ -1118,14 +1173,41 @@ impl<'a, 'b> Lifter<'a, 'b> {
             .range(self.start..self.end)
             .map(|(&a, _)| a)
             .collect();
-        for addr in addrs {
-            if self.decomp.labels.contains(&addr) {
-                self.stmts.push(Stmt::Label(addr));
+        for addr in &addrs {
+            if self.decomp.labels.contains(addr) {
+                self.stmts.push(Stmt::Label(*addr));
             }
-            let d = &self.decomp.insts[&addr];
+            let d = &self.decomp.insts[addr];
             let inst = d.inst.clone();
             let target = d.target;
-            self.lift_inst(inst, addr, target);
+            self.lift_inst(inst, *addr, target);
+        }
+        // Tail fall-through: the extent's last instruction flows on into the
+        // next function's start (a shared-body entry such as F_000506's
+        // second controller-port pass through F_000526). The callee's `rts`
+        // returns to THIS function's caller, so a call followed by this
+        // function's own return is the faithful rendering.
+        if let Some(&last) = addrs.last() {
+            let d = &self.decomp.insts[&last];
+            let terminator = matches!(
+                d.inst,
+                M68kInst::Rts
+                    | M68kInst::Rte
+                    | M68kInst::Rtr
+                    | M68kInst::Bra(_)
+                    | M68kInst::BraS(_)
+                    | M68kInst::Jmp(_)
+                    | M68kInst::Stop(_)
+                    | M68kInst::Illegal
+            );
+            if !terminator
+                && d.next == self.end
+                && self.decomp.func_starts.contains(&self.end)
+                && self.end != self.start
+            {
+                let text = self.call_text(self.end);
+                self.stmts.push(Stmt::Expr(text));
+            }
         }
     }
 
@@ -1183,9 +1265,10 @@ impl<'a, 'b> Lifter<'a, 'b> {
                 self.stmts.push(Stmt::Expr(format!("{r} = {expr};")));
                 self.addr_regs.remove(&r);
             }
-            M68kInst::Clr(_, op) => {
-                let lv = self.lvalue(&op, &Size::Long);
+            M68kInst::Clr(size, op) => {
+                let lv = self.lvalue(&op, &size);
                 self.stmts.push(Stmt::Expr(format!("{lv} = 0;")));
+                self.pending = Some(("0".to_string(), CmpRef::Zero));
             }
 
             M68kInst::Add(size, src, dst) => self.lift_binary(&src, &dst, "+", &size),
@@ -1198,11 +1281,11 @@ impl<'a, 'b> Lifter<'a, 'b> {
             M68kInst::Suba(_, src, dst) => {
                 self.lift_binary(&src, &Operand::AddrReg(dst), "-", &Size::Long)
             }
-            M68kInst::Addq(_, n, dst) => {
-                self.lift_binary(&Operand::Imm(n as i32), &dst, "+", &Size::Long)
+            M68kInst::Addq(size, n, dst) => {
+                self.lift_binary(&Operand::Imm(n as i32), &dst, "+", &size)
             }
-            M68kInst::Subq(_, n, dst) => {
-                self.lift_binary(&Operand::Imm(n as i32), &dst, "-", &Size::Long)
+            M68kInst::Subq(size, n, dst) => {
+                self.lift_binary(&Operand::Imm(n as i32), &dst, "-", &size)
             }
             M68kInst::Addi(size, v, dst) => {
                 self.lift_binary(&Operand::Imm(v), &dst, "+", &size)
@@ -1231,15 +1314,11 @@ impl<'a, 'b> Lifter<'a, 'b> {
             M68kInst::Divs(src, dst) | M68kInst::Divu(src, dst) => {
                 self.lift_binary(&src, &Operand::DataReg(dst), "/", &Size::Word)
             }
-            M68kInst::Neg(_, op) => {
-                let lv = self.lvalue(&op, &Size::Long);
-                let rv = self.rvalue(&op, &Size::Long);
-                self.stmts.push(Stmt::Expr(format!("{lv} = -{rv};")));
+            M68kInst::Neg(size, op) => {
+                self.lift_unary(&op, "-", &size);
             }
-            M68kInst::Not(_, op) => {
-                let lv = self.lvalue(&op, &Size::Long);
-                let rv = self.rvalue(&op, &Size::Long);
-                self.stmts.push(Stmt::Expr(format!("{lv} = ~{rv};")));
+            M68kInst::Not(size, op) => {
+                self.lift_unary(&op, "~", &size);
             }
             M68kInst::Ext(_, reg) => {
                 self.stmts
@@ -1322,7 +1401,9 @@ impl<'a, 'b> Lifter<'a, 'b> {
                         target: t,
                     });
                 }
-                self.pending = None;
+                // Branches do not affect flags: keep the pending condition
+                // so a following branch on the same comparison (beq+bmi on
+                // one move) still renders a real condition.
             }
             M68kInst::Dbcc(cond, reg, _) => {
                 if let Some(t) = target {
@@ -1472,13 +1553,29 @@ impl<'a, 'b> Lifter<'a, 'b> {
             .get(&target)
             .cloned()
             .unwrap_or_default();
+        let callee_out = self
+            .decomp
+            .func_arg_out
+            .get(&target)
+            .cloned()
+            .unwrap_or_default();
         for a in &args {
             self.used_regs.insert(a.clone());
         }
-        let call = if args.is_empty() {
+        let rendered: Vec<String> = args
+            .iter()
+            .map(|a| {
+                if callee_out.contains(a) {
+                    format!("&{a}")
+                } else {
+                    a.clone()
+                }
+            })
+            .collect();
+        let call = if rendered.is_empty() {
             format!("{name}()")
         } else {
-            format!("{name}({})", args.join(", "))
+            format!("{name}({})", rendered.join(", "))
         };
         if self.decomp.func_ret.contains(&target) {
             self.used_regs.insert("d0".to_string());
@@ -1516,14 +1613,17 @@ impl<'a, 'b> Lifter<'a, 'b> {
         // move keeps the upper 24 bits, a word move zero-extends (m68k
         // MOVE.W), a long move replaces.
         if let Some(d) = reg_name_of(dst) && matches!(dst, Operand::DataReg(_)) {
+            // The pending flag value carries the moved value's SIGN domain:
+            // N comes from bit 7 / bit 15, so a following bmi/bpl must test
+            // the sign-extended sub-word, not the zero-extended mask.
             let (assign, flags_value) = match size {
                 Size::Byte => (
                     format!("{d} = ({d} & -256) | ({rv} & 255);"),
-                    format!("({rv} & 255)"),
+                    format!("((int)(char)({rv} & 255))"),
                 ),
                 Size::Word => (
                     format!("{d} = {rv} & 65535;"),
-                    format!("({rv} & 65535)"),
+                    format!("((int)(short)({rv} & 65535))"),
                 ),
                 Size::Long => (
                     format!("{d} = {rv};"),
@@ -1569,6 +1669,37 @@ impl<'a, 'b> Lifter<'a, 'b> {
         }
         self.stmts.push(Stmt::Expr(format!("{lv} = {lv} {op} {rv};")));
         self.pending = Some((lv, CmpRef::Zero));
+        if let Some(d) = reg_name_of(dst) {
+            self.addr_regs.remove(&d);
+        }
+    }
+
+    /// Unary ALU op (NEG, NOT) at the instruction's size: memory operands
+    /// render at that width, and a sub-word result into a data register is
+    /// confined to the low byte/word, preserving the upper bits.
+    fn lift_unary(&mut self, dst: &Operand, op: &str, size: &Size) {
+        let lv = self.lvalue(dst, size);
+        let rv = self.rvalue(dst, size);
+        if let Some(d) = reg_name_of(dst)
+            && matches!(dst, Operand::DataReg(_))
+            && *size != Size::Long
+        {
+            let (m, keep, cast) = match size {
+                Size::Byte => ("255", "-256", "(int)(char)"),
+                _ => ("65535", "-65536", "(int)(short)"),
+            };
+            let expr = format!("({op}({rv}) & {m})");
+            self.stmts
+                .push(Stmt::Expr(format!("{d} = ({d} & {keep}) | {expr};")));
+            // The N flag reads the signed sub-word result: sign-cast so a
+            // following bmi/bpl tests a negative value.
+            self.pending = Some((format!("{cast}({expr})"), CmpRef::Zero));
+            self.addr_regs.remove(&d);
+            return;
+        }
+        let expr = format!("{op}({rv})");
+        self.stmts.push(Stmt::Expr(format!("{lv} = {expr};")));
+        self.pending = Some((expr, CmpRef::Zero));
         if let Some(d) = reg_name_of(dst) {
             self.addr_regs.remove(&d);
         }
@@ -1757,14 +1888,32 @@ impl<'a, 'b> Lifter<'a, 'b> {
             "void"
         };
         // smdc cdecl frames use named parameters; foreign register
-        // conventions pass the registers the callee reads first.
+        // conventions pass the registers the callee reads first. Argument
+        // registers the body writes become pointer out-parameters: the 68k
+        // register file is shared, so the caller observes the mutation.
+        let out_args: BTreeSet<String> = self
+            .decomp
+            .func_arg_out
+            .get(&self.start)
+            .cloned()
+            .unwrap_or_default();
         let arg_names: Vec<String> = if !self.params.is_empty() {
             self.params.iter().map(|p| format!("int p{p}")).collect()
         } else {
             self.decomp
                 .func_args
                 .get(&self.start)
-                .map(|args| args.iter().map(|a| format!("int {a}")).collect())
+                .map(|args| {
+                    args.iter()
+                        .map(|a| {
+                            if out_args.contains(a) {
+                                format!("int *{a}p")
+                            } else {
+                                format!("int {a}")
+                            }
+                        })
+                        .collect()
+                })
                 .unwrap_or_default()
         };
         let plist = if arg_names.is_empty() {
@@ -1773,6 +1922,12 @@ impl<'a, 'b> Lifter<'a, 'b> {
             arg_names.join(", ")
         };
         out.push_str(&format!("{ret} {name}({plist}) {{\n"));
+
+        // Out-arguments alias their incoming cell; the write-back before
+        // every return publishes the final register value.
+        for a in &out_args {
+            out.push_str(&format!("    int {a} = *{a}p;\n"));
+        }
 
         // Locals: every used register except the parameter registers.
         let param_names: Vec<String> = self
@@ -1785,6 +1940,7 @@ impl<'a, 'b> Lifter<'a, 'b> {
             .used_regs
             .iter()
             .filter(|r| !param_names.contains(r))
+            .filter(|r| !out_args.contains(*r))
             .cloned()
             .collect();
         regs.sort_by(|a, b| {

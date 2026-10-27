@@ -11,6 +11,7 @@
 //! interrupt contract.
 
 use super::decompile_rom;
+use super::interp::{run_rom, RunConfig, RunTrace};
 use super::m68k::*;
 use super::{Assembler, CodeGenerator};
 use crate::common::DiagnosticReporter;
@@ -160,11 +161,67 @@ fn build(rom: &[u8], strip_code: bool) -> Result<HybridRom, String> {
         image[0x18E..0x190].copy_from_slice(&sum.to_be_bytes());
     }
 
+    // 8. Private stack for the compiled code: repoint the initial SP
+    // (vector 0) at the top of the largest RAM window the original
+    // program never touches. The compiled frames are an order of
+    // magnitude deeper than the original's stack budget, and the
+    // original's data can start as little as ~1.5 KB below its initial
+    // SP (Tetris keeps its VDP line buffer at $FFF7A0) — with the
+    // original SP, the compiled call chain grows straight through the
+    // program's globals and buffers. One shared stack keeps nested
+    // interrupt frames consistent; vector 0 is outside the checksum
+    // range, so the boot self-check is unaffected.
+    let probe = run_rom(
+        rom,
+        &RunConfig {
+            frames: 3,
+            frame_instructions: 400_000,
+            input: Vec::new(),
+        },
+    );
+    let stack_top =
+        private_stack_top(&probe).ok_or_else(|| "no free work-RAM window for the compiled stack".to_string())?;
+    image[0..4].copy_from_slice(&stack_top.to_be_bytes());
+
     Ok(HybridRom {
         image,
         source,
         function_map,
     })
+}
+
+/// Top address for the compiled code's private stack: the top of the
+/// largest run of RAM the original leaves untouched, strictly below the
+/// original's deepest stack use (measured by a short probe run). The
+/// compiled frames grow down from it through memory the program provably
+/// does not use. The probe's nonzero set is a lower bound on the
+/// program's data: bytes written zero during the probe are not seen.
+fn private_stack_top(probe: &RunTrace) -> Option<u32> {
+    const RAM_BASE: u32 = 0xFF0000;
+    const REQUIRED: u32 = 0x4000; // compiled call-chain headroom
+    const MARGIN: u32 = 0x40;
+
+    // Nothing at or above the original's stack floor is safe: the
+    // program's own call chain owns that memory.
+    let limit = probe.stack_floor.min(RAM_BASE + probe.ram.len() as u32);
+    let mut best: Option<(u32, u32)> = None; // (gap top address, gap length)
+    let mut prev_nonzero: i64 = -1;
+    for (i, &b) in probe.ram.iter().enumerate() {
+        let addr = RAM_BASE + i as u32;
+        if addr >= limit {
+            break;
+        }
+        if b != 0 {
+            let gap = i as i64 - prev_nonzero - 1;
+            if gap as u32 >= REQUIRED + 2 * MARGIN
+                && best.map_or(true, |(_, len)| (gap as u32) > len)
+            {
+                best = Some((addr, gap as u32));
+            }
+            prev_nonzero = i as i64;
+        }
+    }
+    best.map(|(top, _)| top - MARGIN)
 }
 
 /// C name for the function that lived at `addr` (decompiler convention).
