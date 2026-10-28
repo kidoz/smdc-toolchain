@@ -47,6 +47,12 @@ pub struct CodeGenerator {
     // Free callee-saved data registers available for caching (D2-D7).
     // D0 and D1 stay reserved as scratch; A0/A1 as address scratch.
     free_data_regs: Vec<DataReg>,
+    // ---- Alloca fast path ----
+    // Alloca temps whose storage offset is known: `Load`/`Store` through the
+    // bare temp access the frame slot directly instead of going through a
+    // materialized pointer cell. The address itself is only computed when it
+    // escapes (e.g. `&local`, member arithmetic), in `load_value`.
+    alloca_storage: HashMap<u32, i16>,
 }
 
 /// Callee-saved data registers usable by the block-local cache, in preference order.
@@ -80,6 +86,7 @@ impl CodeGenerator {
             reg_cache: HashMap::new(),
             reg_cache_lru: Vec::new(),
             free_data_regs: CACHE_REGS.to_vec(),
+            alloca_storage: HashMap::new(),
         }
     }
 
@@ -552,6 +559,7 @@ impl CodeGenerator {
         // Reset state
         self.temp_offsets.clear();
         self.next_offset = -4;
+        self.alloca_storage.clear();
         // Reset the block-local register cache (should already be empty between fns).
         self.reg_cache.clear();
         self.reg_cache_lru.clear();
@@ -738,6 +746,21 @@ impl CodeGenerator {
                 }
             }
             Value::Temp(t) => {
+                // An alloca temp used as a general value is the ADDRESS of a
+                // local (e.g. `&local`, member/index arithmetic): materialize
+                // the frame-relative address.
+                if let Some(&storage) = self.alloca_storage.get(&t.0) {
+                    self.emit(M68kInst::Lea(
+                        Operand::Disp(storage, AddrReg::A6),
+                        AddrReg::A0,
+                    ));
+                    self.emit(M68kInst::Move(
+                        Size::Long,
+                        Operand::AddrReg(AddrReg::A0),
+                        Operand::DataReg(reg),
+                    ));
+                    return Ok(());
+                }
                 if let Some(&cached) = self.reg_cache.get(&t.0) {
                     // Cache hit: copy register-to-register instead of a stack load.
                     self.cache_touch(t.0);
@@ -1108,6 +1131,40 @@ impl CodeGenerator {
             } => {
                 // Note: volatile flag indicates this memory access should not be optimized.
                 // For now, we emit the same code (no optimization pass yet).
+                // Alloca fast path: a load through a bare local-variable temp
+                // reads the known frame slot directly.
+                if let Value::Temp(t) = addr
+                    && let Some(&storage) = self.alloca_storage.get(&t.0)
+                {
+                    let sz = Size::from_bytes(*size);
+                    self.emit(M68kInst::Move(
+                        sz,
+                        Operand::Disp(storage, AddrReg::A6),
+                        Operand::DataReg(DataReg::D0),
+                    ));
+                    if *signed {
+                        if *size == 1 {
+                            self.emit(M68kInst::Ext(Size::Word, DataReg::D0));
+                            self.emit(M68kInst::Ext(Size::Long, DataReg::D0));
+                        } else if *size == 2 {
+                            self.emit(M68kInst::Ext(Size::Long, DataReg::D0));
+                        }
+                    } else if *size == 1 {
+                        self.emit(M68kInst::Andi(
+                            Size::Long,
+                            0xFF,
+                            Operand::DataReg(DataReg::D0),
+                        ));
+                    } else if *size == 2 {
+                        self.emit(M68kInst::Andi(
+                            Size::Long,
+                            0xFFFF,
+                            Operand::DataReg(DataReg::D0),
+                        ));
+                    }
+                    self.store_temp(*dst, DataReg::D0);
+                    return Ok(());
+                }
                 self.load_value(addr, DataReg::D0)?;
                 self.emit(M68kInst::Move(
                     Size::Long,
@@ -1158,6 +1215,20 @@ impl CodeGenerator {
             } => {
                 // Note: volatile flag indicates this memory access should not be optimized.
                 // For now, we emit the same code (no optimization pass yet).
+                // Alloca fast path: a store through a bare local-variable temp
+                // writes the known frame slot directly.
+                if let Value::Temp(t) = addr
+                    && let Some(&storage) = self.alloca_storage.get(&t.0)
+                {
+                    self.load_value(src, DataReg::D1)?;
+                    let sz = Size::from_bytes(*size);
+                    self.emit(M68kInst::Move(
+                        sz,
+                        Operand::DataReg(DataReg::D1),
+                        Operand::Disp(storage, AddrReg::A6),
+                    ));
+                    return Ok(());
+                }
                 // Load the source BEFORE moving the address into A0: loading a
                 // Name/StringConst value uses A0 as LEA scratch and would
                 // otherwise clobber the destination address.
@@ -1310,9 +1381,6 @@ impl CodeGenerator {
             }
 
             Inst::Alloca { dst, size, .. } => {
-                // Allocate on stack by subtracting from SP
-                // But we use frame-relative addressing, so just assign an offset
-                let offset = self.get_temp_offset(*dst);
                 // Reserve storage BELOW the already-assigned slots. next_offset
                 // is the top of the next free 4-byte slot, so the free region
                 // ends at next_offset + 3; the buffer base (lowest address) is
@@ -1320,16 +1388,11 @@ impl CodeGenerator {
                 let aligned = ((*size as i16) + 3) & !3;
                 let storage_offset = self.next_offset + 4 - aligned;
                 self.next_offset -= aligned;
-                // Store address of allocated space
-                self.emit(M68kInst::Lea(
-                    Operand::Disp(storage_offset, AddrReg::A6),
-                    AddrReg::A0,
-                ));
-                self.emit(M68kInst::Move(
-                    Size::Long,
-                    Operand::AddrReg(AddrReg::A0),
-                    Operand::Disp(offset, AddrReg::A6),
-                ));
+                // Record the storage offset instead of materializing a pointer
+                // cell: Load/Store through this temp access the frame slot
+                // directly, and `load_value` computes the address (lea) only
+                // when it escapes into general value flow.
+                self.alloca_storage.insert(dst.0, storage_offset);
             }
 
             Inst::AddrOf { dst, name } => {
