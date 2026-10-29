@@ -237,14 +237,15 @@ fn tetris_hybrid_behaves_identically() {
         let _ = std::fs::write("tmp/hybrid.map", map);
     }
 
-    // Frame budget sizing: 7.6M instructions is a real Mega Drive frame
-    // (one 68000 per ~262 lines at 60Hz), and the interpreter fires VBlank
-    // at 0.9 of each frame. The compiled rebuild's boot + title
-    // decompression completes in ~6.4M instructions, inside the first
-    // frame, so both runs take their VBlank-synced main-loop passes in
-    // lockstep at genuine hardware cadence. The original is spin-wait
-    // driven and insensitive to the budget. Both ROMs run under the SAME
-    // config, keeping the comparison fair.
+    // Frame budget sizing: the interpreter fires VBlank at 0.9 of each
+    // frame's instruction budget, so for the two runs to take their
+    // VBlank-synced main-loop passes in lockstep, the compiled rebuild's
+    // setup (~6.4M instructions) must complete inside the first frame.
+    // 7.6M per frame is a test-pacing choice for that — not a real-time
+    // hardware model (a real frame executes orders of magnitude fewer
+    // instructions). The original is spin-wait driven and insensitive to
+    // the budget; both ROMs run under the SAME config, keeping the
+    // comparison fair.
     let cfg = RunConfig {
         frames: 40,
         frame_instructions: 7_600_000,
@@ -318,9 +319,9 @@ fn tetris_data_only_rebuild_behaves_identically() {
         .count();
     assert!(erased > 0x400, "expected erasure of original code, got {erased} bytes");
 
-    // Same frame-budget reasoning as the hybrid gate: a real Mega Drive
-    // frame (7.6M instructions, VBlank at 0.9) with the rebuild's ~6.4M
-    // setup inside the first frame, so both runs stay in lockstep.
+    // Same frame-budget reasoning as the hybrid gate: 7.6M instructions
+    // per frame (VBlank at 0.9) keeps the rebuild's ~6.4M setup inside the
+    // first frame, so both runs stay in lockstep.
     let cfg = RunConfig {
         frames: 40,
         frame_instructions: 7_600_000,
@@ -378,10 +379,10 @@ fn tetris_data_only_rebuild_plays_identically() {
         (36, buttons::A),
         (40, 0),
     ];
-    // Same frame-budget reasoning as the idle gates: a real Mega Drive
-    // frame (7.6M instructions, VBlank at 0.9) with the rebuild's ~6.4M
-    // setup inside the first frame, so input frames land on the same
-    // main-loop passes in both runs.
+    // Same frame-budget reasoning as the idle gates: 7.6M instructions
+    // per frame (VBlank at 0.9) keeps the rebuild's ~6.4M setup inside the
+    // first frame, so input frames land on the same main-loop passes in
+    // both runs.
     let cfg = RunConfig {
         frames: 40,
         frame_instructions: 7_600_000,

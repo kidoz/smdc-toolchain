@@ -80,5 +80,10 @@ an A6 frame get register arguments from a read-before-write analysis
 (`d0 = F_000612();`), hardware registers render as `VDP_CTRL`-style defines,
 and work-RAM globals become typed `ram_FFFFxx` defines with absolute-short
 addresses sign-extended. Interrupt handlers entered from the vector table
-take no arguments. The output is meant for reading; recompiling it is only
-guaranteed for ROMs produced by this toolchain.
+take no arguments.
+
+The lifted C is meant for reading, but it can also be *recompiled and
+executed*: the hybrid and data-only rebuilders compile it back and verify
+behavioral equality against the original under the deterministic
+interpreter. See
+[rebuild a ROM from decompiled C](rebuild-a-rom-from-decompiled-c.md).

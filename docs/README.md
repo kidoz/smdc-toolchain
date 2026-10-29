@@ -16,10 +16,13 @@ of four needs:
   [Render a MIDI file to a ROM](how-to/render-a-midi-file-to-rom.md)
 - **Have a ROM to inspect or patch?**
   [Round-trip a ROM through assembly](how-to/roundtrip-a-rom.md)
+- **Want a ROM rebuilt from its decompiled C?**
+  [Rebuild a ROM from decompiled C](how-to/rebuild-a-rom-from-decompiled-c.md)
 - **Need exact behavior or limits?**
   [MIDI sound driver reference](reference/midi-sound-driver.md)
 - **Want the design story?**
-  [Mega Drive MIDI sound driver design](explanation/midi-sound-driver.md)
+  [Mega Drive MIDI sound driver design](explanation/midi-sound-driver.md) or
+  [the decompile/recompile pipeline](explanation/decompile-recompile-pipeline.md)
 
 ## Writing docs in this repository
 
