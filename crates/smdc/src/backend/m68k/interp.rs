@@ -49,11 +49,15 @@ impl Default for RunConfig {
     }
 }
 
-/// Observable outcome of a run.
-#[derive(Debug, Clone)]
-pub struct RunTrace {
-    /// Final 64 KB work RAM.
-    pub ram: Vec<u8>,
+    /// Observable outcome of a run.
+    #[derive(Debug, Clone)]
+    pub struct RunTrace {
+        /// Final 64 KB work RAM.
+        pub ram: Vec<u8>,
+        /// Final VDP memory (VRAM + CRAM + VSRAM): the materialized
+        /// effect of every data-port write and DMA, not just the port
+        /// writes themselves.
+        pub vram: Vec<u8>,
     /// VDP write sequence: (port, value). Timing excluded on purpose.
     pub vdp_writes: Vec<(u32, u32)>,
     /// Instructions executed before termination.
@@ -76,8 +80,12 @@ pub fn run_rom(rom: &[u8], cfg: &RunConfig) -> RunTrace {
     cpu.set_input(cfg.input.clone());
     let stack_top = cpu.a[7] & 0x00FF_FFFF;
     cpu.run(cfg.frames);
+    let mut vram = cpu.vram;
+    vram.extend_from_slice(&cpu.cram);
+    vram.extend_from_slice(&cpu.vsram);
     RunTrace {
         ram: cpu.ram,
+        vram,
         vdp_writes: cpu.vdp_writes,
         instructions: cpu.instr_count,
         stack_floor: cpu.min_sp & 0x00FF_FFFF,
@@ -137,6 +145,27 @@ pub fn compare_traces(a: &RunTrace, b: &RunTrace) -> Result<(), String> {
             ));
         }
     }
+    if a.vram != b.vram {
+        let first = a
+            .vram
+            .iter()
+            .zip(b.vram.iter())
+            .enumerate()
+            .find(|(_, (x, y))| x != y)
+            .map(|(i, (x, y))| (i, *x, *y));
+        if let Some((i, x, y)) = first {
+            return Err(format!(
+                "VDP memory differs at byte {i} ({}): {x:02X} vs {y:02X}",
+                if i < 0x10000 {
+                    "VRAM"
+                } else if i < 0x10080 {
+                    "CRAM"
+                } else {
+                    "VSRAM"
+                }
+            ));
+        }
+    }
     if a.vdp_writes != b.vdp_writes {
         let (i, (pa, va), (pb, vb)) = a
             .vdp_writes
@@ -184,6 +213,19 @@ struct Cpu<'a> {
     ctrl_latch: [u8; 3],
     /// Z80 work RAM at $A00000 (8 KB, mirrored through $A1FFFF).
     z80_ram: Vec<u8>,
+    /// VDP memory state, modeled so the trace reflects DMA and data-port
+    /// effects, not just port writes. VRAM is stored in 68k byte order.
+    vram: Vec<u8>,
+    cram: Vec<u8>,
+    vsram: Vec<u8>,
+    vdp_regs: [u8; 32],
+    /// Control-port write sequence state: pending second word, code
+    /// register, address register, latched A15/A14, DMA-fill pending.
+    vdp_pending: bool,
+    vdp_code: u8,
+    vdp_addr: u16,
+    vdp_addr_latch: u16,
+    vdp_dmafill: bool,
     /// Currently held buttons (logical mask, see [`buttons`]).
     held: u8,
     /// Scripted input transitions, consumed at frame boundaries.
@@ -225,6 +267,15 @@ impl<'a> Cpu<'a> {
             c: false,
             imask: 7,
             halted: false,
+            vram: vec![0; 0x10000],
+            cram: vec![0; 128],
+            vsram: vec![0; 80],
+            vdp_regs: [0; 32],
+            vdp_pending: false,
+            vdp_code: 0,
+            vdp_addr: 0,
+            vdp_addr_latch: 0,
+            vdp_dmafill: false,
             ctrl_latch: [0; 3],
             z80_ram: vec![0; Z80_RAM_SIZE],
             held: 0,
@@ -471,12 +522,135 @@ impl<'a> Cpu<'a> {
                     }
                 }
                 self.vdp_writes.push((addr, value as u32));
+                if addr & 2 == 0 {
+                    self.vdp_data_write(value);
+                } else {
+                    self.vdp_ctrl_write(value);
+                }
             }
             0xC00011 => {} // PSG: ignored
             _ => {
                 self.write8(addr, (value >> 8) as u8);
                 self.write8(addr.wrapping_add(1), value as u8);
             }
+        }
+    }
+
+    /// Control-port command write, per the standard two-word protocol:
+    /// the first word sets the low 14 address bits (or writes a VDP
+    /// register when `(w & 0xC000) == 0x8000`), the second completes the
+    /// code register and address bits 15-14, and a DMA bit in the code
+    /// starts fill/copy/68k-bus transfer.
+    fn vdp_ctrl_write(&mut self, w: u16) {
+        if !self.vdp_pending {
+            self.vdp_addr = self.vdp_addr_latch | (w & 0x3FFF);
+            self.vdp_code = (self.vdp_code & 0x3C) | ((w >> 14) as u8 & 0x03);
+            if w & 0xC000 == 0x8000 {
+                self.vdp_regs[((w >> 8) & 0x1F) as usize] = w as u8;
+            } else {
+                self.vdp_pending = true;
+            }
+        } else {
+            self.vdp_pending = false;
+            self.vdp_addr_latch = ((w & 3) as u16) << 14;
+            self.vdp_addr = self.vdp_addr_latch | (self.vdp_addr & 0x3FFF);
+            self.vdp_code = (self.vdp_code & 0x03) | (((w >> 2) as u8) & 0x3C);
+            // DMA start: code bit 5 with DMA enabled (reg 1 bit 4).
+            if self.vdp_code & 0x20 != 0 && self.vdp_regs[1] & 0x10 != 0 {
+                match self.vdp_regs[23] >> 6 {
+                    2 => self.vdp_dmafill = true,
+                    3 => self.vdp_dma_copy(),
+                    _ => self.vdp_dma_68k(),
+                }
+            }
+        }
+    }
+
+    /// Data-port write: route into the plane selected by the code register
+    /// (0x1 VRAM, 0x3 CRAM, 0x5 VSRAM), advance the address by the
+    /// auto-increment (reg 15), and service a pending DMA fill.
+    fn vdp_data_write(&mut self, v: u16) {
+        if self.vdp_dmafill {
+            self.vdp_dmafill = false;
+            let len = match (self.vdp_regs[20] as usize) << 8 | self.vdp_regs[19] as usize {
+                0 => 0x10000,
+                n => n,
+            };
+            let fill = (v >> 8) as u8;
+            let mut a = self.vdp_addr;
+            for _ in 0..len {
+                self.vram[(a & 0xFFFF) as usize] = fill;
+                a = a.wrapping_add(self.vdp_regs[15] as u16);
+            }
+            self.vdp_addr = a;
+            return;
+        }
+        let a = self.vdp_addr & 0xFFFF;
+        match self.vdp_code & 0x0F {
+            0x01 => {
+                self.vram[a as usize] = (v >> 8) as u8;
+                self.vram[((a + 1) & 0xFFFF) as usize] = v as u8;
+            }
+            0x03 => {
+                let i = ((a >> 1) & 0x3F) as usize * 2;
+                self.cram[i & 0x7F] = (v >> 8) as u8;
+                self.cram[(i + 1) & 0x7F] = v as u8;
+            }
+            0x05 => {
+                let i = ((a >> 1) & 0x3F) as usize * 2;
+                self.vsram[i & 0x4F] = (v >> 8) as u8;
+                self.vsram[(i + 1) & 0x4F] = v as u8;
+            }
+            _ => {}
+        }
+        self.vdp_addr = self.vdp_addr.wrapping_add(self.vdp_regs[15] as u16);
+    }
+
+    /// ROM/RAM-to-plane DMA: length words from the 68k bus.
+    fn vdp_dma_68k(&mut self) {
+        let len = match (self.vdp_regs[20] as usize) << 8 | self.vdp_regs[19] as usize {
+            0 => 0x10000,
+            n => n,
+        };
+        let dma_src = ((self.vdp_regs[22] as u32) << 8) | self.vdp_regs[21] as u32;
+        let mut source = ((self.vdp_regs[23] as u32) << 17) | (dma_src << 1);
+        for _ in 0..len {
+            let v = self.read16(source);
+            source = ((self.vdp_regs[23] as u32) << 17) | (source.wrapping_add(2) & 0x1FFFF);
+            let plane_addr = self.vdp_addr & 0xFFFF;
+            match self.vdp_code & 0x0F {
+                0x01 => {
+                    self.vram[plane_addr as usize] = (v >> 8) as u8;
+                    self.vram[((plane_addr + 1) & 0xFFFF) as usize] = v as u8;
+                }
+                0x03 => {
+                    let i = ((plane_addr >> 1) & 0x3F) as usize * 2;
+                    self.cram[i & 0x7F] = (v >> 8) as u8;
+                    self.cram[(i + 1) & 0x7F] = v as u8;
+                }
+                0x05 => {
+                    let i = ((plane_addr >> 1) & 0x3F) as usize * 2;
+                    self.vsram[i & 0x4F] = (v >> 8) as u8;
+                    self.vsram[(i + 1) & 0x4F] = v as u8;
+                }
+                _ => {}
+            }
+            self.vdp_addr = self.vdp_addr.wrapping_add(self.vdp_regs[15] as u16);
+        }
+    }
+
+    /// VRAM-to-VRAM DMA: length bytes.
+    fn vdp_dma_copy(&mut self) {
+        let len = match (self.vdp_regs[20] as usize) << 8 | self.vdp_regs[19] as usize {
+            0 => 0x10000,
+            n => n,
+        };
+        let mut source = ((self.vdp_regs[22] as u16) << 8) | self.vdp_regs[21] as u16;
+        for _ in 0..len {
+            let b = self.vram[(source & 0xFFFF) as usize];
+            self.vram[(self.vdp_addr & 0xFFFF) as usize] = b;
+            source = source.wrapping_add(1);
+            self.vdp_addr = self.vdp_addr.wrapping_add(self.vdp_regs[15] as u16);
         }
     }
 
