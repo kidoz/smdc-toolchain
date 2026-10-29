@@ -136,7 +136,9 @@ impl CodeGenerator {
         self.emit_sdk_library_functions()?;
         self.emit_runtime_helpers();
 
-        Ok(std::mem::take(&mut self.output))
+        let mut out = std::mem::take(&mut self.output);
+        peephole(&mut out);
+        Ok(out)
     }
 
     /// Generate M68k instructions from IR module (for binary output)
@@ -240,7 +242,9 @@ impl CodeGenerator {
         // Emit SDK static data (frame counter, operator offsets, etc.)
         self.emit_sdk_static_data();
 
-        Ok(std::mem::take(&mut self.output))
+        let mut out = std::mem::take(&mut self.output);
+        peephole(&mut out);
+        Ok(out)
     }
 
     fn emit(&mut self, inst: M68kInst) {
@@ -1596,6 +1600,71 @@ impl CodeGenerator {
 impl Default for CodeGenerator {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Adjacent-move peephole: the emitter's D0/D1 scratch convention produces
+/// reg-to-reg copy chains (`move X,d0; move d0,Y`). Fold `move A,M` followed
+/// immediately by `move M,B` into `move A,B` when every operand is
+/// side-effect-free (plain registers, frame slots, immediates), neither
+/// instruction touches A7 or a pre/post-increment addressing mode, and the
+/// intermediate M is D0/D1 — the never-cached scratch registers. D2-D7 hold
+/// block-cached temps whose values the emitter assumes persist, so removing
+/// a write to them is not sound. Moves set N/Z, but merging adjacent moves
+/// leaves exactly the final move's flags in place, so no flags consumer can
+/// observe the difference.
+fn peephole(insts: &mut Vec<M68kInst>) {
+    let scratch = |r: &DataReg| matches!(r, DataReg::D0 | DataReg::D1);
+    let foldable_src = |op: &Operand| {
+        matches!(
+            op,
+            Operand::DataReg(_)
+                | Operand::AddrReg(_)
+                | Operand::Disp(_, AddrReg::A6)
+                | Operand::Imm(_)
+        )
+    };
+    let foldable_dst = |op: &Operand| {
+        matches!(
+            op,
+            Operand::DataReg(_) | Operand::AddrReg(_) | Operand::Disp(_, AddrReg::A6)
+        )
+    };
+    for _ in 0..4 {
+        let mut changed = false;
+        let mut out: Vec<M68kInst> = Vec::with_capacity(insts.len());
+        let mut i = 0;
+        while i < insts.len() {
+            let pair = match (&insts[i], insts.get(i + 1)) {
+                (
+                    M68kInst::Move(s1, src, Operand::DataReg(mid)),
+                    Some(M68kInst::Move(s2, Operand::DataReg(src2), dst)),
+                ) if s1 == s2
+                    && mid == src2
+                    && scratch(mid)
+                    && foldable_src(src)
+                    && foldable_dst(dst) =>
+                {
+                    Some(M68kInst::Move(*s1, src.clone(), dst.clone()))
+                }
+                _ => None,
+            };
+            match pair {
+                Some(merged) => {
+                    out.push(merged);
+                    i += 2;
+                    changed = true;
+                }
+                None => {
+                    out.push(insts[i].clone());
+                    i += 1;
+                }
+            }
+        }
+        *insts = out;
+        if !changed {
+            break;
+        }
     }
 }
 

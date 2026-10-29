@@ -237,9 +237,11 @@ fn compile_c(source: &str) -> Result<IrModule, String> {
     let mut reporter = DiagnosticReporter::new();
     let file_id = reporter.add_file("decompiled.c", source);
     let context = CompileContext::new("decompiled.c".to_string(), file_id, &reporter);
-    CFrontend::new()
+    let mut module = CFrontend::new()
         .compile(source, &context, &FrontendConfig::default())
-        .map_err(|e| format!("decompiled C failed to compile: {e}"))
+        .map_err(|e| format!("decompiled C failed to compile: {e}"))?;
+    crate::ir::optimize_module(&mut module);
+    Ok(module)
 }
 
 /// Addresses called through raw pointers in lifted C

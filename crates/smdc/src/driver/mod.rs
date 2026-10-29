@@ -63,7 +63,9 @@ impl Pipeline {
         })?;
 
         let ctx = CompileContext::new(filename.to_string(), file_id, reporter);
-        frontend.compile(source, &ctx, config)
+        let mut module = frontend.compile(source, &ctx, config)?;
+        crate::ir::optimize_module(&mut module);
+        Ok(module)
     }
 
     /// Generate output using the specified backend

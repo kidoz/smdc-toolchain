@@ -4,6 +4,8 @@
 
 mod builder;
 mod inst;
+mod opt;
 
 pub use builder::IrBuilder;
 pub use inst::*;
+pub use opt::optimize_module;
