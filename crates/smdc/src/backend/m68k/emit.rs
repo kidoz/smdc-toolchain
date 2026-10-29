@@ -1,4 +1,4 @@
-//! M68k code emitter
+﻿//! M68k code emitter
 
 use super::m68k::*;
 use super::runtime;
@@ -33,7 +33,7 @@ pub struct CodeGenerator {
     debug_enabled: bool,
     /// Source filename for debug comments
     debug_filename: String,
-    /// Source text for byte-offset → line mapping
+    /// Source text for byte-offset â†’ line mapping
     debug_source: String,
 
     // ---- Block-local register cache (D2-D7) ----
@@ -53,6 +53,10 @@ pub struct CodeGenerator {
     // materialized pointer cell. The address itself is only computed when it
     // escapes (e.g. `&local`, member arithmetic), in `load_value`.
     alloca_storage: HashMap<u32, i16>,
+    // Remaining reads of each temp id within the block being emitted. The
+    // register-targeted paths use this to detect an operand's last use: a
+    // count reaching zero means the cached register may be recomputed into.
+    block_use_counts: HashMap<u32, u32>,
 }
 
 /// Callee-saved data registers usable by the block-local cache, in preference order.
@@ -87,6 +91,7 @@ impl CodeGenerator {
             reg_cache_lru: Vec::new(),
             free_data_regs: CACHE_REGS.to_vec(),
             alloca_storage: HashMap::new(),
+            block_use_counts: HashMap::new(),
         }
     }
 
@@ -631,10 +636,17 @@ impl CodeGenerator {
         for block in &func.blocks {
             // Block boundary: write back any cached registers BEFORE the label so
             // the stores execute on the fall-through path. This keeps the cache
-            // strictly intra-block — blocks reached via jumps (whose runtime
+            // strictly intra-block â€” blocks reached via jumps (whose runtime
             // registers don't hold this path's cached values) always load from
             // the authoritative stack slots.
             self.flush_cache();
+            // Remaining-use counts for this block, consumed by the
+            // register-targeted paths: a count reaching zero marks the
+            // operand's last read, so its cache register is reusable.
+            self.block_use_counts.clear();
+            for si in &block.insts {
+                note_reads(&si.inst, &mut self.block_use_counts);
+            }
             self.emit(M68kInst::Label(block.label.0.clone()));
             for sinst in &block.insts {
                 // Emit source line comment when the line changes
@@ -669,6 +681,236 @@ impl CodeGenerator {
         }
     }
 
+    /// Consume one read of temp `t`: true when this was its last use in the
+    /// current block, so a register holding its value is freely recomputable.
+    fn consume_use(&mut self, t: u32) -> bool {
+        match self.block_use_counts.get_mut(&t) {
+            Some(c) if *c > 0 => {
+                *c -= 1;
+                *c == 0
+            }
+            _ => false,
+        }
+    }
+
+    /// Undo a speculative `consume_use` when the fast path declines.
+    fn restore_use(&mut self, t: u32) {
+        *self.block_use_counts.entry(t).or_insert(0) += 1;
+    }
+
+    /// Record `reg` as the cache location of a freshly defined `temp`
+    /// (register-targeted paths), replacing any stale mapping.
+    fn adopt_cache_reg(&mut self, temp: Temp, reg: DataReg) {
+        self.get_temp_offset(temp);
+        self.reg_cache.insert(temp.0, reg);
+        self.cache_touch(temp.0);
+    }
+
+    /// Widen a sub-word load result in `reg` to a full 32-bit value:
+    /// sign-extend for signed types, zero-extend for unsigned.
+    fn emit_extend(&mut self, signed: bool, size: usize, reg: DataReg) {
+        if signed {
+            if size == 1 {
+                self.emit(M68kInst::Ext(Size::Word, reg)); // byte -> word
+                self.emit(M68kInst::Ext(Size::Long, reg)); // word -> long
+            } else if size == 2 {
+                self.emit(M68kInst::Ext(Size::Long, reg)); // word -> long
+            }
+        } else if size == 1 {
+            self.emit(M68kInst::Andi(
+                Size::Long,
+                0xFF,
+                Operand::DataReg(reg),
+            ));
+        } else if size == 2 {
+            self.emit(M68kInst::Andi(
+                Size::Long,
+                0xFFFF,
+                Operand::DataReg(reg),
+            ));
+        }
+    }
+
+    /// Source operand for a register-targeted ALU op: the value must be
+    /// directly addressable (immediate, cached register, or home-slot
+    /// displacement). Shift counts additionally accept only immediates in
+    /// the encodable 1..=8 range or registers; XOR has no memory ea form.
+    /// Alloca temps hold addresses (nothing writes their home slots), so
+    /// they are excluded here â€” `load_value` gives them a `lea`.
+    fn alu_source(&mut self, op: BinOp, v: &Value) -> Option<Operand> {
+        let shift = matches!(op, BinOp::Shl | BinOp::Shr | BinOp::Sar);
+        let xor = op == BinOp::Xor;
+        match v {
+            Value::IntConst(n) => {
+                let n = *n as i32;
+                if shift && !(1..=8).contains(&n) {
+                    return None;
+                }
+                Some(Operand::Imm(n))
+            }
+            Value::Temp(t) => {
+                if self.alloca_storage.contains_key(&t.0) {
+                    return None;
+                }
+                if let Some(&r) = self.reg_cache.get(&t.0) {
+                    return Some(Operand::DataReg(r));
+                }
+                if shift || xor {
+                    None
+                } else {
+                    let off = self.get_temp_offset(*t);
+                    Some(Operand::Disp(off, AddrReg::A6))
+                }
+            }
+            Value::Name(_) | Value::StringConst(_) => None,
+        }
+    }
+
+    /// Emit `dst = dst op src` directly into `dst` using the tightest
+    /// available form (immediate variants where they exist).
+    fn emit_alu(&mut self, op: BinOp, src: Operand, dst: DataReg) {
+        let d = Operand::DataReg(dst);
+        match (op, src) {
+            (BinOp::Add, Operand::Imm(n)) => {
+                self.emit(M68kInst::Addi(Size::Long, n, d));
+            }
+            (BinOp::Sub, Operand::Imm(n)) => {
+                self.emit(M68kInst::Subi(Size::Long, n, d));
+            }
+            (BinOp::And, Operand::Imm(n)) => {
+                self.emit(M68kInst::Andi(Size::Long, n, d));
+            }
+            (BinOp::Or, Operand::Imm(n)) => {
+                self.emit(M68kInst::Ori(Size::Long, n, d));
+            }
+            (BinOp::Xor, Operand::Imm(n)) => {
+                self.emit(M68kInst::Eori(Size::Long, n, d));
+            }
+            (BinOp::Xor, Operand::DataReg(r)) => {
+                self.emit(M68kInst::Eor(Size::Long, r, d));
+            }
+            (BinOp::Shl, src) => self.emit(M68kInst::Lsl(Size::Long, src, dst)),
+            (BinOp::Shr, src) => self.emit(M68kInst::Lsr(Size::Long, src, dst)),
+            (BinOp::Sar, src) => self.emit(M68kInst::Asr(Size::Long, src, dst)),
+            (op, src) => {
+                let inst = match op {
+                    BinOp::Add => M68kInst::Add(Size::Long, src, d),
+                    BinOp::Sub => M68kInst::Sub(Size::Long, src, d),
+                    BinOp::And => M68kInst::And(Size::Long, src, d),
+                    BinOp::Or => M68kInst::Or(Size::Long, src, d),
+                    _ => unreachable!("non-ALU op in emit_alu"),
+                };
+                self.emit(inst);
+            }
+        }
+    }
+
+    /// Register-targeted emission for the block-local ALU ops: compute
+    /// straight into the dying left operand's cache register, or (for
+    /// commutative ops) the dying right operand's, or into a fresh cache
+    /// register for the destination. Returns false when the operands need
+    /// the general D0/D1 path. Sound without global liveness: a register is
+    /// only recomputed into when `block_use_counts` says the value in it is
+    /// never read again in this block.
+    fn try_reg_binary(
+        &mut self,
+        dst: Temp,
+        op: BinOp,
+        left: &Value,
+        right: &Value,
+    ) -> CompileResult<bool> {
+        let arith = matches!(
+            op,
+            BinOp::Add | BinOp::Sub | BinOp::And | BinOp::Or | BinOp::Xor
+        );
+        let shift = matches!(op, BinOp::Shl | BinOp::Shr | BinOp::Sar);
+        if !arith && !shift {
+            return Ok(false); // helpers and comparison sequences keep their shape
+        }
+
+        // Case 1: the left operand dies here and sits in a cache register â€”
+        // compute into it (`add.l <right>,rl` semantics: dst is second).
+        if let Value::Temp(t) = left
+            && let Some(&rl) = self.reg_cache.get(&t.0)
+            && !self.alloca_storage.contains_key(&t.0)
+            && self.consume_use(t.0)
+        {
+            match self.alu_source(op, right) {
+                Some(src) => {
+                    self.emit_alu(op, src, rl);
+                    self.reg_cache.remove(&t.0);
+                    self.reg_cache_lru.retain(|&x| x != t.0);
+                    self.adopt_cache_reg(dst, rl);
+                    return Ok(true);
+                }
+                None => self.restore_use(t.0),
+            }
+        }
+
+        // Case 2 (commutative only): the right operand dies in a cache
+        // register â€” compute into it with the left value as source.
+        let commutative = matches!(op, BinOp::Add | BinOp::And | BinOp::Or | BinOp::Xor);
+        if commutative
+            && let Value::Temp(t) = right
+            && let Some(&rr) = self.reg_cache.get(&t.0)
+            && !self.alloca_storage.contains_key(&t.0)
+            && self.consume_use(t.0)
+        {
+            match self.alu_source(op, left) {
+                Some(src) => {
+                    self.emit_alu(op, src, rr);
+                    self.reg_cache.remove(&t.0);
+                    self.reg_cache_lru.retain(|&x| x != t.0);
+                    self.adopt_cache_reg(dst, rr);
+                    return Ok(true);
+                }
+                None => self.restore_use(t.0),
+            }
+        }
+
+        // Case 3: compute into a fresh cache register for the destination.
+        let Some(src) = self.alu_source(op, right) else {
+            return Ok(false);
+        };
+        let rl = self.alloc_cache_reg(dst.0);
+        self.load_value(left, rl)?;
+        self.emit_alu(op, src, rl);
+        self.adopt_cache_reg(dst, rl);
+        Ok(true)
+    }
+
+    /// Register-targeted NEG/BitNot: apply in place to a dying cached
+    /// operand, or into a fresh cache register for the destination.
+    fn try_reg_unary(&mut self, dst: Temp, op: UnOp, src: &Value) -> CompileResult<bool> {
+        if !matches!(op, UnOp::Neg | UnOp::BitNot) {
+            return Ok(false);
+        }
+        if let Value::Temp(t) = src
+            && let Some(&rs) = self.reg_cache.get(&t.0)
+            && !self.alloca_storage.contains_key(&t.0)
+            && self.consume_use(t.0)
+        {
+            match op {
+                UnOp::Neg => self.emit(M68kInst::Neg(Size::Long, Operand::DataReg(rs))),
+                UnOp::BitNot => self.emit(M68kInst::Not(Size::Long, Operand::DataReg(rs))),
+                _ => unreachable!(),
+            }
+            self.reg_cache.remove(&t.0);
+            self.reg_cache_lru.retain(|&x| x != t.0);
+            self.adopt_cache_reg(dst, rs);
+            return Ok(true);
+        }
+        let rl = self.alloc_cache_reg(dst.0);
+        self.load_value(src, rl)?;
+        match op {
+            UnOp::Neg => self.emit(M68kInst::Neg(Size::Long, Operand::DataReg(rl))),
+            UnOp::BitNot => self.emit(M68kInst::Not(Size::Long, Operand::DataReg(rl))),
+            _ => unreachable!(),
+        }
+        self.adopt_cache_reg(dst, rl);
+        Ok(true)
+    }
+
     // ---- Block-local register cache (D2-D7) helpers ----
 
     /// Write back every cached register to its home stack slot and clear the cache.
@@ -695,7 +937,7 @@ impl CodeGenerator {
 
     /// Clear the cache WITHOUT writing values back. Used at `Return`: the frame
     /// is about to be torn down (and callee-saved registers restored by MOVEM),
-    /// so writebacks would be dead stores — but the compile-time state must
+    /// so writebacks would be dead stores â€” but the compile-time state must
     /// still be reset so later blocks aren't emitted against stale mappings.
     fn drop_cache(&mut self) {
         self.reg_cache.clear();
@@ -975,6 +1217,9 @@ impl CodeGenerator {
             }
 
             Inst::Unary { dst, op, src } => {
+                if self.try_reg_unary(*dst, *op, src)? {
+                    return Ok(());
+                }
                 self.load_value(src, DataReg::D0)?;
                 match op {
                     UnOp::Neg => {
@@ -1005,6 +1250,10 @@ impl CodeGenerator {
             } => {
                 if self.try_emit_const_binary(*op, left, right)? {
                     self.store_temp(*dst, DataReg::D0);
+                    return Ok(());
+                }
+
+                if self.try_reg_binary(*dst, *op, left, right)? {
                     return Ok(());
                 }
 
@@ -1135,40 +1384,25 @@ impl CodeGenerator {
             } => {
                 // Note: volatile flag indicates this memory access should not be optimized.
                 // For now, we emit the same code (no optimization pass yet).
+                // Loads compute directly into a cache register for the
+                // destination (no D0 round trip).
                 // Alloca fast path: a load through a bare local-variable temp
                 // reads the known frame slot directly.
                 if let Value::Temp(t) = addr
                     && let Some(&storage) = self.alloca_storage.get(&t.0)
                 {
+                    let rl = self.alloc_cache_reg(dst.0);
                     let sz = Size::from_bytes(*size);
                     self.emit(M68kInst::Move(
                         sz,
                         Operand::Disp(storage, AddrReg::A6),
-                        Operand::DataReg(DataReg::D0),
+                        Operand::DataReg(rl),
                     ));
-                    if *signed {
-                        if *size == 1 {
-                            self.emit(M68kInst::Ext(Size::Word, DataReg::D0));
-                            self.emit(M68kInst::Ext(Size::Long, DataReg::D0));
-                        } else if *size == 2 {
-                            self.emit(M68kInst::Ext(Size::Long, DataReg::D0));
-                        }
-                    } else if *size == 1 {
-                        self.emit(M68kInst::Andi(
-                            Size::Long,
-                            0xFF,
-                            Operand::DataReg(DataReg::D0),
-                        ));
-                    } else if *size == 2 {
-                        self.emit(M68kInst::Andi(
-                            Size::Long,
-                            0xFFFF,
-                            Operand::DataReg(DataReg::D0),
-                        ));
-                    }
-                    self.store_temp(*dst, DataReg::D0);
+                    self.emit_extend(*signed, *size, rl);
+                    self.adopt_cache_reg(*dst, rl);
                     return Ok(());
                 }
+                let rl = self.alloc_cache_reg(dst.0);
                 self.load_value(addr, DataReg::D0)?;
                 self.emit(M68kInst::Move(
                     Size::Long,
@@ -1179,36 +1413,13 @@ impl CodeGenerator {
                 self.emit(M68kInst::Move(
                     sz,
                     Operand::AddrInd(AddrReg::A0),
-                    Operand::DataReg(DataReg::D0),
+                    Operand::DataReg(rl),
                 ));
                 // Extend to 32-bit: sign-extend for signed types, zero-extend for unsigned
                 // On 68000: ext.w extends byte->word, ext.l extends word->long (sign extension)
                 // For unsigned, use AND to zero-extend
-                if *signed {
-                    // Sign extend
-                    if *size == 1 {
-                        self.emit(M68kInst::Ext(Size::Word, DataReg::D0)); // byte -> word
-                        self.emit(M68kInst::Ext(Size::Long, DataReg::D0)); // word -> long
-                    } else if *size == 2 {
-                        self.emit(M68kInst::Ext(Size::Long, DataReg::D0)); // word -> long
-                    }
-                } else {
-                    // Zero extend using AND
-                    if *size == 1 {
-                        self.emit(M68kInst::Andi(
-                            Size::Long,
-                            0xFF,
-                            Operand::DataReg(DataReg::D0),
-                        ));
-                    } else if *size == 2 {
-                        self.emit(M68kInst::Andi(
-                            Size::Long,
-                            0xFFFF,
-                            Operand::DataReg(DataReg::D0),
-                        ));
-                    }
-                }
-                self.store_temp(*dst, DataReg::D0);
+                self.emit_extend(*signed, *size, rl);
+                self.adopt_cache_reg(*dst, rl);
             }
 
             Inst::Store {
@@ -1357,7 +1568,7 @@ impl CodeGenerator {
                     self.load_value(val, DataReg::D0)?;
                 }
                 // The frame dies at RTS and MOVEM restores the callee-saved
-                // registers, so writebacks would be dead stores — just drop
+                // registers, so writebacks would be dead stores â€” just drop
                 // the compile-time cache state.
                 self.drop_cache();
 
@@ -1608,11 +1819,47 @@ impl Default for CodeGenerator {
 /// immediately by `move M,B` into `move A,B` when every operand is
 /// side-effect-free (plain registers, frame slots, immediates), neither
 /// instruction touches A7 or a pre/post-increment addressing mode, and the
-/// intermediate M is D0/D1 — the never-cached scratch registers. D2-D7 hold
+/// intermediate M is D0/D1 â€” the never-cached scratch registers. D2-D7 hold
 /// block-cached temps whose values the emitter assumes persist, so removing
 /// a write to them is not sound. Moves set N/Z, but merging adjacent moves
 /// leaves exactly the final move's flags in place, so no flags consumer can
 /// observe the difference.
+/// Count each instruction's value reads, for last-use tracking: an entry
+/// reaching zero in `counts` marks the temp's final read within the block.
+fn note_reads(inst: &Inst, counts: &mut HashMap<u32, u32>) {
+    fn note(v: &Value, counts: &mut HashMap<u32, u32>) {
+        if let Value::Temp(t) = v {
+            *counts.entry(t.0).or_insert(0) += 1;
+        }
+    }
+    match inst {
+        Inst::Copy { src, .. } | Inst::Unary { src, .. } => note(src, counts),
+        Inst::Binary { left, right, .. } => {
+            note(left, counts);
+            note(right, counts);
+        }
+        Inst::Load { addr, .. } => note(addr, counts),
+        Inst::Store { addr, src, .. } => {
+            note(addr, counts);
+            note(src, counts);
+        }
+        Inst::CondJump { cond, .. } | Inst::CondJumpFalse { cond, .. } => note(cond, counts),
+        Inst::Call { args, .. } => {
+            for a in args {
+                note(a, counts);
+            }
+        }
+        Inst::CallIndirect { target, args, .. } => {
+            note(target, counts);
+            for a in args {
+                note(a, counts);
+            }
+        }
+        Inst::Return(Some(v)) => note(v, counts),
+        _ => {}
+    }
+}
+
 fn peephole(insts: &mut Vec<M68kInst>) {
     let scratch = |r: &DataReg| matches!(r, DataReg::D0 | DataReg::D1);
     let foldable_src = |op: &Operand| {
