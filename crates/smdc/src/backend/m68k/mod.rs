@@ -1,4 +1,4 @@
-//! M68k code generation backend
+﻿//! M68k code generation backend
 //!
 //! This backend generates Motorola 68000 assembly code from the shared IR,
 //! targeting the Sega Megadrive/Genesis console.
@@ -22,7 +22,7 @@ pub use asmparse::{parse_assembly, parse_inst_line, ParseError};
 pub use decomp::{code_footprint, decompile_rom};
 pub use disasm::disassemble_listing;
 pub use fullasm::disassemble_full;
-pub use hybrid::{build_data_only_rebuild, build_hybrid_rom};
+pub use hybrid::{build_data_only_rebuild, build_data_only_rebuild_converged, build_data_only_rebuild_seeded, build_hybrid_rom};
 pub use interp::{buttons, compare_traces, run_rom, RunConfig, RunTrace};
 pub use emit::CodeGenerator;
 pub use encoder::{EncodeError, InstructionEncoder};

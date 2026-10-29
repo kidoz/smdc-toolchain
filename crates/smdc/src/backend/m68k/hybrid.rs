@@ -11,13 +11,14 @@
 //! interrupt contract.
 
 use super::decompile_rom;
+use super::disasm::decode_at;
 use super::interp::{run_rom, RunConfig, RunTrace};
 use super::m68k::*;
 use super::{Assembler, CodeGenerator};
 use crate::common::DiagnosticReporter;
 use crate::frontend::{CFrontend, CompileContext, Frontend, FrontendConfig};
 use crate::ir::IrModule;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 /// Result of a hybrid build.
 pub struct HybridRom {
@@ -31,7 +32,7 @@ pub struct HybridRom {
 /// Build a hybrid ROM from an original image: the original image stays as
 /// the substrate and discovered functions are replaced by compiled C.
 pub fn build_hybrid_rom(rom: &[u8]) -> Result<HybridRom, String> {
-    build(rom, false)
+    build(rom, false, &[])
 }
 
 /// Build a data-only C rebuild: every flow-verified instruction span of the
@@ -41,11 +42,60 @@ pub fn build_hybrid_rom(rom: &[u8]) -> Result<HybridRom, String> {
 /// boot checksum is recomputed over the modified range and patched into the
 /// header, so ROM self-checks in the boot code still pass.
 pub fn build_data_only_rebuild(rom: &[u8]) -> Result<HybridRom, String> {
-    let hybrid = build(rom, true)?;
+    let hybrid = build(rom, true, &[])?;
     Ok(hybrid)
 }
 
-fn build(rom: &[u8], strip_code: bool) -> Result<HybridRom, String> {
+/// Build a data-only rebuild with extra preserved byte ranges (used by the
+/// interpreter-in-the-loop convergence below).
+pub fn build_data_only_rebuild_seeded(
+    rom: &[u8],
+    extra_protected: &[(u32, u32)],
+) -> Result<HybridRom, String> {
+    build(rom, true, extra_protected)
+}
+
+/// Build a data-only rebuild that converges empirically: build, run a few
+/// frames, and on each "undecodable instruction at $P" fault protect P's
+/// original block and rebuild — static flow analysis cannot see computed
+/// jumps, so the interpreter itself names the preserved code the program
+/// still needs. Returns the image and the number of extension rounds used.
+pub fn build_data_only_rebuild_converged(
+    rom: &[u8],
+    max_rounds: usize,
+) -> Result<(HybridRom, usize), String> {
+    let mut extra: Vec<(u32, u32)> = Vec::new();
+    for round in 0..max_rounds {
+        let hybrid = build(rom, true, &extra)?;
+        let probe = run_rom(
+            &hybrid.image,
+            &RunConfig {
+                frames: 3,
+                frame_instructions: 7_600_000,
+                input: Vec::new(),
+            },
+        );
+        let Some(error) = probe.error else {
+            return Ok((hybrid, round));
+        };
+        // The interpreter reports faults as `... at $XXXXXX (...)`; the
+        // fault PC is preserved code the static walk could not see.
+        let Some(pc) = error
+            .split("$")
+            .nth(1)
+            .and_then(|rest| rest.split([' ', '(']).next())
+            .and_then(|hex| u32::from_str_radix(hex, 16).ok())
+        else {
+            return Err(error);
+        };
+        extra.push(block_from(rom, pc));
+    }
+    Err(format!(
+        "data-only rebuild did not converge in {max_rounds} rounds"
+    ))
+}
+
+fn build(rom: &[u8], strip_code: bool, extra_protected: &[(u32, u32)]) -> Result<HybridRom, String> {
     // 1. Decompile with auto names: functions are `F_%06X` of their original
     // address, the entry is `main`.
     let source = decompile_rom(rom, &HashMap::new(), None);
@@ -89,8 +139,27 @@ fn build(rom: &[u8], strip_code: bool) -> Result<HybridRom, String> {
         .map_err(|e| format!("assembly failed: {e}"))?;
     let symbols = assembler.symbols().clone();
 
+    // Every lifted function's original -> compiled address, from the
+    // assembler's symbol table. Dispatch tables in the ROM's data hold
+    // original code addresses; the data-only rebuild must repoint them at
+    // the compiled copies or dispatch jumps into erased bytes.
+    let full_map: HashMap<u32, u32> = symbols
+        .iter()
+        .filter_map(|(name, &new)| {
+            let orig = if name == "main" {
+                Some(entry)
+            } else {
+                name.strip_prefix("F_")
+                    .and_then(|hex| u32::from_str_radix(hex, 16).ok())
+            };
+            orig.map(|o| (o, new))
+        })
+        .collect();
+
     // 6. New image: original bytes + compiled code + power-of-two padding.
     let mut image = rom.to_vec();
+    let mut relocations: Vec<(usize, u32)> = Vec::new();
+    let mut dispatch_targets: Vec<u32> = Vec::new();
     if strip_code {
         // Erase every flow-verified instruction span except bytes inside a
         // protected data window or a thunk island: what remains of the
@@ -98,12 +167,107 @@ fn build(rom: &[u8], strip_code: bool) -> Result<HybridRom, String> {
         // to be code (undiscovered regions) are kept — they may be data or
         // dead code, and erasing them could break data references.
         let (spans, mut protected) = super::decomp::code_footprint(rom);
+        for r in extra_protected {
+            merge_range(&mut protected, *r);
+        }
         // Thunk calls (`((int (*)(void))0xNNNNNN)()`) target original code
         // that was merged away or never lifted; the block it runs through
         // must survive as original bytes.
         for t in thunk_targets(&source) {
             if let Some(block) = contiguous_block(&spans, t) {
                 merge_range(&mut protected, block);
+            }
+        }
+        // Dispatch tables: every aligned long word in the original image
+        // whose value is an even address in the code region is a candidate
+        // function pointer. Pointers to LIFTED functions become relocations
+        // (applied after the vectors are repointed); pointers to code that
+        // was not lifted seed the preserved-flow walk below — a preserved
+        // table still dispatches through its entry, and the target must
+        // exist. Candidates inside spans (instruction immediates of
+        // functions that are themselves replaced) are skipped: those bytes
+        // are erased with their instruction.
+        let span_covered = |a: u32| spans.iter().any(|&(s, e)| a >= s && a < e);
+        let rom_len = rom.len() as u32;
+        for off in (0x200usize..rom.len() - 3).step_by(4) {
+            let v = u32::from_be_bytes([rom[off], rom[off + 1], rom[off + 2], rom[off + 3]]);
+            if !((0x200..rom_len).contains(&v) && v % 2 == 0) {
+                continue;
+            }
+            if let Some(&new) = full_map.get(&v) {
+                if !span_covered(off as u32) {
+                    relocations.push((off, new));
+                }
+            } else if !span_covered(v) && !protected.iter().any(|&(s, e)| v >= s && v < e) {
+                dispatch_targets.push(v);
+            }
+        }
+        // Preserved original code keeps executing, through both static
+        // transfers AND `rts` unwinds: a preserved `jsr` pushes a return
+        // address that compiled or original code later returns through.
+        // Walk the full local flow from every preserved entry — thunk
+        // targets and unlifted dispatch targets — and pull every reached
+        // flow-verified (erased) span back into the preserved set until
+        // the fixpoint.
+        let mut work: Vec<u32> = Vec::new();
+        for t in thunk_targets(&source) {
+            work.push(t);
+        }
+        work.extend(&dispatch_targets);
+        let mut walked: BTreeSet<u32> = BTreeSet::new();
+        while let Some(seed) = work.pop() {
+            if !walked.insert(seed) {
+                continue;
+            }
+            let mut addr = seed;
+            let mut guard = 0usize;
+            while guard < 8192 {
+                guard += 1;
+                if addr < 0x200 || addr as usize >= rom.len() - 1 {
+                    break;
+                }
+                if span_covered(addr) {
+                    // Reached erased bytes: restore the whole original
+                    // block and keep walking from it.
+                    let block = contiguous_block(&spans, addr)
+                        .unwrap_or_else(|| block_from(rom, addr));
+                    merge_range(&mut protected, block);
+                    if !walked.contains(&addr) {
+                        work.push(addr);
+                    }
+                    break;
+                }
+                let Some((inst, next, target)) =
+                    decode_at(rom, (addr - 0x200) as usize, 0x200, &HashMap::new())
+                else {
+                    break;
+                };
+                let next = 0x200 + next as u32;
+                if let Some(t) = target {
+                    if !walked.contains(&t) && (0x200..rom_len).contains(&t) {
+                        work.push(t);
+                    }
+                }
+                if matches!(inst, M68kInst::Bsr(_) | M68kInst::Jsr(_)) {
+                    // The call pushes its return address; an `rts` later
+                    // unwinds into it, so the return site is reachable too.
+                    if !walked.contains(&next) && (0x200..rom_len).contains(&next) {
+                        work.push(next);
+                    }
+                }
+                let unconditional = matches!(
+                    inst,
+                    M68kInst::Bra(_)
+                        | M68kInst::BraS(_)
+                        | M68kInst::Jmp(_)
+                        | M68kInst::Rts
+                        | M68kInst::Rte
+                        | M68kInst::Rtr
+                );
+                if unconditional {
+                    break;
+                }
+                addr = next;
             }
         }
         let is_protected = |a: u32| protected.iter().any(|&(s, e)| a >= s && a < e);
@@ -139,6 +303,11 @@ fn build(rom: &[u8], strip_code: bool) -> Result<HybridRom, String> {
     }
 
     if strip_code {
+        // Apply dispatch-table relocations: preserved data words that held
+        // a lifted function's original address now hold the compiled one.
+        for (pos, new) in &relocations {
+            image[*pos..*pos + 4].copy_from_slice(&new.to_be_bytes());
+        }
         // Recompute the checksum over the range the boot code actually
         // verifies: words 0x200..=rom_end, where rom_end comes from the
         // header field at 0x1A4 (not the image length — appended compiled
@@ -275,6 +444,42 @@ fn contiguous_block(spans: &[(u32, u32)], t: u32) -> Option<(u32, u32)> {
         end = e;
     }
     Some((t, end))
+}
+
+/// Decode a local code block starting at `addr` regardless of the global
+/// walk's classification: from `addr` forward until an unconditional
+/// terminator or an undecodable word, capped at 256 instructions. Used to
+/// island-protect dispatch-table targets the walker classified as data.
+fn block_from(rom: &[u8], start: u32) -> (u32, u32) {
+    let code = &rom[0x200..];
+    let mut addr = start;
+    let mut guard = 0;
+    while guard < 256 {
+        let off = match start.checked_sub(0x200).map(|_| (addr - 0x200) as usize) {
+            Some(off) if off + 1 < code.len() => off,
+            _ => break,
+        };
+        match decode_at(code, off, 0x200, &HashMap::new()) {
+            Some((inst, next, _)) => {
+                let done = matches!(
+                    inst,
+                    M68kInst::Rts
+                        | M68kInst::Rte
+                        | M68kInst::Rtr
+                        | M68kInst::Bra(_)
+                        | M68kInst::BraS(_)
+                        | M68kInst::Jmp(_)
+                );
+                addr = 0x200 + next as u32;
+                guard += 1;
+                if done {
+                    break;
+                }
+            }
+            None => break,
+        }
+    }
+    (start, addr)
 }
 
 /// Merge a range into a sorted, disjoint protected list.
