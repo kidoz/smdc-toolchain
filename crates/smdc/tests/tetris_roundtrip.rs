@@ -128,7 +128,7 @@ fn tetris_decompiles_to_compiling_pseudo_c() {
         &source[..source.len().min(2000)]
     );
     assert!(
-        source.contains("void F_00031A(void)"),
+        source.contains("F_00031A(void)"),
         "VBlank handler must not take arguments"
     );
     assert!(

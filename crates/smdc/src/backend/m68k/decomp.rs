@@ -570,13 +570,21 @@ impl<'a> Decompiler<'a> {
             if insts.is_empty() {
                 continue;
             }            // Return value: d0 written at any point before an `rts`.
+            // A call also counts as writing d0 (the cdecl ABI returns in
+            // d0, and the lifter folds `d0 = F();` into a return).
             let mut d0_written = false;
             for inst in &insts {
                 let (_, writes) = reg_rw(inst);
-                if writes.contains(&Reg::Data(DataReg::D0)) {
+                if writes.contains(&Reg::Data(DataReg::D0))
+                    || matches!(inst, M68kInst::Jsr(_) | M68kInst::Bsr(_))
+                {
                     d0_written = true;
                 }
-                if matches!(inst, M68kInst::Rts) {
+                if matches!(inst, M68kInst::Rts | M68kInst::Rte) {
+                    // An `rte` site counts like an `rts`: the lifter renders
+                    // both as function returns, so a handler whose d0 is
+                    // live at one exit must not emit a bare `return;` at
+                    // another.
                     if d0_written {
                         func_ret.insert(start);
                     }
@@ -1230,8 +1238,12 @@ impl<'a, 'b> Lifter<'a, 'b> {
                         return;
                     }
                 }
-                if self.decomp.func_ret.contains(&self.start) {
+                if self.decomp.func_ret.contains(&self.start) || self.returns_value {
                     // A value-returning function's plain `rts` returns d0.
+                    // `returns_value` must join the predicate: one `rts`
+                    // site folding `d0 = X` declares the function int even
+                    // when the pre-scan missed the d0 write, and a bare
+                    // `return;` here would then not compile.
                     self.used_regs.insert("d0".to_string());
                     self.stmts.push(Stmt::Return(Some("d0".to_string())));
                 } else {
@@ -1774,7 +1786,18 @@ impl<'a, 'b> Lifter<'a, 'b> {
                     "__m".to_string()
                 }
             }
-            Operand::Disp(_, AddrReg::A6) => frame_slot(op).unwrap_or_else(|| "0".into()),
+            Operand::Disp(_, AddrReg::A6) => frame_slot(op).unwrap_or_else(|| {
+                // Not an smdc frame slot: foreign LINK A6 code accesses its
+                // own locals through arbitrary displacements (e.g. byte
+                // fields at -9(a6)). Render as generic memory through the
+                // a6 register — never as a bare `0`, which would emit an
+                // assignment to a literal.
+                if let Operand::Disp(d, _) = op {
+                    format!("*({} *)({} + a6)", ctype(size), d)
+                } else {
+                    unreachable!("frame_slot operand is an A6 disp")
+                }
+            }),
             Operand::Disp(d, r) => format!("*({} *)({d} + {r})", ctype(size)),
             Operand::Indexed(d, r, i, _) => format!("*({} *)({d} + {r} + {i})", ctype(size)),
             Operand::PcIndexed(d, r, _) => {
@@ -1957,12 +1980,33 @@ impl<'a, 'b> Lifter<'a, 'b> {
             out.push_str(&format!("    int {};\n", locals.join(", ")));
         }
 
+        let d0_declared = regs.iter().any(|r| r == "d0")
+            || self
+                .decomp
+                .func_args
+                .get(&self.start)
+                .is_some_and(|args| args.iter().any(|a| a == "d0"));
+
         for s in stmts {
             match s {
                 Stmt::Expr(e) | Stmt::Control(e) => out.push_str(&format!("    {e}\n")),
                 Stmt::Comment(c) => out.push_str(&format!("    {c}\n")),
                 Stmt::Return(Some(v)) => out.push_str(&format!("    return {v};\n")),
-                Stmt::Return(None) => out.push_str(&format!("    return;\n")),
+                Stmt::Return(None) => {
+                    // An int function must never contain a bare `return;`:
+                    // its int-ness can come from a later return site that
+                    // folded a d0 value while the pre-scan missed the write
+                    // (e.g. an rte-only handler whose d0 comes from a call).
+                    // Normalize to a value-ful return, matching the 68k ABI
+                    // where d0 is simply whatever the register holds.
+                    if ret == "int" && d0_declared {
+                        out.push_str("    return d0;\n");
+                    } else if ret == "int" {
+                        out.push_str("    return 0;\n");
+                    } else {
+                        out.push_str("    return;\n");
+                    }
+                }
                 Stmt::Branch {
                     taken: Some(c),
                     target,

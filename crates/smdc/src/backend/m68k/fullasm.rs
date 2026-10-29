@@ -537,8 +537,30 @@ impl<'a> FullDisasm<'a> {
                     flush_data(&mut out, &pending, pending_start);
                     pending.clear();
                 }
-                let _ = writeln!(out, "{}", inst.format());
                 let len = self.spans[&addr] as u32;
+                let text = inst.format();
+                // Every instruction line must re-parse: a decode that
+                // renders as unparseable text (e.g. a mask-0 movem swept
+                // out of data) would break reassembly. Fall back to the
+                // instruction's bytes as dc.w words, which are exact.
+                if super::asmparse::parse_inst_line(&text).is_err() {
+                    let base = (addr - CODE_BASE) as usize;
+                    let words: Vec<String> = (0..len as usize)
+                        .step_by(2)
+                        .map(|i| {
+                            format!(
+                                "${:04X}",
+                                u16::from_be_bytes([
+                                    self.code()[base + i],
+                                    self.code()[base + i + 1],
+                                ])
+                            )
+                        })
+                        .collect();
+                    let _ = writeln!(out, "dc.w    {}", words.join(", "));
+                } else {
+                    let _ = writeln!(out, "{text}");
+                }
                 addr += len;
                 pending_start = addr;
                 continue;
