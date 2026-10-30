@@ -32,7 +32,8 @@ pub struct HybridRom {
 /// Build a hybrid ROM from an original image: the original image stays as
 /// the substrate and discovered functions are replaced by compiled C.
 pub fn build_hybrid_rom(rom: &[u8]) -> Result<HybridRom, String> {
-    build(rom, false, &[])
+    let stack_top = probe_stack_top(rom);
+    build(rom, false, &[], stack_top)
 }
 
 /// Build a data-only C rebuild: every flow-verified instruction span of the
@@ -42,7 +43,7 @@ pub fn build_hybrid_rom(rom: &[u8]) -> Result<HybridRom, String> {
 /// boot checksum is recomputed over the modified range and patched into the
 /// header, so ROM self-checks in the boot code still pass.
 pub fn build_data_only_rebuild(rom: &[u8]) -> Result<HybridRom, String> {
-    let hybrid = build(rom, true, &[])?;
+    let hybrid = build(rom, true, &[], probe_stack_top(rom))?;
     Ok(hybrid)
 }
 
@@ -52,7 +53,7 @@ pub fn build_data_only_rebuild_seeded(
     rom: &[u8],
     extra_protected: &[(u32, u32)],
 ) -> Result<HybridRom, String> {
-    build(rom, true, extra_protected)
+    build(rom, true, extra_protected, probe_stack_top(rom))
 }
 
 /// Build a data-only rebuild that converges empirically: build, run a few
@@ -64,9 +65,15 @@ pub fn build_data_only_rebuild_converged(
     rom: &[u8],
     max_rounds: usize,
 ) -> Result<(HybridRom, usize), String> {
+    // The private stack window must be chosen from a probe that spans the
+    // program's whole boot: a short probe sees only the early footprint,
+    // and later boot phases can write straight through the "untouched"
+    // window, corrupting the compiled stack (observed on Sonic, whose boot
+    // runs ~14 frames). Computed once and reused across rounds.
+    let stack_top = probe_stack_top(rom);
     let mut extra: Vec<(u32, u32)> = Vec::new();
     for round in 0..max_rounds {
-        let hybrid = build(rom, true, &extra)?;
+        let hybrid = build(rom, true, &extra, stack_top)?;
         let probe = run_rom(
             &hybrid.image,
             &RunConfig {
@@ -95,7 +102,12 @@ pub fn build_data_only_rebuild_converged(
     ))
 }
 
-fn build(rom: &[u8], strip_code: bool, extra_protected: &[(u32, u32)]) -> Result<HybridRom, String> {
+fn build(
+    rom: &[u8],
+    strip_code: bool,
+    extra_protected: &[(u32, u32)],
+    stack_top: u32,
+) -> Result<HybridRom, String> {
     // 1. Decompile with auto names: functions are `F_%06X` of their original
     // address, the entry is `main`.
     let source = decompile_rom(rom, &HashMap::new(), None);
@@ -340,16 +352,6 @@ fn build(rom: &[u8], strip_code: bool, extra_protected: &[(u32, u32)]) -> Result
     // program's globals and buffers. One shared stack keeps nested
     // interrupt frames consistent; vector 0 is outside the checksum
     // range, so the boot self-check is unaffected.
-    let probe = run_rom(
-        rom,
-        &RunConfig {
-            frames: 3,
-            frame_instructions: 400_000,
-            input: Vec::new(),
-        },
-    );
-    let stack_top =
-        private_stack_top(&probe).ok_or_else(|| "no free work-RAM window for the compiled stack".to_string())?;
     image[0..4].copy_from_slice(&stack_top.to_be_bytes());
 
     Ok(HybridRom {
@@ -357,6 +359,22 @@ fn build(rom: &[u8], strip_code: bool, extra_protected: &[(u32, u32)]) -> Result
         source,
         function_map,
     })
+}
+
+/// Compute the compiled code's private stack top with a probe that spans
+/// the program's whole boot cadence (40 gate-budget frames): a short probe
+/// misses later boot phases that write through the would-be "untouched"
+/// window and corrupt the compiled stack.
+fn probe_stack_top(rom: &[u8]) -> u32 {
+    let probe = run_rom(
+        rom,
+        &RunConfig {
+            frames: 40,
+            frame_instructions: 7_600_000,
+            input: Vec::new(),
+        },
+    );
+    private_stack_top(&probe).unwrap_or(0x00FF_F000)
 }
 
 /// Top address for the compiled code's private stack: the top of the
